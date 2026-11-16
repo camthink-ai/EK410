@@ -1,0 +1,5 @@
+# CamThink EK410 — Spectra 6 e-ink firmware (ESP32-C61, 1600x1200)
+# Version: see VERSION / main/version.h (python3 tools/bump_version.py)
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(ek410)

@@ -1,0 +1,84 @@
+/**
+ * @file wifi.h
+ * @brief WiFi station (always-on when provisioned) + on-demand SoftAP.
+ *
+ * SoftAP is off by default. Long-press opens it; it stays up while the
+ * config UI is active (HTTP touch / SoftAP clients). Closes after a long
+ * idle or via wifi_softap_close(). STA stays connected (APSTA) while up.
+ *
+ * STA credentials live in NVS (config). Connect flow: try association
+ * first; persist only on success. Disconnect uses exponential backoff.
+ */
+#ifndef __WIFI_H__
+#define __WIFI_H__
+
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define WIFI_STA_CONNECTED_BIT BIT2
+#define WIFI_STA_FAIL_BIT      BIT3
+
+typedef enum {
+    WIFI_STA_IDLE = 0,
+    WIFI_STA_CONNECTING,
+    WIFI_STA_CONNECTED,
+    WIFI_STA_RECONNECTING,
+} wifi_sta_state_t;
+
+void wifi_open(void);
+bool wifi_sta_start(void);
+
+/**
+ * Apply credentials and wait for IP (or timeout). Does not write NVS.
+ * Uses APSTA when SoftAP is up so the config session stays alive.
+ */
+bool wifi_sta_try_connect(const char *ssid, const char *password, int timeout_ms);
+
+/* Re-apply credentials already stored in NVS (e.g. after a failed try). */
+bool wifi_sta_reconnect_saved(int timeout_ms);
+
+wifi_sta_state_t wifi_sta_get_state(void);
+const char *wifi_sta_state_str(void);
+
+/* On-demand SoftAP (idempotent). First-time (no saved Wi-Fi) paints a setup
+ * guide; later SoftAP sessions leave the panel alone so customer art is kept.
+ * Stays up while the config UI is active;
+ * closes after a long idle with no HTTP traffic, or via wifi_softap_close(). */
+void wifi_softap_open(void);
+void wifi_softap_close(void);
+bool wifi_softap_is_up(void);
+/* Call from HTTP handlers while SoftAP is up to postpone idle auto-close. */
+void wifi_softap_touch(void);
+
+/* Back-compat names used by button/main. */
+void wifi_ap_start(void);
+void wifi_enter_ap_mode(void);
+
+bool wifi_sta_is_connected(void);
+void wifi_get_ip_str(char *buf, int buflen);
+void wifi_get_ap_ssid(char *buf, int buflen);
+
+#define WIFI_SCAN_MAX 24
+
+typedef struct {
+    char ssid[33];
+    int8_t rssi;
+    bool secure; /* false = open / OWE */
+    uint8_t authmode;
+} wifi_scan_ap_t;
+
+/**
+ * Blocking active scan. Dedupes by SSID (strongest RSSI kept).
+ * SoftAP stays up via APSTA. Returns count written to out[], or -1 on error
+ * (errBuf filled when provided).
+ */
+int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __WIFI_H__ */

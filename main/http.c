@@ -1,0 +1,1005 @@
+/**
+ * @file http.c
+ * @brief Web config UI + REST API, CamThink /api/v1 conventions.
+ *
+ * GET  /                          embedded single-page config UI
+ * GET  /api/v1/system/getDevInfo
+ * POST /api/v1/system/setDevInfo          {devName}
+ * POST /api/v1/system/setDevReset
+ * POST /api/v1/system/setDevFactory
+ * GET/POST /api/v1/network/getWifiParam | setWifiParam {ssid,password}
+ * GET  /api/v1/network/scanWifi           {aps:[{ssid,rssi,secure,authmode}]}
+ * GET/POST /api/v1/network/getMqttParam | setMqttParam
+ *        {host,port,transport:"mqtt"|"mqtts",clientId,qos,username,password}
+ * POST /api/v1/display/renderText         {text,color,bg,scale}
+ * POST /api/v1/display/testPattern
+ * POST /api/v1/network/testMqtt           probe connect + publish ping
+ * POST /api/v1/network/closeSoftAp        exit config / close SoftAP
+ * POST /api/v1/display/renderCanvas       {bg,items[]}
+ * POST /api/v1/display/displayUrl         {url}  device-side fetch + decode
+ * POST /api/v1/display/proxyImage         {url}  STA fetch → raw image bytes (SoftAP preview)
+ * GET/POST /api/v1/system/getPowerParam | setPowerParam
+ *        {mode:always|cycle|hibernate, sleepMin, wakeUrl,
+ *         imageQuality:"quality"|"speed"}
+ * POST /api/v1/system/sleepNow            deep sleep (MAIN wakes; cycle also timer)
+ *
+ * Handlers return the data JSON directly (no envelope), like lowpower_camera.
+ */
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_http_server.h"
+#include "esp_http_client.h"
+#include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
+#include "cJSON.h"
+
+#include "http.h"
+#include "config.h"
+#include "wifi.h"
+#include "mqtt.h"
+#include "app_epd.h"
+#include "canvas.h"
+#include "battery.h"
+#include "ota.h"
+#include "sleep.h"
+#include "led.h"
+#include "img_decode.h"
+#include "www_html.h"
+
+#define TAG "-->HTTP"
+
+static void softap_touch(void)
+{
+    wifi_softap_touch();
+}
+
+static esp_err_t send_json(httpd_req_t *req, const char *str)
+{
+    softap_touch();
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, str);
+}
+
+static esp_err_t send_err(httpd_req_t *req, const char *msg)
+{
+    char buf[96];
+    snprintf(buf, sizeof(buf), "{\"code\":1,\"msg\":\"%s\"}", msg);
+    return send_json(req, buf);
+}
+
+static char *read_body(httpd_req_t *req)
+{
+    softap_touch();
+    int total = req->content_len;
+    /* Canvas JSON with many layers can exceed 4KB. */
+    if (total <= 0 || total > 16384) {
+        return NULL;
+    }
+    char *body = malloc(total + 1);
+    if (!body) {
+        return NULL;
+    }
+    int received = 0;
+    while (received < total) {
+        int got = httpd_req_recv(req, body + received, total - received);
+        if (got <= 0) {
+            free(body);
+            return NULL;
+        }
+        received += got;
+    }
+    body[total] = 0;
+    return body;
+}
+
+/* ---------- system ---------- */
+
+static esp_err_t get_dev_info_handle(httpd_req_t *req)
+{
+    devInfo_t info;
+    wifiAttr_t wifi;
+    mqttAttr_t mqtt;
+    char ip[20] = "";
+    cfg_get_dev_info(&info);
+    cfg_get_wifi_attr(&wifi);
+    cfg_get_mqtt_attr(&mqtt);
+    wifi_get_ip_str(ip, sizeof(ip));
+
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "devName", info.devName);
+    cJSON_AddStringToObject(obj, "devMac", info.mac);
+    cJSON_AddStringToObject(obj, "deviceId", info.deviceId);
+    {
+        char apSsid[33] = {0};
+        wifi_get_ap_ssid(apSsid, sizeof(apSsid));
+        cJSON_AddStringToObject(obj, "softApSsid", apSsid);
+    }
+    cJSON_AddStringToObject(obj, "fwVersion", info.fwVersion);
+    cJSON_AddStringToObject(obj, "panel", info.panel);
+    cJSON_AddStringToObject(obj, "ip", ip);
+    cJSON_AddBoolToObject(obj, "wifiConnected", wifi_sta_is_connected());
+    cJSON_AddStringToObject(obj, "wifiState", wifi_sta_state_str());
+    {
+        wifiAttr_t w;
+        cfg_get_wifi_attr(&w);
+        cJSON_AddStringToObject(obj, "wifiSsid", w.ssid);
+    }
+    cJSON_AddBoolToObject(obj, "mqttConnected", mqtt_is_connected());
+    cJSON_AddBoolToObject(obj, "softapUp", wifi_softap_is_up());
+    cJSON_AddBoolToObject(obj, "provisioned", config_is_provisioned());
+    cJSON_AddBoolToObject(obj, "panelOk", app_epd_panel_ok());
+    if (wifi_softap_is_up()) {
+        cJSON_AddStringToObject(obj, "softApPass", "12345678");
+    }
+    cJSON_AddNumberToObject(obj, "uptime_s", (double)(esp_timer_get_time() / 1000000));
+    int batMv = battery_read_mv();
+    if (batMv >= 0) {
+        cJSON_AddNumberToObject(obj, "batteryMv", batMv);
+        cJSON_AddNumberToObject(obj, "batteryPercent", battery_soc_from_mv(batMv));
+    }
+    char running[16];
+    bool pendingRollback = false;
+    ota_get_status(running, sizeof(running), &pendingRollback);
+    cJSON_AddStringToObject(obj, "otaPartition", running);
+    cJSON_AddBoolToObject(obj, "otaPendingVerify", pendingRollback);
+    powerAttr_t p;
+    cfg_get_power_attr(&p);
+    cJSON_AddStringToObject(obj, "powerMode", power_mode_str(p.mode));
+    cJSON_AddNumberToObject(obj, "sleepMin", p.sleepMin);
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+static esp_err_t set_dev_info_handle(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    cJSON *name = root ? cJSON_GetObjectItem(root, "devName") : NULL;
+    if (!cJSON_IsString(name) || name->valuestring[0] == '\0') {
+        cJSON_Delete(root);
+        return send_err(req, "missing devName");
+    }
+    cfg_set_dev_name(name->valuestring);
+    cJSON_Delete(root);
+    return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
+}
+
+static esp_err_t set_dev_reset_handle(httpd_req_t *req)
+{
+    send_json(req, "{\"code\":0,\"msg\":\"rebooting\"}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK; /* unreachable */
+}
+
+static esp_err_t set_dev_factory_handle(httpd_req_t *req)
+{
+    cfg_factory_reset();
+    send_json(req, "{\"code\":0,\"msg\":\"factory reset, rebooting\"}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK; /* unreachable */
+}
+
+/* ---------- network ---------- */
+
+static esp_err_t get_wifi_param_handle(httpd_req_t *req)
+{
+    wifiAttr_t wifi;
+    char ip[16] = { 0 };
+    cfg_get_wifi_attr(&wifi);
+    wifi_get_ip_str(ip, sizeof(ip));
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "ssid", wifi.ssid);
+    cJSON_AddBoolToObject(obj, "hasPassword", wifi.password[0] != '\0');
+    cJSON_AddBoolToObject(obj, "isConnected", wifi_sta_is_connected());
+    cJSON_AddStringToObject(obj, "state", wifi_sta_state_str());
+    cJSON_AddStringToObject(obj, "ip", ip);
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+static esp_err_t scan_wifi_handle(httpd_req_t *req)
+{
+    softap_touch();
+    wifi_scan_ap_t aps[WIFI_SCAN_MAX];
+    char err[64] = "";
+    int n = wifi_scan(aps, WIFI_SCAN_MAX, err, sizeof(err));
+    if (n < 0) {
+        return send_err(req, err[0] ? err : "scan failed");
+    }
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(obj, "code", 0);
+    cJSON *arr = cJSON_AddArrayToObject(obj, "aps");
+    for (int i = 0; i < n; i++) {
+        cJSON *ap = cJSON_CreateObject();
+        cJSON_AddStringToObject(ap, "ssid", aps[i].ssid);
+        cJSON_AddNumberToObject(ap, "rssi", aps[i].rssi);
+        cJSON_AddBoolToObject(ap, "secure", aps[i].secure);
+        cJSON_AddNumberToObject(ap, "authmode", aps[i].authmode);
+        cJSON_AddItemToArray(arr, ap);
+    }
+    cJSON_AddNumberToObject(obj, "count", n);
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+static esp_err_t set_wifi_param_handle(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    cJSON *ssid = root ? cJSON_GetObjectItem(root, "ssid") : NULL;
+    cJSON *pass = root ? cJSON_GetObjectItem(root, "password") : NULL;
+    if (!cJSON_IsString(ssid) || ssid->valuestring[0] == '\0') {
+        cJSON_Delete(root);
+        return send_err(req, "missing ssid");
+    }
+
+    wifiAttr_t candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    strlcpy(candidate.ssid, ssid->valuestring, sizeof(candidate.ssid));
+    if (cJSON_IsString(pass) && pass->valuestring[0] != '\0') {
+        strlcpy(candidate.password, pass->valuestring, sizeof(candidate.password));
+    } else {
+        /* Empty password → reuse NVS secret when SSID matches. */
+        wifiAttr_t saved;
+        cfg_get_wifi_attr(&saved);
+        if (strcmp(saved.ssid, candidate.ssid) == 0 && saved.password[0] != '\0') {
+            strlcpy(candidate.password, saved.password, sizeof(candidate.password));
+        }
+    }
+    cJSON_Delete(root);
+
+    wifi_softap_touch();
+    bool ok = wifi_sta_try_connect(candidate.ssid, candidate.password, 20000);
+    if (!ok) {
+        /* try_connect already restored saved network or cleared unsaved STA. */
+        return send_err(req, "connect failed");
+    }
+
+    cfg_set_wifi_attr(&candidate);
+
+    char ip[16] = { 0 };
+    wifi_get_ip_str(ip, sizeof(ip));
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(obj, "code", 0);
+    cJSON_AddBoolToObject(obj, "connected", true);
+    cJSON_AddStringToObject(obj, "ssid", candidate.ssid);
+    cJSON_AddStringToObject(obj, "ip", ip);
+    cJSON_AddStringToObject(obj, "state", wifi_sta_state_str());
+    cJSON_AddStringToObject(obj, "msg", "connected");
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+static esp_err_t get_mqtt_param_handle(httpd_req_t *req)
+{
+    mqttAttr_t mqtt;
+    cfg_get_mqtt_attr(&mqtt);
+    devInfo_t info;
+    cfg_get_dev_info(&info);
+    char topicUp[96], topicDown[96];
+    const char *did = info.deviceId[0] ? info.deviceId : "unknown";
+    snprintf(topicUp, sizeof(topicUp), "device/ek410_Eink/%s/uplink", did);
+    snprintf(topicDown, sizeof(topicDown), "device/ek410_Eink/%s/downlink", did);
+
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "host", mqtt.host);
+    cJSON_AddNumberToObject(obj, "port", mqtt.port);
+    cJSON_AddStringToObject(obj, "transport", mqtt_transport_str(mqtt.transport));
+    cJSON_AddBoolToObject(obj, "tls", mqtt.transport == MQTT_TRANSPORT_TLS);
+    cJSON_AddStringToObject(obj, "clientId", mqtt.clientId);
+    cJSON_AddNumberToObject(obj, "qos", mqtt.qos);
+    cJSON_AddStringToObject(obj, "username", mqtt.username);
+    cJSON_AddStringToObject(obj, "password", mqtt.password);
+    cJSON_AddStringToObject(obj, "topicUp", topicUp);
+    cJSON_AddStringToObject(obj, "topicDown", topicDown);
+    cJSON_AddNumberToObject(obj, "keepalive_s", 30);
+    cJSON_AddNumberToObject(obj, "heartbeat_s", 30);
+    cJSON_AddBoolToObject(obj, "connected", mqtt_is_connected());
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    cJSON *host = root ? cJSON_GetObjectItem(root, "host") : NULL;
+    cJSON *port = root ? cJSON_GetObjectItem(root, "port") : NULL;
+    cJSON *transport = root ? cJSON_GetObjectItem(root, "transport") : NULL;
+    cJSON *tls = root ? cJSON_GetObjectItem(root, "tls") : NULL;
+    cJSON *cid = root ? cJSON_GetObjectItem(root, "clientId") : NULL;
+    cJSON *qos = root ? cJSON_GetObjectItem(root, "qos") : NULL;
+    cJSON *user = root ? cJSON_GetObjectItem(root, "username") : NULL;
+    cJSON *pass = root ? cJSON_GetObjectItem(root, "password") : NULL;
+    if (!cJSON_IsString(host) || host->valuestring[0] == '\0' || strlen(host->valuestring) >= 64) {
+        cJSON_Delete(root);
+        return send_err(req, "invalid host");
+    }
+    if (cJSON_IsString(user) && strlen(user->valuestring) >= 65) {
+        cJSON_Delete(root);
+        return send_err(req, "username too long");
+    }
+    if (cJSON_IsString(pass) && strlen(pass->valuestring) >= 65) {
+        cJSON_Delete(root);
+        return send_err(req, "password too long");
+    }
+    (void)cid; /* clientId is device-bound; ignore client overrides */
+
+    mqttAttr_t mqtt;
+    cfg_get_mqtt_attr(&mqtt);
+    strlcpy(mqtt.host, host->valuestring, sizeof(mqtt.host));
+    if (cJSON_IsString(transport)) {
+        mqtt.transport = mqtt_transport_from_str(transport->valuestring);
+    } else if (cJSON_IsBool(tls)) {
+        mqtt.transport = cJSON_IsTrue(tls) ? MQTT_TRANSPORT_TLS : MQTT_TRANSPORT_TCP;
+    }
+    if (cJSON_IsNumber(port)) {
+        if (port->valueint <= 0 || port->valueint >= 65536) {
+            cJSON_Delete(root);
+            return send_err(req, "invalid port");
+        }
+        mqtt.port = port->valueint;
+    } else {
+        mqtt.port = mqtt_default_port(mqtt.transport);
+    }
+    {
+        /* Keep SoftAP / NeoMind identity aligned: ek410-{deviceId}. */
+        devInfo_t info;
+        cfg_get_dev_info(&info);
+        snprintf(mqtt.clientId, sizeof(mqtt.clientId), "ek410-%s", info.deviceId);
+    }
+    if (cJSON_IsNumber(qos) && qos->valueint >= 0 && qos->valueint <= 2) {
+        mqtt.qos = qos->valueint;
+    }
+    if (cJSON_IsString(user)) {
+        strlcpy(mqtt.username, user->valuestring, sizeof(mqtt.username));
+    }
+    if (cJSON_IsString(pass)) {
+        strlcpy(mqtt.password, pass->valuestring, sizeof(mqtt.password));
+    }
+    cfg_set_mqtt_attr(&mqtt);
+    cJSON_Delete(root);
+    if (wifi_sta_is_connected()) {
+        mqtt_restart();
+    }
+    return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
+}
+
+static void softap_close_deferred_task(void *arg)
+{
+    (void)arg;
+    /* Let the HTTP response reach the phone before tearing down SoftAP. */
+    vTaskDelay(pdMS_TO_TICKS(600));
+    wifi_softap_close();
+    vTaskDelete(NULL);
+}
+
+static esp_err_t close_softap_handle(httpd_req_t *req)
+{
+    (void)req;
+    if (!wifi_softap_is_up()) {
+        return send_json(req, "{\"code\":0,\"msg\":\"already off\",\"softapUp\":false}");
+    }
+    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"SoftAP closing\",\"softapUp\":false}");
+    if (xTaskCreate(softap_close_deferred_task, "ap_off", 4096, NULL, 5, NULL) != pdPASS) {
+        wifi_softap_close();
+    }
+    return res;
+}
+
+static void softap_open_deferred_task(void *arg)
+{
+    (void)arg;
+    wifi_softap_open();
+    vTaskDelete(NULL);
+}
+
+static esp_err_t open_softap_handle(httpd_req_t *req)
+{
+    softap_touch();
+    if (wifi_softap_is_up()) {
+        wifi_softap_touch();
+        return send_json(req, "{\"code\":0,\"msg\":\"already on\",\"softapUp\":true}");
+    }
+    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"SoftAP opening\",\"softapUp\":true}");
+    if (xTaskCreate(softap_open_deferred_task, "ap_on", 10240, NULL, 5, NULL) != pdPASS) {
+        wifi_softap_open();
+    }
+    return res;
+}
+
+static esp_err_t test_mqtt_handle(httpd_req_t *req)
+{
+    char err[96];
+    int rc = mqtt_test_ping(8000, err, sizeof(err));
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(obj, "code", rc == 0 ? 0 : 1);
+    cJSON_AddStringToObject(obj, "msg", err[0] ? err : (rc == 0 ? "ok" : "failed"));
+    cJSON_AddBoolToObject(obj, "ok", rc == 0);
+    cJSON_AddBoolToObject(obj, "connected", mqtt_is_connected());
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+/* ---------- display ---------- */
+
+static esp_err_t display_render_text_handle(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    cJSON *t = root ? cJSON_GetObjectItem(root, "text") : NULL;
+    cJSON *c = root ? cJSON_GetObjectItem(root, "color") : NULL;
+    cJSON *bg = root ? cJSON_GetObjectItem(root, "bg") : NULL;
+    cJSON *sc = root ? cJSON_GetObjectItem(root, "scale") : NULL;
+    if (!cJSON_IsString(t)) {
+        cJSON_Delete(root);
+        return send_err(req, "missing text");
+    }
+    espd_render_t render;
+    memset(&render, 0, sizeof(render));
+    size_t tlen = strlen(t->valuestring);
+    char *buf = malloc(tlen + 1);
+    if (!buf) {
+        cJSON_Delete(root);
+        return send_err(req, "oom");
+    }
+    memcpy(buf, t->valuestring, tlen + 1);
+    char *save = NULL;
+    for (char *tok = strtok_r(buf, "\n", &save);
+         tok && render.count < EPD_TEXT_MAX_LINES;
+         tok = strtok_r(NULL, "\n", &save)) {
+        canvas_utf8_strlcpy(render.lines[render.count++], tok,
+                            sizeof(render.lines[0]));
+    }
+    free(buf);
+    render.fg = cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x00;
+    render.bg = cJSON_IsString(bg) ? canvas_color(bg->valuestring) : 0x11;
+    render.scale = cJSON_IsNumber(sc) ? sc->valueint : 3;
+    int rc = app_epd_render_async(&render);
+    cJSON_Delete(root);
+    if (rc != 0) {
+        return send_err(req, "render busy");
+    }
+    return send_json(req, "{\"code\":0,\"msg\":\"rendering\"}");
+}
+
+static esp_err_t display_test_pattern_handle(httpd_req_t *req)
+{
+    if (app_epd_test_pattern_async() != 0) {
+        return send_err(req, "render busy");
+    }
+    return send_json(req, "{\"code\":0,\"msg\":\"rendering\"}");
+}
+
+static esp_err_t display_render_canvas_handle(httpd_req_t *req)
+{
+    /* body is the canvas JSON itself ({"bg":..,"items":[..]}); allow it
+     * wrapped in {"canvas":{...}} too. canvas_t is large — heap only. */
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        return send_err(req, "invalid JSON");
+    }
+    cJSON *canvasRoot = root;
+    cJSON *wrap = cJSON_GetObjectItem(root, "canvas");
+    if (wrap) {
+        canvasRoot = wrap;
+    }
+    canvas_t *cv = calloc(1, sizeof(*cv));
+    if (!cv) {
+        cJSON_Delete(root);
+        return send_err(req, "oom");
+    }
+    char err[64];
+    if (canvas_parse_json(canvasRoot, cv, err, sizeof(err)) != 0) {
+        free(cv);
+        cJSON_Delete(root);
+        return send_err(req, err);
+    }
+    cJSON_Delete(root);
+    int rc = app_epd_canvas_async(cv);
+    free(cv);
+    if (rc != 0) {
+        return send_err(req, "render busy");
+    }
+    return send_json(req, "{\"code\":0,\"msg\":\"rendering\"}");
+}
+
+static esp_err_t display_url_handle(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    cJSON *u = root ? cJSON_GetObjectItem(root, "url") : NULL;
+    if (!cJSON_IsString(u) || !u->valuestring[0]) {
+        cJSON_Delete(root);
+        return send_err(req, "missing url");
+    }
+    if (strlen(u->valuestring) >= 512) {
+        cJSON_Delete(root);
+        return send_err(req, "url too long");
+    }
+    int rc = app_epd_url_async(u->valuestring);
+    cJSON_Delete(root);
+    if (rc != 0) {
+        return send_err(req, "render busy");
+    }
+    return send_json(req, "{\"code\":0,\"msg\":\"queued\"}");
+}
+
+/* SoftAP SPA preview: browser cannot fetch remote images (CORS / no WAN on
+ * phone SoftAP). Device pulls via STA and returns bytes so the page can
+ * createImageBitmap same-origin, then push via uploadFrame. */
+#define PROXY_IMG_MAX_BYTES (768 * 1024)
+#define PROXY_READ_CHUNK    4096
+
+typedef struct {
+    char url[512];
+    uint8_t *data;
+    size_t len;
+    char ctype[48];
+    char err[48];
+    SemaphoreHandle_t done;
+} proxy_job_t;
+
+static volatile bool s_proxy_busy;
+
+static void proxy_fail(proxy_job_t *job, const char *msg)
+{
+    snprintf(job->err, sizeof(job->err), "%s", msg ? msg : "proxy fail");
+}
+
+static void proxy_image_task(void *arg)
+{
+    proxy_job_t *job = (proxy_job_t *)arg;
+    esp_http_client_config_t cfg = {
+        .url = job->url,
+        .timeout_ms = 60000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .max_redirection_count = 5,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        proxy_fail(job, "http init fail");
+        goto done;
+    }
+    if (esp_http_client_open(client, 0) != ESP_OK) {
+        proxy_fail(job, "http open/TLS fail");
+        goto cleanup;
+    }
+    long clen = esp_http_client_fetch_headers(client);
+    int status = esp_http_client_get_status_code(client);
+    if (status > 0 && (status < 200 || status >= 300)) {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "HTTP status %d", status);
+        proxy_fail(job, buf);
+        goto close;
+    }
+    if (clen > (long)PROXY_IMG_MAX_BYTES) {
+        proxy_fail(job, "file >768KB limit");
+        goto close;
+    }
+    size_t cap = (clen > 0) ? (size_t)clen : PROXY_IMG_MAX_BYTES;
+    uint8_t *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!body) {
+        body = malloc(cap);
+    }
+    if (!body) {
+        proxy_fail(job, "download OOM");
+        goto close;
+    }
+    size_t total = 0;
+    while (total < cap) {
+        int want = (int)((cap - total) > PROXY_READ_CHUNK ? PROXY_READ_CHUNK : (cap - total));
+        int got = esp_http_client_read(client, (char *)body + total, want);
+        if (got < 0) {
+            free(body);
+            proxy_fail(job, "http read error");
+            goto close;
+        }
+        if (got == 0) {
+            break;
+        }
+        total += (size_t)got;
+    }
+    if (clen <= 0 && total >= PROXY_IMG_MAX_BYTES) {
+        char probe;
+        int extra = esp_http_client_read(client, &probe, 1);
+        if (extra > 0) {
+            free(body);
+            proxy_fail(job, "file >768KB limit");
+            goto close;
+        }
+    }
+    if (total == 0) {
+        free(body);
+        proxy_fail(job, "empty download");
+        goto close;
+    }
+    img_fmt_t fmt = img_sniff_format(body, total);
+    if (fmt == IMG_FMT_JPEG) {
+        snprintf(job->ctype, sizeof(job->ctype), "image/jpeg");
+    } else if (fmt == IMG_FMT_PNG) {
+        snprintf(job->ctype, sizeof(job->ctype), "image/png");
+    } else if (fmt == IMG_FMT_WEBP) {
+        snprintf(job->ctype, sizeof(job->ctype), "image/webp");
+    } else {
+        free(body);
+        proxy_fail(job, "not JPEG/PNG/WebP");
+        goto close;
+    }
+    job->data = body;
+    job->len = total;
+    ESP_LOGI(TAG, "proxyImage %u bytes %s", (unsigned)total, job->ctype);
+
+close:
+    esp_http_client_close(client);
+cleanup:
+    esp_http_client_cleanup(client);
+done:
+    xSemaphoreGive(job->done);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t display_proxy_image_handle(httpd_req_t *req)
+{
+    softap_touch();
+    if (!wifi_sta_is_connected()) {
+        return send_err(req, "need STA Wi-Fi");
+    }
+    if (s_proxy_busy) {
+        return send_err(req, "proxy busy");
+    }
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    cJSON *u = root ? cJSON_GetObjectItem(root, "url") : NULL;
+    if (!cJSON_IsString(u) || !u->valuestring[0]) {
+        cJSON_Delete(root);
+        return send_err(req, "missing url");
+    }
+    size_t ulen = strlen(u->valuestring);
+    if (ulen >= sizeof(((proxy_job_t *)0)->url)) {
+        cJSON_Delete(root);
+        return send_err(req, "url too long");
+    }
+    if (strncmp(u->valuestring, "http://", 7) != 0 &&
+        strncmp(u->valuestring, "https://", 8) != 0) {
+        cJSON_Delete(root);
+        return send_err(req, "url must be http(s)");
+    }
+
+    proxy_job_t *job = calloc(1, sizeof(*job));
+    if (!job) {
+        cJSON_Delete(root);
+        return send_err(req, "OOM");
+    }
+    memcpy(job->url, u->valuestring, ulen + 1);
+    cJSON_Delete(root);
+    job->done = xSemaphoreCreateBinary();
+    if (!job->done) {
+        free(job);
+        return send_err(req, "OOM");
+    }
+
+    s_proxy_busy = true;
+    /* TLS download needs a large stack — same as epd_render display_url. */
+    if (xTaskCreate(proxy_image_task, "img_proxy", 32768, job, 5, NULL) != pdPASS) {
+        s_proxy_busy = false;
+        vSemaphoreDelete(job->done);
+        free(job);
+        return send_err(req, "proxy busy");
+    }
+    if (xSemaphoreTake(job->done, pdMS_TO_TICKS(70000)) != pdTRUE) {
+        ESP_LOGE(TAG, "proxyImage timeout — waiting for task cleanup");
+        xSemaphoreTake(job->done, portMAX_DELAY);
+        s_proxy_busy = false;
+        vSemaphoreDelete(job->done);
+        free(job->data);
+        free(job);
+        return send_err(req, "proxy timeout");
+    }
+    s_proxy_busy = false;
+    vSemaphoreDelete(job->done);
+
+    if (job->err[0] || !job->data || job->len == 0) {
+        const char *msg = job->err[0] ? job->err : "proxy fail";
+        free(job->data);
+        free(job);
+        return send_err(req, msg);
+    }
+
+    softap_touch();
+    httpd_resp_set_type(req, job->ctype);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t res = httpd_resp_send(req, (const char *)job->data, job->len);
+    free(job->data);
+    free(job);
+    return res;
+}
+
+static esp_err_t display_upload_frame_handle(httpd_req_t *req)
+{
+    if (req->content_len != 960000) {
+        return send_err(req, "body must be a raw 960000-byte frame");
+    }
+    if (epd_upload_start() != 0) {
+        return send_err(req, "panel busy");
+    }
+    unsigned char *buf = app_epd_dma_buf();
+    int bufSize = app_epd_dma_buf_size();
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int want = remaining > bufSize ? bufSize : remaining;
+        int got = httpd_req_recv(req, (char *)buf, want);
+        if (got <= 0) {
+            epd_upload_abort();
+            return send_err(req, "upload interrupted");
+        }
+        if (epd_upload_write(buf, got) != 0) {
+            epd_upload_abort();
+            return send_err(req, "panel write failed");
+        }
+        remaining -= got;
+    }
+    epd_upload_finish(); /* sync refresh + unlock */
+    return send_json(req, "{\"code\":0,\"msg\":\"uploaded, refreshing\"}");
+}
+
+/* ---------- OTA ---------- */
+
+static void ota_task(void *arg)
+{
+    char *url = (char *)arg;
+    char err[48] = "";
+    ESP_LOGW(TAG, "OTA start: %s", url);
+    led_set(LEDC_OTA_R, LED_BLINK_FAST); /* purple: upgrading */
+    int rc = ota_start(url, err, sizeof(err));
+    if (rc == 0) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+    }
+    ESP_LOGE(TAG, "OTA failed: %s", err);
+    led_set(LEDC_ERR_R, LED_BLINK); /* red: upgrade failed */
+    free(url);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    cJSON *url = root ? cJSON_GetObjectItem(root, "url") : NULL;
+    if (!cJSON_IsString(url) || strncmp(url->valuestring, "https://", 8) != 0) {
+        cJSON_Delete(root);
+        return send_err(req, "url must be https://");
+    }
+    char *urlCopy = strdup(url->valuestring);
+    cJSON_Delete(root);
+    if (!urlCopy) {
+        return send_err(req, "oom");
+    }
+    if (xTaskCreate(ota_task, "ota", 12288, urlCopy, 5, NULL) != pdPASS) {
+        free(urlCopy);
+        return send_err(req, "task spawn failed");
+    }
+    sleep_cancel(); /* don't sleep mid-upgrade */
+    return send_json(req, "{\"code\":0,\"msg\":\"upgrading, device will reboot\"}");
+}
+
+/* ---------- power ---------- */
+
+static esp_err_t get_power_param_handle(httpd_req_t *req)
+{
+    powerAttr_t p;
+    cfg_get_power_attr(&p);
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "mode", power_mode_str(p.mode));
+    cJSON_AddNumberToObject(obj, "sleepMin", p.sleepMin);
+    cJSON_AddStringToObject(obj, "wakeUrl", p.wakeUrl);
+    cJSON_AddStringToObject(obj, "imageQuality", img_quality_str(p.imageQuality));
+    cJSON_AddNumberToObject(obj, "batteryAdcGpio", p.batteryAdcGpio);
+    cJSON_AddNumberToObject(obj, "batteryDivMv", p.batteryDivMv);
+    cJSON_AddNumberToObject(obj, "ledGpio", p.ledGpio);
+    cJSON_AddBoolToObject(obj, "sleepArmed", sleep_is_armed());
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+static esp_err_t set_power_param_handle(httpd_req_t *req)
+{
+    char *body = read_body(req);
+    if (!body) {
+        return send_err(req, "bad body");
+    }
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        return send_err(req, "invalid JSON");
+    }
+    powerAttr_t p;
+    cfg_get_power_attr(&p);
+    cJSON *v;
+    if ((v = cJSON_GetObjectItem(root, "mode")) && cJSON_IsString(v)) {
+        p.mode = power_mode_from_str(v->valuestring);
+    } else if ((v = cJSON_GetObjectItem(root, "sleepMin")) && cJSON_IsNumber(v)) {
+        /* Legacy: sleepMin>0 implies cycle, 0 implies always. */
+        p.sleepMin = v->valueint < 0 ? 0 : v->valueint;
+        p.mode = p.sleepMin > 0 ? POWER_MODE_CYCLE : POWER_MODE_ALWAYS;
+    }
+    if ((v = cJSON_GetObjectItem(root, "sleepMin")) && cJSON_IsNumber(v)) {
+        p.sleepMin = v->valueint < 0 ? 0 : v->valueint;
+    }
+    if ((v = cJSON_GetObjectItem(root, "wakeUrl")) && cJSON_IsString(v)) {
+        strlcpy(p.wakeUrl, v->valuestring, sizeof(p.wakeUrl));
+    }
+    if ((v = cJSON_GetObjectItem(root, "imageQuality"))) {
+        if (cJSON_IsString(v)) {
+            p.imageQuality = img_quality_from_str(v->valuestring);
+        } else if (cJSON_IsNumber(v)) {
+            p.imageQuality = (v->valueint == 0) ? IMG_QUALITY_SPEED : IMG_QUALITY_QUALITY;
+        }
+    }
+    if ((v = cJSON_GetObjectItem(root, "batteryAdcGpio")) && cJSON_IsNumber(v)) {
+        p.batteryAdcGpio = v->valueint;
+    }
+    if ((v = cJSON_GetObjectItem(root, "batteryDivMv")) && cJSON_IsNumber(v) && v->valueint > 0) {
+        p.batteryDivMv = v->valueint;
+    }
+    if ((v = cJSON_GetObjectItem(root, "ledGpio")) && cJSON_IsNumber(v) && v->valueint >= 0) {
+        p.ledGpio = v->valueint;
+    }
+    cJSON_Delete(root);
+    cfg_set_power_attr(&p);
+    cfg_get_power_attr(&p); /* re-read normalized values */
+
+    bool sleepSoon = false;
+    if (p.mode == POWER_MODE_CYCLE) {
+        if (wifi_softap_is_up()) {
+            ESP_LOGW(TAG, "SoftAP up — sleep schedule deferred until AP closes");
+            sleep_cancel();
+        } else if (wifi_sta_is_connected()) {
+            sleep_arm_from_config();
+        } else {
+            ESP_LOGW(TAG, "not online — sleep schedule deferred until GOT_IP");
+            sleep_cancel();
+        }
+    } else if (p.mode == POWER_MODE_HIBERNATE) {
+        sleep_cancel();
+        sleepSoon = true;
+    } else {
+        sleep_cancel();
+    }
+    if (sleepSoon) {
+        /* Respond first, then enter hibernate so the client gets HTTP 200. */
+        esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"hibernating\"}");
+        vTaskDelay(pdMS_TO_TICKS(300));
+        sleep_now();
+        return res;
+    }
+    return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
+}
+
+static esp_err_t sleep_now_handle(httpd_req_t *req)
+{
+    softap_touch();
+    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"sleeping\"}");
+    vTaskDelay(pdMS_TO_TICKS(300));
+    sleep_now();
+    return res;
+}
+
+/* ---------- static page ---------- */
+
+static esp_err_t get_root_handler(httpd_req_t *req)
+{
+    softap_touch();
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, INDEX_HTML, strlen(INDEX_HTML));
+}
+
+/* ---------- registration ---------- */
+
+static const httpd_uri_t g_handlers[] = {
+    { .uri = "/", .method = HTTP_GET, .handler = get_root_handler },
+    { .uri = "/api/v1/system/getDevInfo", .method = HTTP_GET, .handler = get_dev_info_handle },
+    { .uri = "/api/v1/system/setDevInfo", .method = HTTP_POST, .handler = set_dev_info_handle },
+    { .uri = "/api/v1/system/setDevReset", .method = HTTP_POST, .handler = set_dev_reset_handle },
+    { .uri = "/api/v1/system/setDevFactory", .method = HTTP_POST, .handler = set_dev_factory_handle },
+    { .uri = "/api/v1/network/getWifiParam", .method = HTTP_GET, .handler = get_wifi_param_handle },
+    { .uri = "/api/v1/network/setWifiParam", .method = HTTP_POST, .handler = set_wifi_param_handle },
+    { .uri = "/api/v1/network/scanWifi", .method = HTTP_GET, .handler = scan_wifi_handle },
+    { .uri = "/api/v1/network/getMqttParam", .method = HTTP_GET, .handler = get_mqtt_param_handle },
+    { .uri = "/api/v1/network/setMqttParam", .method = HTTP_POST, .handler = set_mqtt_param_handle },
+    { .uri = "/api/v1/network/testMqtt", .method = HTTP_POST, .handler = test_mqtt_handle },
+    { .uri = "/api/v1/network/closeSoftAp", .method = HTTP_POST, .handler = close_softap_handle },
+    { .uri = "/api/v1/network/openSoftAp", .method = HTTP_POST, .handler = open_softap_handle },
+    { .uri = "/api/v1/display/renderText", .method = HTTP_POST, .handler = display_render_text_handle },
+    { .uri = "/api/v1/display/renderCanvas", .method = HTTP_POST, .handler = display_render_canvas_handle },
+    { .uri = "/api/v1/display/uploadFrame", .method = HTTP_POST, .handler = display_upload_frame_handle },
+    { .uri = "/api/v1/display/displayUrl", .method = HTTP_POST, .handler = display_url_handle },
+    { .uri = "/api/v1/display/proxyImage", .method = HTTP_POST, .handler = display_proxy_image_handle },
+    { .uri = "/api/v1/display/testPattern", .method = HTTP_POST, .handler = display_test_pattern_handle },
+    { .uri = "/api/v1/system/setDevUpgrade", .method = HTTP_POST, .handler = set_dev_upgrade_handle },
+    { .uri = "/api/v1/system/getPowerParam", .method = HTTP_GET, .handler = get_power_param_handle },
+    { .uri = "/api/v1/system/setPowerParam", .method = HTTP_POST, .handler = set_power_param_handle },
+    { .uri = "/api/v1/system/sleepNow", .method = HTTP_POST, .handler = sleep_now_handle },
+};
+
+void http_server_start(void)
+{
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.max_uri_handlers = sizeof(g_handlers) / sizeof(g_handlers[0]);
+    /* Canvas/upload paths need headroom beyond the 4KB default. */
+    config.stack_size = 12288;
+    /* setWifiParam may block up to ~20s while trying STA association */
+    config.recv_wait_timeout = 30;
+    config.send_wait_timeout = 30;
+    httpd_handle_t server = NULL;
+    ESP_ERROR_CHECK(httpd_start(&server, &config));
+    for (size_t i = 0; i < sizeof(g_handlers) / sizeof(g_handlers[0]); i++) {
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &g_handlers[i]));
+    }
+    ESP_LOGI(TAG, "web server up (%d endpoints)", config.max_uri_handlers);
+}

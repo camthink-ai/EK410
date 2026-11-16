@@ -1,0 +1,2055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EK410 · CamThink</title>
+<!-- No CDN fonts: SoftAP has no internet; external CSS would hang the page. -->
+<style>
+:root{
+  --brand:#f24a00; --ink:#090e17; --text:#272e3b; --sub:#6b7785;
+  --bg:#eceef2; --surface:#fff; --line:#e5e7eb; --ok:#16a34a; --muted:#9aa1ab;
+  --safe-b:env(safe-area-inset-bottom);
+  --ui-font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{
+  font-family:var(--ui-font);
+  color:var(--text); background:var(--bg); font-size:14px; line-height:1.45;
+}
+.preview-bar{
+  position:sticky; top:0; z-index:50;
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between;
+  padding:8px 14px; background:rgba(9,14,23,.94); color:#fff; font-size:12px;
+}
+.preview-bar b{font-family:Sora,sans-serif}
+.preview-bar .modes{display:flex; gap:6px; flex-wrap:wrap}
+.preview-bar button{
+  border:1px solid rgba(255,255,255,.22); background:transparent; color:#fff;
+  border-radius:999px; padding:4px 10px; font:inherit; cursor:pointer}
+.preview-bar button.on{background:var(--brand); border-color:var(--brand)}
+
+/* ===== App shell ===== */
+.app{min-height:calc(100vh - 40px); display:flex; flex-direction:column}
+body.desktop .app{
+  flex-direction:row; align-items:stretch; max-width:1440px; margin:0 auto;
+  min-height:calc(100vh - 40px);
+}
+body.desktop .rail{
+  display:flex; width:220px; flex:0 0 220px; flex-direction:column;
+  padding:28px 18px; background:var(--ink); color:#fff;
+}
+body:not(.desktop) .rail{display:none}
+.rail .logo{width:132px; margin-bottom:28px}
+.rail nav{display:flex; flex-direction:column; gap:4px}
+.rail nav button{
+  display:flex; align-items:center; gap:10px; width:100%;
+  border:0; background:transparent; color:rgba(255,255,255,.55);
+  border-radius:12px; padding:12px 12px; font:inherit; font-size:13px; cursor:pointer; text-align:left}
+.rail nav button svg{width:18px; height:18px; flex:0 0 auto}
+.rail nav button.on{background:rgba(255,255,255,.1); color:#fff}
+.rail .foot{margin-top:auto; font-size:11px; opacity:.4; padding:12px}
+
+.main{
+  flex:1; min-width:0;
+  padding:16px 16px calc(100px + var(--safe-b));
+}
+body.phone .main{max-width:420px; margin:0 auto; width:100%}
+body.tablet .main{max-width:720px; margin:0 auto; width:100%}
+body.desktop .main{
+  padding:28px 32px 32px;
+  display:flex; flex-direction:column; min-height:calc(100vh - 40px);
+}
+body.desktop .main.is-display{padding:0; background:var(--bg)}
+
+.page[hidden]{display:none}
+.btn{
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  height:36px; padding:0 16px; border-radius:999px; font:inherit; font-size:13px; line-height:1;
+  cursor:pointer; border:1px solid var(--line); background:#fff; color:var(--text)}
+.btn.solid{background:var(--ink); color:#fff; border-color:var(--ink)}
+.btn.brand{background:var(--brand); color:#fff; border-color:var(--brand)}
+.btn.ghost{background:transparent; border-color:rgba(255,255,255,.3); color:#fff}
+/* Compact only when alone in a header strip — never mix with .btn in .actions */
+.btn.tiny{height:28px; padding:0 12px; font-size:12px}
+.btn:disabled{opacity:.45; cursor:not-allowed}
+.note{margin:10px 0 0; color:var(--sub); font-size:12px; line-height:1.5;
+  overflow-wrap:anywhere; word-break:break-word; max-width:100%}
+.eye{border:0; background:0; color:var(--sub); font:inherit; font-size:12px; cursor:pointer}
+
+/* SoftAP — light status strip */
+.banner{
+  display:none; align-items:center; gap:12px; flex-wrap:wrap;
+  margin:0 0 16px; padding:12px 14px 12px 12px; border-radius:16px;
+  background:var(--surface); color:var(--text);
+  border:1px solid rgba(9,14,23,.06);
+  box-shadow:0 1px 0 rgba(9,14,23,.03);
+}
+.banner.show{display:flex}
+.banner .ap-dot{
+  flex:0 0 auto; width:8px; height:8px; border-radius:50%;
+  background:var(--ok); box-shadow:0 0 0 4px rgba(22,163,74,.12);
+}
+.banner .ap-copy{flex:1; min-width:180px; display:flex; flex-direction:column; gap:2px}
+.banner .ap-copy b{font-size:13px; font-weight:600; color:var(--ink); letter-spacing:-.01em}
+.banner .ap-copy span{font-size:12px; color:var(--sub); line-height:1.4}
+.banner .btn{
+  flex:0 0 auto; height:32px; padding:0 12px; font-size:12px;
+  border-color:var(--line); background:#fff; color:var(--text);
+}
+.banner .btn:hover{border-color:var(--ink); color:var(--ink)}
+body.desktop .banner{padding:14px 16px 14px 14px; border-radius:18px}
+/* Keep gap under SoftAP strip so it doesn’t glue to display chrome */
+body.desktop .main.is-display .banner{margin:16px 16px 12px}
+body:not(.desktop) .main.is-display .banner{margin-bottom:12px}
+
+/* ===== Overview: calm product surface (no glow / no rules) ===== */
+.hero{
+  border-radius:20px; background:var(--surface); color:var(--text);
+  padding:24px 22px 22px;
+  box-shadow:0 1px 0 rgba(9,14,23,.04);
+}
+body.desktop .hero{padding:32px 36px; border-radius:24px}
+.hero-logo{width:120px; display:block}
+/* dark logo on light card */
+.hero-logo.light-bg{filter:none}
+.hero .product{
+  margin-top:18px; font-family:Sora,sans-serif; font-size:28px; font-weight:600;
+  letter-spacing:-.03em; color:var(--ink)}
+body.desktop .hero .product{font-size:34px; margin-top:22px}
+.hero .product em{font-style:normal; color:var(--brand)}
+.hero .tag{margin-top:6px; color:var(--sub); font-size:13px}
+.meta{
+  margin-top:16px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  color:var(--sub); font-size:12px}
+.meta .chip{
+  display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px;
+  border-radius:999px; background:#f3f4f6; color:var(--sub)}
+.meta .chip.ok{background:#eefaf2; color:var(--ok)}
+.meta .chip i{width:6px; height:6px; border-radius:50%; background:currentColor}
+.hero-bottom{
+  margin-top:18px; display:grid; grid-template-columns:repeat(3,1fr); gap:8px}
+.hero-bottom div{padding:12px 12px 10px; border-radius:14px; background:#f5f6f8}
+.hero-bottom b{display:block; font-size:13px; font-weight:600; color:var(--ink)}
+.hero-bottom span{color:var(--sub); font-size:11px}
+.hero-actions{display:flex; gap:8px; flex-wrap:wrap; margin-top:18px}
+.hero-actions .btn.ghost{
+  background:#fff; border-color:var(--line); color:var(--text)}
+.detail-line{
+  margin-top:16px; padding-top:14px; border-top:1px solid #f0f1f3;
+  color:var(--sub); font-size:12px;
+  display:flex; flex-wrap:wrap; gap:8px 16px}
+.detail-line strong{color:var(--text); font-weight:500}
+
+/* ===== Network: one sheet, two sections by divider ===== */
+.sheet{
+  background:var(--surface); border-radius:22px; padding:8px 0 18px;
+  border:1px solid rgba(9,14,23,.05);
+}
+body.desktop .net-layout{
+  display:grid; grid-template-columns:1.1fr .9fr; gap:0;
+  background:var(--surface); border-radius:24px; border:1px solid rgba(9,14,23,.05);
+  overflow:hidden; min-height:560px;
+}
+body.desktop .net-layout .pane{padding:28px 28px 32px}
+body.desktop .net-layout .pane + .pane{border-left:1px solid var(--line)}
+body:not(.desktop) .net-layout{display:block}
+body:not(.desktop) .net-layout .pane{padding:8px 0 0}
+body:not(.desktop) .net-layout .pane + .pane{margin-top:16px; padding-top:4px}
+
+.h{padding:10px 18px 6px; font-family:Sora,sans-serif; font-size:12px; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--sub)}
+body.desktop .net-layout .h,
+body.desktop .side-panel .h{padding:0 0 14px; font-size:13px}
+.row{display:flex; align-items:center; gap:12px; min-height:48px; padding:0 18px;
+  border-radius:0; background:transparent; transition:background .15s ease}
+body.desktop .net-layout .row,
+body.desktop .side-panel .row{padding:0; min-height:52px}
+.row label{flex:0 0 auto; min-width:72px; color:var(--sub)}
+.row .grow{flex:1; min-width:0}
+input.ghost,select.ghost,textarea.ghost{
+  border:0; background:transparent; text-align:right; font:inherit; color:var(--text);
+  outline:none; width:100%; border-radius:0; box-shadow:none}
+body.desktop input.ghost, body.desktop select.ghost{text-align:left}
+/* Prefer spacing over rules */
+.hr{display:none}
+.actions{display:flex; justify-content:flex-end; align-items:center; gap:8px; padding:14px 18px 0; flex-wrap:wrap}
+/* Same row = same height: promote tiny → standard inside action bars */
+.actions .btn{height:36px; padding:0 16px; font-size:13px}
+body.desktop .net-layout .actions,
+body.desktop .side-panel .actions{padding:18px 0 0}
+/* Focus: flat strip, no rounded hover block */
+.row:hover{background:transparent}
+.row:focus-within{background:rgba(9,14,23,.03); border-radius:0}
+.row.invalid{background:#fef2f2; border-radius:0}
+
+/* SSID list */
+.ssid-head{display:flex; align-items:center; justify-content:space-between; padding:4px 18px 8px}
+body.desktop .ssid-head{padding:8px 0}
+.ssid-list{
+  margin:0 12px; display:flex; flex-direction:column; gap:6px;
+  max-height:min(42vh, 280px); overflow-y:auto; -webkit-overflow-scrolling:touch;
+  padding:2px 4px 2px 2px; overscroll-behavior:contain}
+body.desktop .ssid-list{margin:0; max-height:min(48vh, 360px)}
+.ssid-list::-webkit-scrollbar{width:4px}
+.ssid-list::-webkit-scrollbar-thumb{background:#c9ced6; border-radius:4px}
+.ssid{
+  display:flex; align-items:center; gap:10px; width:100%; border:0; background:#f5f6f8;
+  padding:12px 14px; font:inherit; cursor:pointer; text-align:left; border-radius:12px;
+  flex:0 0 auto}
+.ssid:hover{background:#eef0f3}
+.ssid:active{background:#e8eaee}
+.ssid .name{flex:1; font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.ssid .meta{color:var(--sub); font-size:11px; display:flex; gap:8px; align-items:center}
+.ssid .bars{display:inline-flex; gap:2px; align-items:flex-end; height:12px}
+.ssid .bars i{width:3px; background:var(--sub); border-radius:1px; display:block}
+.ssid .bars i:nth-child(1){height:4px} .ssid .bars i:nth-child(2){height:7px}
+.ssid .bars i:nth-child(3){height:10px} .ssid .bars i:nth-child(4){height:12px}
+.lock{font-size:11px; opacity:.5}
+.wifi-status{
+  display:flex; align-items:center; gap:8px; margin:0 18px 10px; padding:10px 12px;
+  border-radius:12px; background:#f5f6f8; font-size:13px; color:var(--sub)}
+body.desktop .wifi-status{margin:0 0 12px}
+.wifi-status i{width:8px; height:8px; border-radius:50%; background:var(--muted); flex:0 0 auto}
+.wifi-status em{margin-left:auto; font-style:normal; font-size:12px; color:var(--muted); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.wifi-status[data-state="connected"]{background:#eefaf2; color:var(--ok)}
+.wifi-status[data-state="connected"] i{background:var(--ok)}
+.wifi-status[data-state="connecting"],
+.wifi-status[data-state="reconnecting"]{background:#fff7ed; color:#c2410c}
+.wifi-status[data-state="connecting"] i,
+.wifi-status[data-state="reconnecting"] i{background:#f97316}
+.wifi-status[data-state="failed"]{background:#fef2f2; color:#dc2626}
+.wifi-status[data-state="failed"] i{background:#dc2626}
+
+.topics{padding:8px 18px 0; color:var(--sub); font-size:12px; display:flex; flex-direction:column; gap:8px}
+body.desktop .topics{padding:16px 0 0}
+.topics .topic-row{
+  background:#f7f8fa; border-radius:12px; padding:10px 12px;
+  display:flex; flex-direction:column; gap:6px}
+.topics .topic-row label{font-size:11px; color:var(--sub)}
+.topics .topic-row input{
+  border:0; background:transparent; outline:none; width:100%;
+  font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--text); text-align:left}
+.req{color:var(--brand); margin-left:2px; font-weight:600}
+.err-msg{display:none; padding:0 18px; margin-top:4px; font-size:12px; color:#dc2626}
+.err-msg.show{display:block}
+.topic-row.invalid{background:#fef2f2}
+.row.invalid input.ghost::placeholder{color:#f87171}
+.topic-row.invalid input{color:#dc2626}
+.hint{padding:0 18px; margin-top:6px; font-size:11px; color:var(--muted);
+  line-height:1.45; overflow-wrap:anywhere; word-break:break-word; max-width:100%}
+body.desktop .hint{padding:6px 0 0}
+body.desktop .err-msg{padding:0; overflow-wrap:anywhere}
+.side-panel .note{padding:10px 18px 0}
+.banner .ap-copy span{overflow-wrap:anywhere}
+.topics .topic-row input{overflow-wrap:anywhere; word-break:break-all}
+
+/* ===== Display: light workspace + preview chrome ===== */
+.disp-head{
+  display:flex; flex-direction:column; gap:10px;
+  margin-bottom:14px;
+}
+/* Mobile/tablet: keep mode tabs above tools; sticky so tools never cover tabs */
+body:not(.desktop) #page-display .disp-head{
+  position:sticky; top:40px; z-index:16;
+  margin:0 0 12px; padding:8px 0 10px;
+  background:var(--bg);
+  box-shadow:0 1px 0 rgba(9,14,23,.06);
+}
+body.desktop .main.is-display .disp-head{
+  flex-direction:row; flex-wrap:wrap; align-items:center; gap:10px;
+  margin:0; padding:14px 20px; background:var(--surface);
+  border-bottom:1px solid var(--line);
+  position:relative; top:auto; z-index:5;
+  box-shadow:none;
+}
+.disp-head-row{
+  display:flex; align-items:center; gap:8px; width:100%; min-width:0;
+}
+.mode-switch{
+  display:flex; gap:4px; padding:4px; border-radius:14px; background:#f3f4f6;
+  border:1px solid transparent; flex:1; min-width:0; width:100%; max-width:none;
+}
+body.desktop .mode-switch{
+  max-width:none; width:auto; flex:0 0 auto; min-width:540px;
+}
+.mode-switch button{
+  flex:1; border:0; background:transparent; height:40px; border-radius:11px;
+  font:inherit; font-size:13px; font-weight:500; color:var(--sub); cursor:pointer;
+  padding:0 12px; min-width:0}
+body.desktop .mode-switch button{
+  flex:1 1 0; min-width:140px; padding:0 28px; font-size:14px; height:42px;
+}
+.mode-switch button.on{background:var(--ink); color:#fff; box-shadow:0 4px 12px rgba(9,14,23,.12)}
+.preview-toggles{
+  display:flex; gap:6px; flex-wrap:wrap; align-items:center; width:100%;
+}
+body.desktop .preview-toggles{width:auto; flex:1; min-width:0}
+.preview-toggles .seg{
+  box-sizing:border-box; display:inline-flex; align-items:center; gap:2px;
+  height:36px; padding:3px; border-radius:12px; background:#f3f4f6;
+}
+.preview-toggles .seg button{
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  border:0; background:transparent; height:30px; padding:0 10px; border-radius:9px;
+  font:inherit; font-size:12px; line-height:1; color:var(--sub); cursor:pointer; white-space:nowrap}
+.preview-toggles .seg button.on{background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.preview-toggles .chip-btn{
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  height:36px; padding:0 12px; border-radius:12px; border:1px solid var(--line);
+  background:#fff; font:inherit; font-size:12px; line-height:1; color:var(--sub); cursor:pointer}
+.preview-toggles .chip-btn.on{border-color:var(--ink); color:var(--ink); background:#f8f9fb}
+.palette-dots{display:inline-flex; gap:3px; margin-left:4px; vertical-align:middle}
+.palette-dots i{width:8px; height:8px; border-radius:2px; display:inline-block}
+.disp-head .push{width:100%}
+body.desktop .disp-head .push{width:auto; margin-left:auto}
+
+.mode-view[hidden]{display:none !important}
+.display-root{display:flex; flex-direction:column; gap:12px; flex:1; min-height:0}
+body.desktop .main.is-display .display-root{gap:0; height:calc(100vh - 40px - 57px); min-height:0}
+
+/* Shared stage (light) */
+.stage{
+  position:relative; background:#e8eaee; border-radius:20px; padding:14px;
+  display:flex; flex-direction:column; min-height:280px; flex:1;
+}
+body.desktop .stage{border-radius:0; padding:20px 24px 24px; min-height:0; background:#e6e8ed}
+.stage-meta{
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  margin-bottom:10px; font-size:11px; color:var(--sub); min-width:0;
+}
+.stage-meta b{font-weight:600; color:var(--text); font-family:Sora,sans-serif; font-size:12px; flex:0 0 auto}
+.stage-meta span{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.bezel{
+  flex:1; display:flex; align-items:center; justify-content:center; min-height:0;
+  position:relative;
+}
+.epd-frame{
+  position:relative; width:100%; max-width:min(100%, 880px); aspect-ratio:4/3;
+  border-radius:8px; background:#f6f4ef; overflow:hidden;
+  box-shadow:0 1px 0 rgba(9,14,23,.06), 0 18px 40px rgba(9,14,23,.08);
+}
+body.desktop .epd-frame{max-height:calc(100vh - 200px); width:auto; height:100%; max-width:100%}
+.epd-frame canvas, .epd-frame .frame-fill{
+  display:block; width:100%; height:100%;
+}
+.epd-frame .frame-fill{
+  display:flex; align-items:center; justify-content:center;
+  color:var(--sub); font-size:13px; background:#f6f4ef center/cover no-repeat;
+}
+.epd-frame .frame-fill.has{color:transparent}
+.layout-guide{
+  pointer-events:none; position:absolute; inset:0; z-index:2;
+  opacity:0; transition:opacity .15s;
+}
+.layout-guide.show{opacity:1}
+.layout-guide .safe{
+  position:absolute; inset:6%; border:1px dashed rgba(9,14,23,.28); border-radius:2px;
+}
+.layout-guide .cross-h, .layout-guide .cross-v{
+  position:absolute; background:rgba(242,74,0,.35);
+}
+.layout-guide .cross-h{left:0; right:0; top:50%; height:1px}
+.layout-guide .cross-v{top:0; bottom:0; left:50%; width:1px}
+.layout-guide .badge{
+  position:absolute; left:8px; bottom:8px; padding:3px 8px; border-radius:6px;
+  background:rgba(9,14,23,.72); color:#fff; font-size:10px; font-family:Sora,sans-serif;
+}
+#pv{touch-action:none; cursor:grab; display:block; width:100%; height:100%}
+
+.side-panel{
+  background:var(--surface); border-radius:20px; padding:8px 0 16px;
+}
+body.desktop .side-panel{
+  width:360px; flex:0 0 360px; margin:0; border-radius:0;
+  border-left:1px solid var(--line); background:var(--surface);
+  display:flex; flex-direction:column; min-height:0; overflow-x:hidden; overflow-y:auto;
+  padding:20px 0 24px; min-width:0;
+}
+body.desktop .side-panel .h{padding-left:22px; padding-right:22px}
+body.desktop .side-panel .row{padding-left:22px; padding-right:22px}
+body.desktop .side-panel .actions{padding-left:22px; padding-right:22px}
+body.desktop .side-panel .note{padding:10px 22px 0}
+
+.img-mode, .ed-mode, .md-mode{display:flex; flex-direction:column; gap:12px; flex:1; min-height:0}
+body.desktop .img-mode,
+body.desktop .ed-mode,
+body.desktop .md-mode{
+  flex-direction:row; gap:0; flex:1; min-height:0; background:var(--bg);
+}
+
+/* ===== Editor chrome: desktop rail+inspector / phone dock+sheet ===== */
+.ed-mode{position:relative}
+body:not(.desktop) .ed-mode{padding-bottom:72px}
+.ed-tools{
+  display:none; flex-direction:column; gap:6px; padding:16px 10px;
+  background:var(--surface); border-right:1px solid var(--line);
+  flex:0 0 72px; width:72px; align-items:center;
+}
+body.desktop .ed-tools{display:flex}
+.ed-tools button{
+  box-sizing:border-box; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:4px; width:56px; height:56px; border:0; border-radius:14px; background:transparent;
+  font:inherit; font-size:10px; line-height:1.15; color:var(--sub); cursor:pointer; padding:6px
+}
+.ed-tools button:hover{background:#f3f4f6; color:var(--ink)}
+.ed-tools button .ico{font-size:16px; font-weight:600; color:var(--ink); font-family:Sora,sans-serif}
+.ed-inspector-host{display:none}
+body.desktop .ed-inspector-host{
+  display:flex; flex-direction:column; width:360px; flex:0 0 360px;
+  margin:0; border-radius:0; border-left:1px solid var(--line);
+  background:var(--surface); min-height:0; height:100%; overflow:hidden; padding:12px 0 0;
+}
+body:not(.desktop) .ed-mode > .ed-inspector-host{display:none !important}
+#edChrome{display:flex; flex-direction:column; min-height:0; flex:1; height:100%; overflow:hidden}
+.ed-add-strip{
+  display:flex; gap:6px; flex-wrap:wrap; padding:0 16px 12px; flex:0 0 auto;
+}
+body.desktop .ed-add-strip{padding:4px 22px 12px}
+.ed-add-strip button{
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  height:36px; padding:0 14px; border-radius:999px; border:1px solid var(--line);
+  background:#fff; font:inherit; font-size:12px; line-height:1; color:var(--sub); cursor:pointer
+}
+.ed-add-strip button:hover{border-color:var(--ink); color:var(--ink)}
+.ed-dock{
+  display:none; position:fixed; left:50%; transform:translateX(-50%);
+  bottom:calc(88px + var(--safe-b)); z-index:18;
+  width:min(360px, calc(100% - 28px)); height:52px; padding:5px;
+  gap:4px; background:rgba(255,255,255,.94); backdrop-filter:blur(16px);
+  border-radius:999px; box-shadow:0 10px 32px rgba(9,14,23,.14), 0 0 0 1px rgba(9,14,23,.06);
+}
+body:not(.desktop) .ed-mode:not([hidden]) .ed-dock{display:flex}
+.ed-dock button{
+  flex:1; border:0; background:transparent; border-radius:999px;
+  font:inherit; font-size:13px; font-weight:500; color:var(--sub); cursor:pointer
+}
+.ed-dock button.on{background:var(--ink); color:#fff}
+.ed-sheet{display:none; position:fixed; inset:0; z-index:22; pointer-events:none}
+.ed-sheet.open{display:block; pointer-events:auto}
+body.desktop .ed-sheet{display:none !important}
+.ed-sheet-mask{position:absolute; inset:0; background:rgba(9,14,23,.28)}
+.ed-sheet-card{
+  position:absolute; left:0; right:0; bottom:0;
+  height:min(48vh, 420px); max-height:calc(100% - 80px);
+  background:var(--surface); border-radius:20px 20px 0 0;
+  box-shadow:0 -8px 40px rgba(9,14,23,.18);
+  display:flex; flex-direction:column; overflow:hidden;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.ed-sheet-grab{
+  width:36px; height:4px; border-radius:4px; background:#d5d8de;
+  margin:10px auto 0; flex:0 0 auto;
+}
+.ed-sheet-head{
+  display:flex; align-items:center; gap:8px; padding:10px 14px 8px; flex:0 0 auto;
+}
+.ed-sheet-head .title{flex:1; font-family:Sora,sans-serif; font-size:13px; font-weight:600; color:var(--ink)}
+.ed-sheet-head .icon-btn{
+  border:0; background:#f3f4f6; width:32px; height:32px; border-radius:10px;
+  font:inherit; font-size:14px; color:var(--sub); cursor:pointer; line-height:1
+}
+.ed-sheet-body{flex:1; min-height:0; overflow:auto; padding-bottom:12px}
+/* Phone sheet: one panel at a time */
+.ed-sheet[data-mode="add"] #edPanelLayers,
+.ed-sheet[data-mode="add"] #edPanelProps,
+.ed-sheet[data-mode="add"] #edInspDiv{display:none !important}
+.ed-sheet[data-mode="layers"] #edAddStrip,
+.ed-sheet[data-mode="layers"] #edPanelProps,
+.ed-sheet[data-mode="layers"] #edInspDiv{display:none !important}
+.ed-sheet[data-mode="props"] #edAddStrip,
+.ed-sheet[data-mode="props"] #edPanelLayers,
+.ed-sheet[data-mode="props"] #edInspDiv{display:none !important}
+.ed-sheet[data-mode="add"] #edAddStrip{
+  display:flex; flex-direction:column; gap:8px; padding:8px 16px 16px;
+}
+.ed-sheet[data-mode="add"] #edAddStrip button{
+  width:100%; height:48px; border-radius:14px; justify-content:flex-start; padding:0 16px; font-size:14px
+}
+body.desktop #edAddStrip{display:flex}
+/* Desktop: Layers (top, scroll) + Props (bottom, scroll) — no overlap */
+body.desktop #edPanelLayers{
+  display:flex; flex-direction:column;
+  flex:1 1 40%; min-height:140px; max-height:46%;
+  overflow:hidden;
+}
+body.desktop #edPanelProps{
+  display:flex; flex-direction:column;
+  flex:1 1 52%; min-height:200px; overflow:hidden;
+  padding-bottom:16px;
+}
+body.desktop #edInspDiv{display:block; flex:0 0 auto; margin:8px 22px}
+body.desktop #edPanelLayers .h,
+body.desktop #edPanelProps .h{flex:0 0 auto}
+body.desktop #edPanelLayers .layer-ops{flex:0 0 auto; padding-bottom:4px}
+body.desktop #edPanelProps .props-fields,
+body.desktop #edPanelProps .props-empty{
+  flex:1; min-height:0; overflow-x:hidden; overflow-y:auto;
+}
+.dropzone{
+  margin:8px 18px 0; padding:24px 16px; border-radius:16px; text-align:center;
+  border:1.5px dashed #d5d8de; background:#f8f9fb; color:var(--sub); font-size:13px; cursor:pointer;
+  box-sizing:border-box; max-width:100%; overflow:hidden;
+  overflow-wrap:anywhere; word-break:break-word}
+body.desktop .side-panel .dropzone{margin:8px 22px 0}
+.dropzone strong{display:block; color:var(--text); margin-bottom:6px; font-weight:600}
+.dropzone span{display:block; line-height:1.45; max-width:100%}
+.or{text-align:center; color:var(--muted); font-size:11px; padding:10px 0 4px}
+.fit-pills{display:flex; gap:6px; padding:8px 18px 0; flex-wrap:wrap}
+body.desktop .fit-pills{padding:8px 22px 0}
+.fit-pills button{
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  height:32px; padding:0 12px; border-radius:999px; border:1px solid var(--line);
+  background:#fff; font:inherit; font-size:12px; line-height:1; color:var(--sub); cursor:pointer}
+.fit-pills button.on{border-color:var(--ink); color:var(--ink); background:#f8f9fb}
+
+.insp-section{flex:0 0 auto; display:flex; flex-direction:column; min-height:0}
+.insp-section.grow{flex:1; min-height:0}
+.insp-divider{
+  height:1px; background:var(--line); margin:12px 18px; flex:0 0 auto}
+body.desktop .insp-divider{margin:8px 22px}
+.layers{
+  padding:4px 12px 8px; display:flex; flex-direction:column; gap:6px;
+  overflow:auto; max-height:40vh; box-sizing:border-box; min-height:0;
+}
+body.desktop .layers{
+  padding:4px 18px 8px; max-height:none; flex:1 1 auto;
+  overflow-x:hidden; overflow-y:auto; min-height:0;
+}
+.layer{
+  box-sizing:border-box; display:flex; gap:10px; align-items:center; width:100%;
+  border:1.5px solid transparent; border-radius:12px;
+  padding:10px 12px; background:#f5f6f8; font:inherit; text-align:left; cursor:pointer; color:inherit;
+  flex:0 0 auto; min-width:0;
+}
+.layer.on{border-color:var(--ink); background:#fff; box-shadow:none}
+.layer .swatch{
+  flex:0 0 auto; width:18px; height:18px; border-radius:5px; border:1px solid rgba(9,14,23,.12)}
+.layer .meta{flex:1; min-width:0}
+.layer b{display:block; font-size:13px}
+.layer small{display:block; font-size:11px; color:var(--sub); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.layer-ops{display:flex; gap:6px; padding:8px 12px 0; flex-wrap:wrap}
+body.desktop .layer-ops{padding:10px 16px 0}
+.props-empty{padding:8px 18px 0; font-size:12px; color:var(--muted); line-height:1.45}
+body.desktop .props-empty{padding:8px 22px 0}
+.props-fields{display:flex; flex-direction:column}
+.props-fields[hidden], .props-empty[hidden]{display:none !important}
+.props-fields .field-block{padding:0 16px}
+body.desktop .props-fields .field-block{padding:0 22px}
+.props-fields textarea.ghost{
+  text-align:left; width:100%; min-height:56px; max-height:96px; background:#f5f6f8;
+  border-radius:12px; padding:10px; resize:vertical}
+body.desktop .props-fields textarea.ghost{min-height:52px; max-height:80px; resize:none}
+body.desktop #edChrome .h{padding-left:22px; padding-right:22px}
+body.desktop #edChrome .row{padding-left:22px; padding-right:22px}
+.slider-row{
+  display:flex; align-items:center; gap:10px; min-height:44px; padding:0 16px;
+}
+body.desktop .slider-row{padding:0 22px; min-height:48px}
+.slider-row > label{flex:0 0 auto; min-width:52px; color:var(--sub); font-size:13px}
+.slider-row .slider-wrap{flex:1; min-width:0; display:flex; align-items:center}
+.slider-row input[type="range"]{
+  -webkit-appearance:none; appearance:none; width:100%; height:4px;
+  border-radius:4px; background:#e5e7eb; outline:none; margin:0; cursor:pointer;
+}
+.slider-row input[type="range"]::-webkit-slider-thumb{
+  -webkit-appearance:none; appearance:none; width:18px; height:18px; border-radius:50%;
+  background:var(--ink); border:0; box-shadow:0 1px 3px rgba(9,14,23,.2);
+}
+.slider-row input[type="range"]::-moz-range-thumb{
+  width:18px; height:18px; border-radius:50%; background:var(--ink); border:0;
+}
+.slider-row .val{
+  flex:0 0 40px; text-align:right; font-variant-numeric:tabular-nums;
+  font-size:12px; color:var(--sub); font-family:Sora,sans-serif;
+}
+
+.md-editor{
+  background:var(--surface); border-radius:20px; padding:16px 18px 18px;
+  display:flex; flex-direction:column; min-height:280px; flex:1;
+}
+body.desktop .md-editor{
+  border-radius:0; width:380px; flex:0 0 380px; border-right:1px solid var(--line);
+  padding:22px 22px 24px; min-height:0; overflow:auto;
+}
+.md-editor textarea{
+  flex:1; width:100%; min-height:200px; border:0; resize:vertical; outline:none;
+  font:inherit; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px;
+  line-height:1.55; color:var(--text); background:#f8f9fb; border-radius:12px; padding:12px}
+body.desktop .md-editor textarea{min-height:0; resize:none}
+
+/* System — sectioned blocks */
+.sys-stack{display:flex; flex-direction:column; gap:12px}
+body.desktop .sys-stack{
+  max-width:720px; gap:16px;
+  display:grid; grid-template-columns:1fr 1fr; align-items:start;
+}
+body.desktop .sys-block--wide{grid-column:1 / -1}
+.sys-block{
+  background:var(--surface); border-radius:20px;
+  border:1px solid rgba(9,14,23,.05); padding:8px 0 14px;
+}
+body.desktop .sys-block{padding:22px 24px 20px; border-radius:22px}
+.sys-block .h{padding:10px 18px 8px}
+body.desktop .sys-block .h{padding:0 0 14px; font-size:13px}
+.sys-block .row{padding:0 18px}
+body.desktop .sys-block .row{padding:0; min-height:52px}
+body.desktop .sys-block .row .grow{text-align:left !important}
+.sys-block .actions{padding:14px 18px 0}
+body.desktop .sys-block .actions{padding:18px 0 0; justify-content:flex-start}
+.sys-block--danger .row button{color:var(--text)}
+.sys-block--danger .row button.danger{color:#dc2626}
+.sys .danger{color:#dc2626}
+
+/* Bottom dock — mobile/tablet only */
+.dock{
+  position:fixed; left:50%; bottom:calc(12px + var(--safe-b)); transform:translateX(-50%);
+  z-index:20; width:min(420px, calc(100% - 24px)); height:62px; padding:5px;
+  display:flex; gap:4px; background:rgba(255,255,255,.94); backdrop-filter:blur(16px);
+  border-radius:999px; box-shadow:0 14px 40px rgba(9,14,23,.16)}
+body.desktop .dock{display:none}
+.dock button{
+  flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+  border:0; background:0; border-radius:999px; color:var(--muted); font:inherit; font-size:11px; cursor:pointer}
+.dock button svg{width:18px; height:18px}
+.dock button.on{background:var(--ink); color:#fff}
+
+.toast{position:fixed; left:50%; bottom:calc(88px + var(--safe-b)); transform:translateX(-50%);
+  z-index:40; background:var(--ink); color:#fff; padding:10px 16px; border-radius:999px;
+  font-size:13px; opacity:0; pointer-events:none; transition:opacity .2s}
+body.desktop .toast{bottom:28px}
+.toast.show{opacity:1}
+
+.lang-seg{display:flex; gap:2px; padding:3px; border-radius:999px; background:rgba(255,255,255,.1); margin-left:4px}
+.lang-seg button{border:0!important; background:transparent; color:rgba(255,255,255,.65)!important; height:26px; padding:0 10px; border-radius:999px; font:inherit; font-size:11px; cursor:pointer}
+.lang-seg button.on{background:var(--brand)!important; color:#fff!important; border-color:transparent!important}
+.sys-lang-wrap{display:flex; justify-content:flex-end}
+body.desktop .sys-lang-wrap{justify-content:flex-start}
+.sys-lang{box-sizing:border-box; display:inline-flex; align-items:center; gap:4px; height:36px; padding:3px; border-radius:12px; background:#f3f4f6}
+.sys-lang button{
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  border:0; background:transparent; height:30px; padding:0 14px; border-radius:10px;
+  font:inherit; font-size:13px; line-height:1; color:var(--sub); cursor:pointer}
+.sys-lang button.on{background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.meta-val{text-align:right; color:var(--sub)}
+body.desktop .meta-val{text-align:left}
+.mode-cards{display:flex; flex-direction:column; gap:8px; padding:4px 18px 8px}
+body.desktop .mode-cards{
+  padding:0 0 8px;
+  display:grid; grid-template-columns:1fr 1fr; gap:10px;
+}
+.mode-card{
+  display:block; width:100%; text-align:left; border:1px solid var(--line);
+  background:#fff; border-radius:14px; padding:12px 14px; cursor:pointer; font:inherit; color:inherit}
+.mode-card.on{border-color:var(--ink); background:#f8f9fb; box-shadow:inset 0 0 0 1px var(--ink)}
+.mode-card b{display:block; font-size:13px; color:var(--ink); margin-bottom:2px}
+.mode-card span{display:block; font-size:12px; color:var(--sub); line-height:1.4}
+.sys-sub{padding:0 18px 4px; font-size:11px; color:var(--muted); line-height:1.45}
+body.desktop .sys-sub{padding:0 0 8px}
+.sys-sleep-fields[hidden]{display:none !important}
+body.desktop .disp-head > .disp-head-row:first-child{width:auto; flex:0 0 auto}
+body.desktop .disp-tools-row{width:auto; flex:1; min-width:0}
+body:not(.desktop) .disp-tools-row{flex-wrap:wrap}
+body:not(.desktop) .disp-tools-row .preview-toggles{flex:1}
+body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
+</style>
+</head>
+<body class="phone">
+<div class="preview-bar">
+  <div><b>EK410 UI · v0.7.2</b> · <span data-i18n="preview.tag">显示预览 · 六色 / 布局</span></div>
+  <div class="modes">
+    <button type="button" class="on" data-mode="phone" data-i18n="preview.phone">手机</button>
+    <button type="button" data-mode="tablet" data-i18n="preview.tablet">平板</button>
+    <button type="button" data-mode="desktop" data-i18n="preview.desktop">桌面</button>
+    <button type="button" id="togAp">SoftAP</button>
+    <div class="lang-seg" id="langSegPreview">
+      <button type="button" data-lang="zh">中文</button>
+      <button type="button" data-lang="en" class="on">EN</button>
+    </div>
+  </div>
+</div>
+
+<div class="app">
+  <aside class="rail">
+    <img class="logo" src="CamthinkLogo-onDark.svg" alt="CamThink">
+    <nav id="railNav">
+      <button type="button" class="on" data-page="overview" data-i18n="nav.overview">概览</button>
+      <button type="button" data-page="network" data-i18n="nav.network">网络</button>
+      <button type="button" data-page="display" data-i18n="nav.display">显示</button>
+      <button type="button" data-page="system" data-i18n="nav.system">系统</button>
+    </nav>
+    <div class="foot">design preview · no flash</div>
+  </aside>
+
+  <div class="main" id="main">
+    <div class="banner show" id="apBanner">
+      <i class="ap-dot" aria-hidden="true"></i>
+      <div class="ap-copy">
+        <b data-i18n="banner.title">Setup hotspot is on</b>
+        <span data-i18n="banner.desc">Stays on while configuring; you can close it anytime.</span>
+      </div>
+      <button class="btn" type="button" data-i18n="banner.close">Close hotspot</button>
+    </div>
+
+    <!-- OVERVIEW -->
+    <section class="page" id="page-overview">
+      <div class="hero">
+        <img class="hero-logo light-bg" src="CamthinkLogo.svg" alt="CamThink">
+        <div class="product">EK<em>410</em></div>
+        <div class="tag">7.09″ Spectra 6 · 1600×1200</div>
+        <div class="meta">
+          <span class="chip"><i></i><span data-i18n="ov.wlan_off">WLAN 未连接</span></span>
+          <span class="chip"><i></i><span data-i18n="ov.mqtt_off">MQTT 未连接</span></span>
+          <span class="chip ok"><i></i><span data-i18n="ov.ap_on">热点开启</span></span>
+        </div>
+        <div class="hero-bottom">
+          <div><b>192.168.4.1</b><span>IP</span></div>
+          <div><b data-i18n="ov.uptime_val">2 分钟</b><span data-i18n="ov.uptime">运行</span></div>
+          <div><b>100%</b><span>4.28 V</span></div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn brand" type="button" onclick="go('network')" data-i18n="ov.cfg_net">配置网络</button>
+          <button class="btn" type="button" onclick="go('display')" data-i18n="ov.edit_screen">编辑画面</button>
+        </div>
+        <div class="detail-line">
+          <span>MAC <strong>D8:85:AC:60:38:70</strong></span>
+          <span><span data-i18n="ov.fw">固件</span> <strong>0.1.0-dev</strong></span>
+          <span><span data-i18n="ov.part">分区</span> <strong>ota_0</strong></span>
+          <span><span data-i18n="ov.sleep">休眠</span> <strong id="ovSleepVal" data-i18n="ov.sleep_on">常开</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- NETWORK -->
+    <section class="page" id="page-network" hidden>
+      <div class="sheet net-layout">
+        <div class="pane">
+          <div class="h">Wi‑Fi</div>
+          <div class="wifi-status" id="wifiStatus" data-state="idle">
+            <i></i><span id="wifiStatusText" data-i18n="net.st_idle">未连接</span>
+            <em id="wifiStatusMeta"></em>
+          </div>
+          <div class="ssid-head">
+            <span style="font-size:13px;color:var(--sub)" data-i18n="net.pick">选择附近网络</span>
+            <button class="btn tiny" type="button" id="btnScanWifi" data-i18n="net.refresh">刷新</button>
+          </div>
+          <div class="ssid-list" id="ssidList">
+            <button class="ssid" type="button" data-ssid="CamThink-Office" data-secure="1">
+              <span class="name">CamThink-Office</span>
+              <span class="meta"><span class="lock" data-i18n="net.lock">锁</span><span class="bars"><i></i><i></i><i></i><i></i></span></span>
+            </button>
+            <button class="ssid" type="button" data-ssid="Home-5G" data-secure="1">
+              <span class="name">Home-5G</span>
+              <span class="meta"><span class="lock" data-i18n="net.lock">锁</span><span class="bars"><i></i><i></i><i></i><i style="opacity:.25"></i></span></span>
+            </button>
+            <button class="ssid" type="button" data-ssid="Guest" data-secure="0">
+              <span class="name">Guest</span>
+              <span class="meta"><span class="bars"><i></i><i></i><i style="opacity:.25"></i><i style="opacity:.25"></i></span></span>
+            </button>
+            <button class="ssid" type="button" data-ssid="CamThink-Lab" data-secure="1">
+              <span class="name">CamThink-Lab</span>
+              <span class="meta"><span class="lock" data-i18n="net.lock">锁</span><span class="bars"><i></i><i></i><i></i><i></i></span></span>
+            </button>
+            <button class="ssid" type="button" data-ssid="Neighbor-2.4" data-secure="1">
+              <span class="name">Neighbor-2.4</span>
+              <span class="meta"><span class="lock" data-i18n="net.lock">锁</span><span class="bars"><i></i><i></i><i style="opacity:.25"></i><i style="opacity:.25"></i></span></span>
+            </button>
+            <button class="ssid" type="button" data-ssid="Shop-Free" data-secure="0">
+              <span class="name">Shop-Free</span>
+              <span class="meta"><span class="bars"><i></i><i></i><i></i><i style="opacity:.25"></i></span></span>
+            </button>
+            <button class="ssid" type="button" data-ssid="IoT-AP" data-secure="1">
+              <span class="name">IoT-AP</span>
+              <span class="meta"><span class="lock" data-i18n="net.lock">锁</span><span class="bars"><i></i><i style="opacity:.25"></i><i style="opacity:.25"></i><i style="opacity:.25"></i></span></span>
+            </button>
+          </div>
+          <div class="row" id="rowWfSsid" style="margin-top:8px"><label>SSID<span class="req">*</span></label><input class="ghost grow" id="wfSsid" value="CamThink-Office" placeholder="Required" data-i18n-placeholder="net.ssid_ph" autocomplete="off"></div>
+          <div class="err-msg" id="errWfSsid" data-i18n="err.ssid">请填写或选择 SSID</div>
+          <div class="row" id="rowWfPass"><label id="lblWfPass"><span data-i18n="net.pass">密码</span><span class="req" id="reqWfPass">*</span></label><input class="ghost grow" type="password" placeholder="Required for secured Wi‑Fi" data-i18n-placeholder="net.pass_ph_sec" id="wfPass" autocomplete="off"><button class="eye" type="button" id="eyeWfPass" data-i18n="net.show">显示</button></div>
+          <div class="err-msg" id="errWfPass" data-i18n="err.pass">加密网络请填写密码</div>
+          <div class="actions"><button class="btn solid" type="button" id="btnWifiSave" data-i18n="net.wifi_save">保存并连接</button></div>
+        </div>
+        <div class="pane">
+          <div class="h">MQTT</div>
+          <div class="row"><label data-i18n="mq.status">状态</label><span class="grow" style="text-align:right;color:var(--muted)" data-i18n="mq.disconnected">未连接</span></div>
+          <div class="row" id="rowMqHost"><label><span data-i18n="mq.host">服务器</span><span class="req">*</span></label><input class="ghost grow" id="mqHost" placeholder="broker.example.com" autocomplete="off"></div>
+          <div class="err-msg" id="errMqHost" data-i18n="err.host">请填写 MQTT 服务器</div>
+          <div class="row" id="rowMqPort"><label><span data-i18n="mq.port">端口</span><span class="req">*</span></label><input class="ghost grow" id="mqPort" type="number" min="1" max="65535" value="1883"></div>
+          <div class="err-msg" id="errMqPort" data-i18n="err.port">端口需为 1–65535</div>
+          <div class="row" id="rowMqCid"><label>Client ID<span class="req">*</span></label><input class="ghost grow" id="mqCid" value="ek410-d885ac603870" placeholder="Device unique ID" data-i18n-placeholder="mq.cid_ph" autocomplete="off"></div>
+          <div class="err-msg" id="errMqCid" data-i18n="err.cid">请填写 Client ID</div>
+          <div class="row"><label>QoS</label>
+            <select class="ghost grow" id="mqQos">
+              <option value="1" data-i18n="mq.qos1">1 至少一次</option>
+              <option value="0" data-i18n="mq.qos0">0 最多一次</option>
+              <option value="2" data-i18n="mq.qos2">2 恰好一次</option>
+            </select>
+          </div>
+          <div class="row"><label data-i18n="mq.user">用户名</label><input class="ghost grow" id="mqUser" placeholder="Optional" data-i18n-placeholder="common.optional" autocomplete="off"></div>
+          <div class="row"><label data-i18n="net.pass">密码</label><input class="ghost grow" id="mqPass" type="password" placeholder="Optional" data-i18n-placeholder="common.optional" autocomplete="off"><button class="eye" type="button" id="eyeMqPass" data-i18n="net.show">显示</button></div>
+          <div class="h" style="margin-top:8px">Topics<span class="req">*</span></div>
+          <div class="topics">
+            <div class="topic-row" id="rowTUp"><label data-i18n="mq.t_up">上报（publish）</label><input id="tUp" value="sensors/ek410-d885ac603870/data" spellcheck="false"></div>
+            <div class="err-msg" id="errTUp" style="padding:0" data-i18n="err.t_up">上报 topic 必填</div>
+            <div class="topic-row" id="rowTDown"><label data-i18n="mq.t_down">下行（subscribe）</label><input id="tDown" value="device/+/ek410-d885ac603870/downlink" spellcheck="false"></div>
+            <div class="err-msg" id="errTDown" style="padding:0" data-i18n="err.t_down">下行 topic 必填</div>
+            <div class="topic-row" id="rowTCmd"><label data-i18n="mq.t_cmd">指令（subscribe）</label><input id="tCmd" value="sensors/ek410-d885ac603870/cmd" spellcheck="false"></div>
+            <div class="err-msg" id="errTCmd" style="padding:0" data-i18n="err.t_cmd">指令 topic 必填</div>
+          </div>
+          <div class="actions">
+            <button class="btn" type="button" id="btnMqttTest" data-i18n="mq.test">测试连接</button>
+            <button class="btn solid" type="button" id="btnMqttSave" data-i18n="common.save">保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- DISPLAY -->
+    <section class="page" id="page-display" hidden>
+      <div class="disp-head">
+        <div class="disp-head-row">
+          <div class="mode-switch" id="modeSwitch">
+            <button type="button" class="on" data-mode="image" data-i18n="disp.image">图片</button>
+            <button type="button" data-mode="editor" data-i18n="disp.editor">编辑器</button>
+            <button type="button" data-mode="md">Markdown</button>
+          </div>
+        </div>
+        <div class="disp-head-row disp-tools-row">
+          <div class="preview-toggles">
+            <div class="seg" id="colorSeg" data-i18n-title="disp.color_title" title="原色 vs Spectra 6 量化">
+              <button type="button" data-color="source" data-i18n="disp.source">原色</button>
+              <button type="button" class="on" data-color="eink"><span data-i18n="disp.eink">墨水六色</span><span class="palette-dots" aria-hidden="true"><i style="background:#000"></i><i style="background:#fff;outline:1px solid #ccc"></i><i style="background:#ef4444"></i><i style="background:#facc15"></i><i style="background:#2563eb"></i><i style="background:#16a34a"></i></span></button>
+            </div>
+            <button type="button" class="chip-btn" id="btnLayoutGuide" data-i18n="disp.layout">布局辅助</button>
+          </div>
+          <button class="btn solid push" type="button" id="dispPush" data-i18n="disp.push">刷到屏幕</button>
+        </div>
+      </div>
+
+      <div class="display-root">
+        <!-- 图片 -->
+        <div class="mode-view img-mode" id="mode-image">
+          <div class="stage">
+            <div class="stage-meta"><b data-i18n="disp.content_preview">内容预览</b><span id="imgStageHint">1600×1200 · 墨水六色</span></div>
+            <div class="bezel">
+              <div class="epd-frame" id="imgFrameWrap">
+                <canvas id="imgPv" width="800" height="600"></canvas>
+                <div class="layout-guide" data-guide>
+                  <div class="safe"></div><div class="cross-h"></div><div class="cross-v"></div>
+                  <div class="badge">1600 × 1200</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <aside class="side-panel">
+            <div class="h" data-i18n="disp.img_src">图片来源</div>
+            <div class="dropzone" id="imgDrop" role="button" tabindex="0">
+              <strong data-i18n="disp.upload">上传本地图片</strong>
+              <span data-i18n="disp.upload_hint">点击选择或拖入 · JPG / PNG / WebP</span>
+            </div>
+            <div class="or" data-i18n="disp.or_url">或填 URL</div>
+            <div class="row"><label>URL</label><input class="ghost grow" id="imgUrl" placeholder="https://…/image.png" style="text-align:left"></div>
+            <div class="h" style="margin-top:8px" data-i18n="disp.fit">适应方式</div>
+            <div class="fit-pills" id="fitPills">
+              <button type="button" class="on" data-fit="cover" data-i18n="disp.fit_cover">铺满裁切</button>
+              <button type="button" data-fit="contain" data-i18n="disp.fit_contain">完整显示</button>
+              <button type="button" data-fit="fill" data-i18n="disp.fit_fill">拉伸</button>
+            </div>
+            <div class="actions">
+              <button class="btn" type="button" id="btnImgUrl" data-i18n="disp.load_preview">加载预览</button>
+              <button class="btn solid" type="button" id="btnImgPush" data-i18n="disp.show_screen">显示到屏幕</button>
+            </div>
+          </aside>
+        </div>
+
+        <!-- 编辑器：桌面 左轨+画布+右检查器；手机 画布+底栏+半屏 sheet -->
+        <div class="mode-view ed-mode" id="mode-editor" hidden>
+          <aside class="ed-tools" id="edTools" aria-label="Add tools">
+            <button type="button" data-tool="text"><span class="ico">T</span><span data-i18n="ed.text">文字</span></button>
+            <button type="button" data-tool="image"><span class="ico">▣</span><span data-i18n="ed.image">图片</span></button>
+            <button type="button" data-tool="rect"><span class="ico">□</span><span data-i18n="ed.rect">方框</span></button>
+            <button type="button" data-tool="qr"><span class="ico">QR</span><span data-i18n="ed.qr">二维码</span></button>
+          </aside>
+
+          <div class="stage">
+            <div class="stage-meta"><b data-i18n="disp.layout_preview">布局预览</b><span id="edStageHint">拖拽定位 · 墨水六色</span></div>
+            <div class="bezel">
+              <div class="epd-frame">
+                <canvas id="pv" width="800" height="600"></canvas>
+                <div class="layout-guide" data-guide>
+                  <div class="safe"></div><div class="cross-h"></div><div class="cross-v"></div>
+                  <div class="badge">1600 × 1200</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="ed-inspector-host" id="edInspectorHost"></aside>
+
+          <nav class="ed-dock" id="edDock" aria-label="Editor dock">
+            <button type="button" id="btnEdDockAdd" data-i18n="ed.add">添加</button>
+            <button type="button" id="btnEdDockLayers" data-i18n="ed.layers">图层</button>
+          </nav>
+
+          <div class="ed-sheet" id="edSheet" hidden data-mode="layers">
+            <div class="ed-sheet-mask" id="edSheetMask"></div>
+            <div class="ed-sheet-card" role="dialog" aria-modal="true">
+              <div class="ed-sheet-grab" aria-hidden="true"></div>
+              <div class="ed-sheet-head">
+                <button type="button" class="icon-btn" id="edSheetBack" hidden aria-label="Back">←</button>
+                <span class="title" id="edSheetTitle" data-i18n="ed.layers">图层</span>
+                <button type="button" class="icon-btn" id="edSheetClose" aria-label="Close">✕</button>
+              </div>
+              <div class="ed-sheet-body" id="edSheetBody"></div>
+            </div>
+          </div>
+
+          <!-- Shared chrome: relocated to inspector (desktop) or sheet (phone) -->
+          <div id="edChrome" hidden>
+            <div class="ed-add-strip" id="edAddStrip">
+              <button type="button" data-tool="text" data-i18n="ed.text">文字</button>
+              <button type="button" data-tool="image" data-i18n="ed.image">图片</button>
+              <button type="button" data-tool="rect" data-i18n="ed.rect">方框</button>
+              <button type="button" data-tool="qr" data-i18n="ed.qr">二维码</button>
+            </div>
+            <div class="insp-section grow" id="edPanelLayers">
+              <div class="h" data-i18n="ed.layers">图层</div>
+              <div class="layers" id="layerList">
+                <button class="layer on" type="button" data-id="t1" data-type="text"
+                  data-content="CamThink EK410" data-x="120" data-y="200" data-size="42" data-color="black">
+                  <i class="swatch" style="background:#090e17"></i>
+                  <span class="meta"><b data-i18n="ed.text">文字</b><small>CamThink EK410</small></span>
+                </button>
+                <button class="layer" type="button" data-id="t2" data-type="text"
+                  data-content="你好，世界" data-x="120" data-y="280" data-size="28" data-color="black">
+                  <i class="swatch" style="background:#090e17"></i>
+                  <span class="meta"><b data-i18n="ed.text">文字</b><small data-i18n="ed.hello">你好，世界</small></span>
+                </button>
+                <button class="layer" type="button" data-id="r1" data-type="rect"
+                  data-content="" data-x="80" data-y="80" data-size="" data-color="red">
+                  <i class="swatch" style="background:#ef4444"></i>
+                  <span class="meta"><b data-i18n="ed.swatch">色块</b><small data-i18n="ed.swatch_sub">品牌橙 → 红</small></span>
+                </button>
+                <button class="layer" type="button" data-id="q1" data-type="qr"
+                  data-content="https://wiki.camthink.ai" data-x="1180" data-y="880" data-size="160" data-color="black">
+                  <i class="swatch" style="background:#090e17"></i>
+                  <span class="meta"><b data-i18n="ed.qr">二维码</b><small>wiki.camthink.ai</small></span>
+                </button>
+              </div>
+              <div class="layer-ops">
+                <button class="btn" type="button" id="btnLayerUp" data-i18n="ed.up">上层</button>
+                <button class="btn" type="button" id="btnLayerDown" data-i18n="ed.down">下层</button>
+                <button class="btn" type="button" id="btnLayerDel" data-i18n="ed.del">删除</button>
+              </div>
+            </div>
+            <div class="insp-divider" id="edInspDiv" aria-hidden="true"></div>
+            <div class="insp-section" id="edPanelProps">
+              <div class="h" data-i18n="ed.props">属性</div>
+              <div class="props-empty" id="propsEmpty" hidden data-i18n="ed.props_empty">选中图层后在此编辑</div>
+              <div class="props-fields" id="propsFields">
+                <div class="field-block" id="fieldContent">
+                  <textarea class="ghost" id="layerContent">CamThink EK410</textarea>
+                </div>
+                <div class="field-block" id="fieldImage" hidden>
+                  <button class="btn" type="button" id="btnLayerReplaceImg" style="width:100%" data-i18n="ed.replace_img">更换图片</button>
+                </div>
+                <div class="row" id="rowColor"><label data-i18n="ed.color">颜色</label>
+                  <select class="ghost grow" id="layerColor">
+                    <option value="black" data-i18n="color.black">黑</option>
+                    <option value="white" data-i18n="color.white">白</option>
+                    <option value="red" data-i18n="color.red">红</option>
+                    <option value="yellow" data-i18n="color.yellow">黄</option>
+                    <option value="blue" data-i18n="color.blue">蓝</option>
+                    <option value="green" data-i18n="color.green">绿</option>
+                  </select>
+                </div>
+                <div class="slider-row">
+                  <label>X</label>
+                  <div class="slider-wrap"><input type="range" id="layerX" min="0" max="1600" step="1" value="120"></div>
+                  <span class="val" id="layerXVal">120</span>
+                </div>
+                <div class="slider-row">
+                  <label>Y</label>
+                  <div class="slider-wrap"><input type="range" id="layerY" min="0" max="1200" step="1" value="200"></div>
+                  <span class="val" id="layerYVal">200</span>
+                </div>
+                <div class="slider-row" id="rowSize">
+                  <label id="layerSizeLabel" data-i18n="ed.fontsize">字号</label>
+                  <div class="slider-wrap"><input type="range" id="layerSize" min="12" max="200" step="1" value="42"></div>
+                  <span class="val" id="layerSizeVal">42</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Markdown -->
+        <div class="mode-view md-mode" id="mode-md" hidden>
+          <div class="md-editor">
+            <div class="h" style="padding:0 0 10px" data-i18n="md.write">编写 Markdown</div>
+            <textarea id="mdText"># CamThink EK410
+
+边缘墨水屏 · 1600×1200
+
+- Wi‑Fi / MQTT 配网
+- 六色显示
+</textarea>
+            <div class="actions" style="padding:12px 0 0">
+              <button class="btn" type="button" id="btnMdOpen" data-i18n="md.open">打开文件</button>
+              <button class="btn" type="button" id="btnMdPaste" data-i18n="md.paste">粘贴</button>
+              <button class="btn solid" type="button" id="btnMdApply" data-i18n="md.apply">生成预览</button>
+            </div>
+          </div>
+          <div class="stage">
+            <div class="stage-meta"><b data-i18n="disp.layout_preview">布局预览</b><span id="mdStageHint">Markdown → 画布映射</span></div>
+            <div class="bezel">
+              <div class="epd-frame">
+                <canvas id="mdPv" width="800" height="600"></canvas>
+                <div class="layout-guide" data-guide>
+                  <div class="safe"></div><div class="cross-h"></div><div class="cross-v"></div>
+                  <div class="badge">1600 × 1200</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SYSTEM -->
+    <section class="page" id="page-system" hidden>
+      <div class="sys-stack">
+        <div class="sys-block">
+          <div class="h" data-i18n="sys.sec_prefs">偏好</div>
+          <div class="row"><label style="min-width:88px" data-i18n="sys.lang">语言</label>
+            <div class="grow sys-lang-wrap">
+              <div class="sys-lang" id="langSegSys">
+                <button type="button" data-lang="zh">中文</button>
+                <button type="button" data-lang="en" class="on">English</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sys-block">
+          <div class="h" data-i18n="sys.sec_info">设备信息</div>
+          <div class="row"><label style="min-width:88px">MAC</label><span class="grow meta-val">D8:85:AC:60:38:70</span></div>
+          <div class="row"><label style="min-width:88px" data-i18n="ov.fw">固件</label><span class="grow meta-val">0.1.0-dev</span></div>
+          <div class="row"><label style="min-width:88px" data-i18n="ov.part">分区</label><span class="grow meta-val">ota_0</span></div>
+        </div>
+
+        <div class="sys-block sys-block--wide">
+          <div class="h" data-i18n="sys.work_mode">工作模式</div>
+          <div class="mode-cards" id="workModeCards">
+            <button type="button" class="mode-card on" data-mode="always">
+              <b data-i18n="sys.mode_always">常开</b>
+              <span data-i18n="sys.mode_always_desc">Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。</span>
+            </button>
+            <button type="button" class="mode-card" data-mode="cycle">
+              <b data-i18n="sys.mode_cycle">定时刷新</b>
+              <span data-i18n="sys.mode_cycle_desc">醒来约 2 分钟在线（可拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。</span>
+            </button>
+          </div>
+          <div class="sys-sleep-fields" id="sleepFields" hidden>
+            <div class="row"><label style="min-width:88px" data-i18n="sys.sleep_min">周期（分）</label><input class="ghost grow" id="pwrSleep" type="number" min="1" value="60"></div>
+            <div class="row"><label style="min-width:88px" data-i18n="sys.wake">唤醒图</label><input class="ghost grow" id="pwrWake" placeholder="http(s)://…/frame.bin" style="text-align:left"></div>
+          </div>
+        </div>
+
+        <div class="sys-block">
+          <div class="h" data-i18n="sys.sec_update">名称与升级</div>
+          <div class="row"><label style="min-width:88px" data-i18n="sys.name">设备名</label><input class="ghost grow" value="EK410"></div>
+          <div class="row"><label style="min-width:88px">OTA URL</label><input class="ghost grow" placeholder="https://" style="text-align:left"></div>
+          <div class="actions">
+            <button class="btn" type="button" id="btnSysSave" data-i18n="common.save">保存</button>
+            <button class="btn solid" type="button" data-i18n="sys.ota">升级</button>
+          </div>
+        </div>
+
+        <div class="sys-block sys-block--danger">
+          <div class="h" data-i18n="sys.sec_danger">危险操作</div>
+          <div class="row"><button class="btn" type="button" style="border:0;width:100%;justify-content:flex-start;padding:0;height:48px;background:transparent" data-i18n="sys.reboot">重启设备</button></div>
+          <div class="row"><button class="btn danger" type="button" style="border:0;width:100%;justify-content:flex-start;padding:0;height:48px;background:transparent" data-i18n="sys.factory">恢复出厂</button></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<nav class="dock" id="dock">
+  <button type="button" class="on" data-page="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.2"/><rect x="13" y="4" width="7" height="7" rx="1.2"/><rect x="4" y="13" width="7" height="7" rx="1.2"/><rect x="13" y="13" width="7" height="7" rx="1.2"/></svg><span data-i18n="nav.overview">概览</span></button>
+  <button type="button" data-page="network"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.2 15.6a6 6 0 0 1 7.6 0"/><circle cx="12" cy="18.6" r="1.1" fill="currentColor" stroke="none"/></svg><span data-i18n="nav.network">网络</span></button>
+  <button type="button" data-page="display"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="3.5" width="14" height="17" rx="1.6"/><path d="M9 8h6M9 12h6M9 16h4" stroke-linecap="round"/></svg><span data-i18n="nav.display">显示</span></button>
+  <button type="button" data-page="system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3V20.5M3.5 12h2.2M18.3 12H20.5"/></svg><span data-i18n="nav.system">系统</span></button>
+</nav>
+<div class="toast" id="toast"></div>
+
+
+<script>
+/* —— i18n —— */
+const I18N = {
+zh:{
+  "preview.tag":"显示预览 · 六色 / 布局","preview.phone":"手机","preview.tablet":"平板","preview.desktop":"桌面",
+  "nav.overview":"概览","nav.network":"网络","nav.display":"显示","nav.system":"系统",
+  "banner.title":"配网热点已开启","banner.desc":"配置中保持开启；可主动关闭。","banner.close":"关闭热点",
+  "ov.wlan_off":"WLAN 未连接","ov.mqtt_off":"MQTT 未连接","ov.ap_on":"热点开启",
+  "ov.uptime_val":"2 分钟","ov.uptime":"运行","ov.cfg_net":"配置网络","ov.edit_screen":"编辑画面",
+  "ov.fw":"固件","ov.part":"分区","ov.sleep":"休眠","ov.sleep_on":"常开",
+  "net.pick":"选择附近网络","net.refresh":"刷新","net.lock":"锁","net.ssid_ph":"必填",
+  "net.pass":"密码","net.pass_ph_sec":"加密网络必填","net.pass_ph_open":"开放网络可留空",
+  "net.show":"显示","net.hide":"隐藏","net.wifi_save":"保存并连接","net.st_idle":"未连接","net.st_connecting":"连接中…","net.st_connected":"已连接","net.st_reconnecting":"重连中…","net.st_failed":"连接失败","toast.wifi_ok":"已连接 {0}","toast.wifi_fail":"连接失败，请检查密码或信号","toast.wifi_connecting":"正在连接…",
+  "net.wifi_note_sec":"当前为加密网络，密码必填。保存后设备重启接入。",
+  "net.wifi_note_open":"当前为开放网络，密码可留空。保存后设备重启接入。",
+  "mq.status":"状态","mq.disconnected":"未连接","mq.host":"服务器","mq.port":"端口",
+  "mq.cid_ph":"设备唯一 ID","mq.user":"用户名","mq.qos0":"0 最多一次","mq.qos1":"1 至少一次","mq.qos2":"2 恰好一次",
+  "mq.topic_hint":"NeoMind 约定默认值；可按需改写。修改 Client ID 时，未手动改过的 topic 会同步更新。",
+  "mq.t_up":"上报（publish）","mq.t_down":"下行（subscribe）","mq.t_cmd":"指令（subscribe）",
+  "mq.test":"测试连接","common.save":"保存","common.optional":"可选",
+  "err.ssid":"请填写或选择 SSID","err.pass":"加密网络请填写密码","err.host":"请填写 MQTT 服务器",
+  "err.port":"端口需为 1–65535","err.cid":"请填写 Client ID",
+  "err.t_up":"上报 topic 必填","err.t_down":"下行 topic 必填","err.t_cmd":"指令 topic 必填",
+  "err.required":"请填写{0}","err.wifi_incomplete":"请完善 Wi‑Fi 必填项","err.mqtt_incomplete":"请完善 MQTT 必填项",
+  "toast.scan":"设计稿：扫描 SSID","toast.wifi_saved":"Wi‑Fi 已保存（设计稿）","toast.mqtt_saved":"MQTT 已保存（设计稿）",
+  "toast.mqtt_test":"正在测试 MQTT…","toast.filled_sec":"已填入 {0}（需密码）","toast.filled_open":"已填入 {0}（开放）",
+  "disp.image":"图片","disp.editor":"编辑器","disp.source":"原色","disp.eink":"墨水六色",
+  "disp.color_title":"原色 vs Spectra 6 量化","disp.layout":"布局辅助","disp.push":"刷到屏幕",
+  "disp.content_preview":"内容预览","disp.layout_preview":"布局预览","disp.img_src":"图片来源",
+  "disp.upload":"上传本地图片","disp.upload_hint":"点击选择或拖入 · JPG / PNG / WebP","disp.or_url":"或填 URL",
+  "disp.fit":"适应方式","disp.fit_cover":"铺满裁切","disp.fit_contain":"完整显示","disp.fit_fill":"拉伸",
+  "disp.load_preview":"加载预览","disp.show_screen":"显示到屏幕",
+  "disp.img_note":"顶部可切换「原色 / 墨水六色」对比量化结果；布局辅助显示安全区与中线。",
+  "disp.hint_eink":"墨水六色","disp.hint_source":"原色",
+  "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"拖拽定位 · {0}","disp.stage_md":"Markdown → 画布 · {0}",
+  "ed.add":"添加","ed.image":"图片","ed.width":"宽度","ed.replace_img":"更换图片","ed.text":"文字","ed.rect":"方框","ed.qr":"二维码","ed.layers":"图层","ed.props":"属性","ed.props_empty":"选中图层后在此编辑","ed.content":"内容","ed.qr_url":"链接","ed.size":"尺寸","ed.sheet_add":"添加元素","ed.sheet_layers":"图层","ed.sheet_props":"属性","ed.new_text":"新文字","ed.new_rect":"色块","ed.new_qr":"https://wiki.camthink.ai",
+  "ed.hello":"你好，世界","ed.swatch":"色块","ed.swatch_sub":"品牌橙 → 红","ed.note":"墨水屏仅 6 色：黑白红黄蓝绿。原色模式下可见设计色，刷屏前请切到「墨水六色」核对。",
+  "ed.color":"颜色","ed.fontsize":"字号","ed.down":"下层","ed.up":"上层","ed.del":"删除",
+  "ed.subtitle":"边缘 AI · 墨水屏","ed.brand":"品牌","ed.accent":"强调","ed.aux":"辅色",
+  "color.black":"黑","color.white":"白","color.red":"红","color.yellow":"黄","color.blue":"蓝","color.green":"绿",
+  "md.write":"编写 Markdown","md.open":"打开文件","md.paste":"粘贴","md.apply":"生成预览",
+  "md.note":"右侧为屏幕布局预览（非富文本）。H1→大字 · 段落→正文 · 列表→多行。",
+  "md.sample":"# CamThink EK410\n\n边缘墨水屏 · 1600×1200\n\n- Wi‑Fi / MQTT 配网\n- 六色显示\n",
+  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.work_mode":"工作模式","sys.work_hint":"默认常开：不休眠，可随时配网与刷屏。定时刷新会深度睡眠以省电。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来约 2 分钟在线（可拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开","toast.mode_cycle":"已选定时刷新","toast.sys_saved":"系统设置已保存（设计稿）","ov.sleep_cycle":"{0} 分钟",
+  "toast.guide_on":"已显示安全区 / 中线","toast.guide_off":"已隐藏布局辅助",
+  "toast.color_eink":"预览：Spectra 6 量化","toast.color_source":"预览：原色（未量化）",
+  "toast.mode_image":"图片：预览量化与布局","toast.mode_editor":"编辑器：布局 + 六色","toast.mode_md":"Markdown：映射到屏布局",
+  "toast.tool":"工具：{0}","toast.layer_del":"已删除图层","toast.layer_add":"已添加 {0}","toast.img_replaced":"图片已更换","toast.img_fail":"图片加载失败","toast.img_loaded":"已加载 {0}（可切六色查看）","toast.need_url":"请填写图片 URL",
+  "toast.url_ok":"URL 预览已加载","toast.url_fail":"无法加载图片（跨域或地址无效）",
+  "toast.md_updated":"已更新布局预览","toast.md_open":"选择 .md 文件","toast.md_paste":"已粘贴示例",
+  "toast.push":"刷到屏幕","toast.quant_push":"量化后刷屏","img.demo_title":"示例图 · 上传后替换","img.demo_sub":"切换「墨水六色」查看量化效果"
+},
+en:{
+  "preview.tag":"Display preview · 6-color / layout","preview.phone":"Phone","preview.tablet":"Tablet","preview.desktop":"Desktop",
+  "nav.overview":"Overview","nav.network":"Network","nav.display":"Display","nav.system":"System",
+  "banner.title":"Setup hotspot is on","banner.desc":"Stays on while configuring; you can close it anytime.","banner.close":"Close hotspot",
+  "ov.wlan_off":"WLAN disconnected","ov.mqtt_off":"MQTT disconnected","ov.ap_on":"Hotspot on",
+  "ov.uptime_val":"2 min","ov.uptime":"Uptime","ov.cfg_net":"Configure network","ov.edit_screen":"Edit screen",
+  "ov.fw":"Firmware","ov.part":"Partition","ov.sleep":"Sleep","ov.sleep_on":"Always on",
+  "net.pick":"Nearby networks","net.refresh":"Refresh","net.lock":"Lock","net.ssid_ph":"Required",
+  "net.pass":"Password","net.pass_ph_sec":"Required for secured Wi‑Fi","net.pass_ph_open":"Optional for open networks",
+  "net.show":"Show","net.hide":"Hide","net.wifi_save":"Save & connect","net.st_idle":"Disconnected","net.st_connecting":"Connecting…","net.st_connected":"Connected","net.st_reconnecting":"Reconnecting…","net.st_failed":"Connection failed","toast.wifi_ok":"Connected to {0}","toast.wifi_fail":"Connect failed — check password or signal","toast.wifi_connecting":"Connecting…",
+  "net.wifi_note_sec":"Secured network — password required. Device will reboot to join.",
+  "net.wifi_note_open":"Open network — password optional. Device will reboot to join.",
+  "mq.status":"Status","mq.disconnected":"Disconnected","mq.host":"Broker","mq.port":"Port",
+  "mq.cid_ph":"Unique device ID","mq.user":"Username","mq.qos0":"0 at most once","mq.qos1":"1 at least once","mq.qos2":"2 exactly once",
+  "mq.topic_hint":"NeoMind defaults. Edit freely. Topics not manually changed stay in sync with Client ID.",
+  "mq.t_up":"Uplink (publish)","mq.t_down":"Downlink (subscribe)","mq.t_cmd":"Command (subscribe)",
+  "mq.test":"Test connection","common.save":"Save","common.optional":"Optional",
+  "err.ssid":"Enter or select an SSID","err.pass":"Password required for secured Wi‑Fi","err.host":"Enter MQTT broker",
+  "err.port":"Port must be 1–65535","err.cid":"Enter Client ID",
+  "err.t_up":"Uplink topic required","err.t_down":"Downlink topic required","err.t_cmd":"Command topic required",
+  "err.required":"Enter {0}","err.wifi_incomplete":"Complete required Wi‑Fi fields","err.mqtt_incomplete":"Complete required MQTT fields",
+  "toast.scan":"Preview: scan SSIDs","toast.wifi_saved":"Wi‑Fi saved (preview)","toast.mqtt_saved":"MQTT saved (preview)",
+  "toast.mqtt_test":"Testing MQTT…","toast.filled_sec":"Filled {0} (password required)","toast.filled_open":"Filled {0} (open)",
+  "disp.image":"Image","disp.editor":"Editor","disp.source":"Original","disp.eink":"E‑ink 6",
+  "disp.color_title":"Original vs Spectra 6 quantize","disp.layout":"Layout guides","disp.push":"Push to screen",
+  "disp.content_preview":"Content preview","disp.layout_preview":"Layout preview","disp.img_src":"Image source",
+  "disp.upload":"Upload image","disp.upload_hint":"Click or drop · JPG / PNG / WebP","disp.or_url":"Or enter URL",
+  "disp.fit":"Fit","disp.fit_cover":"Cover","disp.fit_contain":"Contain","disp.fit_fill":"Stretch",
+  "disp.load_preview":"Load preview","disp.show_screen":"Show on screen",
+  "disp.img_note":"Toggle Original / E‑ink 6 to compare quantization; layout guides show safe area and center.",
+  "disp.hint_eink":"E‑ink 6","disp.hint_source":"Original",
+  "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"Drag to place · {0}","disp.stage_md":"Markdown → canvas · {0}",
+  "ed.add":"Add","ed.image":"Image","ed.width":"Width","ed.replace_img":"Replace image","ed.text":"Text","ed.rect":"Box","ed.qr":"QR code","ed.layers":"Layers","ed.props":"Properties","ed.props_empty":"Select a layer to edit","ed.content":"Content","ed.qr_url":"URL","ed.size":"Size","ed.sheet_add":"Add element","ed.sheet_layers":"Layers","ed.sheet_props":"Properties","ed.new_text":"New text","ed.new_rect":"Swatch","ed.new_qr":"https://wiki.camthink.ai",
+  "ed.hello":"Hello, world","ed.swatch":"Swatch","ed.swatch_sub":"Brand orange → red","ed.note":"E‑ink has 6 colors only. Use Original to see design colors; switch to E‑ink 6 before pushing.",
+  "ed.color":"Color","ed.fontsize":"Size","ed.down":"Down","ed.up":"Up","ed.del":"Delete",
+  "ed.subtitle":"Edge AI · e‑paper","ed.brand":"Brand","ed.accent":"Accent","ed.aux":"Accent 2",
+  "color.black":"Black","color.white":"White","color.red":"Red","color.yellow":"Yellow","color.blue":"Blue","color.green":"Green",
+  "md.write":"Write Markdown","md.open":"Open file","md.paste":"Paste","md.apply":"Generate preview",
+  "md.note":"Right side is screen layout preview (not rich text). H1→large · paragraph→body · list→lines.",
+  "md.sample":"# CamThink EK410\n\nEdge e‑paper · 1600×1200\n\n- Wi‑Fi / MQTT setup\n- 6‑color display\n",
+  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.work_mode":"Work mode","sys.work_hint":"Default is always-on (no deep sleep). Timed refresh uses deep sleep to save power.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"~2 min online after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected","toast.mode_cycle":"Timed refresh selected","toast.sys_saved":"System settings saved (preview)","ov.sleep_cycle":"{0} min",
+  "toast.guide_on":"Layout guides on","toast.guide_off":"Layout guides off",
+  "toast.color_eink":"Preview: Spectra 6 quantized","toast.color_source":"Preview: original (not quantized)",
+  "toast.mode_image":"Image: quantize & layout preview","toast.mode_editor":"Editor: layout + 6‑color","toast.mode_md":"Markdown: mapped to screen layout",
+  "toast.tool":"Tool: {0}","toast.layer_del":"Layer deleted","toast.layer_add":"Added {0}","toast.img_replaced":"Image replaced","toast.img_fail":"Failed to load image","toast.img_loaded":"Loaded {0} (try E‑ink 6)","toast.need_url":"Enter an image URL",
+  "toast.url_ok":"URL preview loaded","toast.url_fail":"Cannot load image (CORS or bad URL)",
+  "toast.md_updated":"Layout preview updated","toast.md_open":"Choose a .md file","toast.md_paste":"Sample pasted",
+  "toast.push":"Push to screen","toast.quant_push":"Quantize & push","img.demo_title":"Sample · replace by upload","img.demo_sub":"Switch to E‑ink 6 to see quantization"
+}
+};
+let lang = localStorage.getItem('ek410_lang') || 'en';
+const t = (key, ...args) => {
+  let s = (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
+  args.forEach((a, i) => { s = s.split('{' + i + '}').join(a); });
+  return s;
+};
+function applyI18n(){
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (!key) return;
+    const val = t(key);
+    if (el.tagName === 'OPTION') { el.textContent = val; return; }
+    // Prefer nested leaves: only set textContent when element has no element children with their own i18n/structure
+    const hasStruct = el.querySelector('.palette-dots, .req, i, strong, [data-i18n]');
+    if (hasStruct) {
+      const textNodes = [...el.childNodes].filter(n => n.nodeType === 3 && n.textContent.trim());
+      if (textNodes.length === 1) textNodes[0].textContent = val;
+      return;
+    }
+    el.textContent = val;
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.getAttribute('data-i18n-title'));
+  });
+  document.querySelectorAll('#langSegPreview [data-lang], #langSegSys [data-lang]').forEach(b => {
+    b.classList.toggle('on', b.dataset.lang === lang);
+  });
+  const md = $('mdText');
+  if (md && !md.dataset.dirty) md.value = t('md.sample');
+  if (typeof setWifiPassRequired === 'function' && typeof wifiSecure !== 'undefined') setWifiPassRequired(wifiSecure);
+  if (typeof syncColorUI === 'function') { /* syncColorUI calls redraw */ syncColorUI(); }
+}
+function setLang(next){ lang = next; localStorage.setItem('ek410_lang', lang); applyI18n(); }
+
+const $=id=>document.getElementById(id);
+const toast=m=>{const el=$('toast');el.textContent=m;el.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>el.classList.remove('show'),2200)};
+
+function syncNav(name){
+  document.querySelectorAll('#dock button, #railNav button').forEach(b=>b.classList.toggle('on', b.dataset.page===name));
+  document.querySelectorAll('.page').forEach(p=>p.hidden=p.id!=='page-'+name);
+  $('main').classList.toggle('is-display', name==='display');
+  if(name!=='display') scrollTo(0,0);
+}
+function go(name){syncNav(name)}
+document.querySelectorAll('#dock button, #railNav button').forEach(b=>b.addEventListener('click',()=>go(b.dataset.page)));
+
+document.querySelectorAll('.preview-bar [data-mode]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.preview-bar [data-mode]').forEach(x=>x.classList.toggle('on',x===b));
+    document.body.classList.remove('phone','tablet','desktop');
+    document.body.classList.add(b.dataset.mode);
+    if(typeof relocateEdChrome==='function') relocateEdChrome();
+    if(typeof redrawAll==='function') redrawAll();
+  });
+});
+$('togAp').onclick=()=>$('apBanner').classList.toggle('show');
+
+function togglePass(id, btn){
+  const el=$(id); if(!el) return;
+  const show=el.type==='password';
+  el.type=show?'text':'password';
+  btn.textContent=show?t('net.hide'):t('net.show');
+}
+function setInvalid(rowId, errId, bad, msg){
+  const row=$(rowId), err=$(errId);
+  if(row) row.classList.toggle('invalid', !!bad);
+  if(err){ err.classList.toggle('show', !!bad); if(msg) err.textContent=msg; }
+}
+function requireField(inputId, rowId, errId, labelOrKey){
+  const v=($(inputId).value||'').trim();
+  const bad=!v;
+  const label = I18N.zh[labelOrKey] ? t(labelOrKey) : labelOrKey;
+  setInvalid(rowId, errId, bad, t('err.required', label));
+  return !bad;
+}
+
+const DEF_CID='ek410-d885ac603870';
+const topicDefaults=cid=>({
+  up:`sensors/${cid}/data`,
+  down:`device/+/${cid}/downlink`,
+  cmd:`sensors/${cid}/cmd`
+});
+let topicDirty={up:false, down:false, cmd:false};
+function applyTopicDefaults(cid){
+  const d=topicDefaults(cid||'…');
+  if(!topicDirty.up) $('tUp').value=d.up;
+  if(!topicDirty.down) $('tDown').value=d.down;
+  if(!topicDirty.cmd) $('tCmd').value=d.cmd;
+}
+function bindTopic(inputId, key, rowId, errId, errKey){
+  $(inputId).addEventListener('input',()=>{
+    topicDirty[key]=true;
+    setInvalid(rowId, errId, !($(inputId).value||'').trim(), t(errKey));
+  });
+}
+bindTopic('tUp','up','rowTUp','errTUp','err.t_up');
+bindTopic('tDown','down','rowTDown','errTDown','err.t_down');
+bindTopic('tCmd','cmd','rowTCmd','errTCmd','err.t_cmd');
+$('mqCid').addEventListener('input',()=>{
+  const raw=($('mqCid').value||'').trim();
+  applyTopicDefaults(raw||'…');
+  setInvalid('rowMqCid','errMqCid',!raw,t('err.cid'));
+});
+$('mqHost').addEventListener('input',()=>setInvalid('rowMqHost','errMqHost',!($('mqHost').value||'').trim(),t('err.host')));
+$('mqPort').addEventListener('input',()=>{
+  const port=+$('mqPort').value;
+  setInvalid('rowMqPort','errMqPort',!port||port<1||port>65535,t('err.port'));
+});
+
+let wifiSecure=true; /* default: CamThink-Office is locked */
+function setWifiPassRequired(secure){
+  wifiSecure=!!secure;
+  const star=$('reqWfPass'), pass=$('wfPass');
+  if(star) star.hidden=!wifiSecure;
+  if(pass){
+    pass.placeholder=t(wifiSecure?'net.pass_ph_sec':'net.pass_ph_open');
+    pass.setAttribute('data-i18n-placeholder', wifiSecure?'net.pass_ph_sec':'net.pass_ph_open');
+  }
+  if(!wifiSecure) setInvalid('rowWfPass','errWfPass',false);
+}
+setWifiPassRequired(true);
+
+document.querySelectorAll('#ssidList .ssid').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const s=b.dataset.ssid;
+    const secure=b.dataset.secure!=='0';
+    setWifiPassRequired(secure);
+    $('wfSsid').value=s;
+    setInvalid('rowWfSsid','errWfSsid',false);
+    $('wfPass').value='';
+    setInvalid('rowWfPass','errWfPass',false);
+    if(secure) $('wfPass').focus();
+    toast(secure ? t('toast.filled_sec', s) : t('toast.filled_open', s));
+  });
+});
+$('wfSsid').addEventListener('input',()=>{
+  setInvalid('rowWfSsid','errWfSsid',!($('wfSsid').value||'').trim(),t('err.ssid'));
+  /* typing SSID manually → treat as secure until a scan pick says otherwise */
+  const match=[...document.querySelectorAll('#ssidList .ssid')].find(b=>b.dataset.ssid===($('wfSsid').value||'').trim());
+  if(match) setWifiPassRequired(match.dataset.secure!=='0');
+  else setWifiPassRequired(true);
+});
+$('wfPass').addEventListener('input',()=>{
+  if(wifiSecure) setInvalid('rowWfPass','errWfPass',!($('wfPass').value||'').trim(),t('err.pass'));
+  else setInvalid('rowWfPass','errWfPass',false);
+});
+
+function setWifiStatus(state, meta){
+  const box=$('wifiStatus'), text=$('wifiStatusText'), m=$('wifiStatusMeta');
+  if(!box) return;
+  box.dataset.state=state||'idle';
+  const key={idle:'net.st_idle',connecting:'net.st_connecting',connected:'net.st_connected',
+    reconnecting:'net.st_reconnecting',failed:'net.st_failed'}[state]||'net.st_idle';
+  if(text){ text.setAttribute('data-i18n', key); text.textContent=t(key); }
+  if(m) m.textContent=meta||'';
+}
+$('btnWifiSave').onclick=()=>{
+  let ok=requireField('wfSsid','rowWfSsid','errWfSsid','SSID');
+  if(wifiSecure){
+    const passBad=!(($('wfPass').value||'').trim());
+    setInvalid('rowWfPass','errWfPass',passBad,t('err.pass'));
+    if(passBad) ok=false;
+  } else {
+    setInvalid('rowWfPass','errWfPass',false);
+  }
+  if(!ok){ toast(t('err.wifi_incomplete')); return; }
+  const ssid=($('wfSsid').value||'').trim();
+  const btn=$('btnWifiSave');
+  btn.disabled=true;
+  setWifiStatus('connecting', ssid);
+  toast(t('toast.wifi_connecting'));
+  /* Design preview: simulate try-connect then persist */
+  setTimeout(()=>{
+    const fail=ssid.toLowerCase().includes('fail')||ssid==='bad';
+    if(fail){
+      setWifiStatus('failed', ssid);
+      toast(t('toast.wifi_fail'));
+    } else {
+      setWifiStatus('connected', ssid+' · 192.168.1.42');
+      toast(t('toast.wifi_ok', ssid));
+      const chip=document.querySelector('#page-overview .chip');
+      /* leave overview as-is in preview */
+    }
+    btn.disabled=false;
+  }, 1200);
+};
+setWifiStatus('idle');
+function validateMqtt(){
+  let ok=true;
+  ok=requireField('mqHost','rowMqHost','errMqHost','mq.host') && ok;
+  const port=+$('mqPort').value;
+  const portBad=!port||port<1||port>65535;
+  setInvalid('rowMqPort','errMqPort',portBad,t('err.port'));
+  if(portBad) ok=false;
+  ok=requireField('mqCid','rowMqCid','errMqCid','Client ID') && ok;
+  const upBad=!($('tUp').value||'').trim();
+  const downBad=!($('tDown').value||'').trim();
+  const cmdBad=!($('tCmd').value||'').trim();
+  setInvalid('rowTUp','errTUp',upBad,t('err.t_up'));
+  setInvalid('rowTDown','errTDown',downBad,t('err.t_down'));
+  setInvalid('rowTCmd','errTCmd',cmdBad,t('err.t_cmd'));
+  if(upBad||downBad||cmdBad) ok=false;
+  return ok;
+}
+$('btnMqttSave').onclick=()=>{
+  if(!validateMqtt()){ toast(t('err.mqtt_incomplete')); return; }
+  toast(t('toast.mqtt_saved'));
+};
+$('btnMqttTest').onclick=()=>{
+  if(!validateMqtt()){ toast(t('err.mqtt_incomplete')); return; }
+  toast(t('toast.mqtt_test'));
+};
+
+/* —— Display preview: Spectra 6 + layout —— */
+const EINK=[
+  [0,0,0],[255,255,255],[255,0,0],[255,255,0],[0,0,255],[0,255,0]
+];
+const EINK_HEX=['#000000','#ffffff','#ff0000','#ffff00','#0000ff','#00ff00'];
+const E6_SWATCH={black:'#090e17',white:'#fff',red:'#ef4444',yellow:'#facc15',blue:'#2563eb',green:'#16a34a'};
+function redmeanDist2(r,g,b,pr,pg,pb){
+  const rm=(r+pr)/2, dr=r-pr, dg=g-pg, db=b-pb;
+  return (2+rm/256)*dr*dr + 4*dg*dg + (2+(255-rm)/256)*db*db;
+}
+function nearestEink(r,g,b){
+  let best=0,bd=1e12;
+  for(let i=0;i<EINK.length;i++){
+    const [er,eg,eb]=EINK[i];
+    const d=redmeanDist2(r,g,b,er,eg,eb);
+    if(d<bd){bd=d;best=i;}
+  }
+  return EINK[best];
+}
+/** Floyd–Steinberg error diffusion — avoids posterization of nearest-only. */
+function quantizeCanvas(src){
+  const w=src.width,h=src.height;
+  const out=document.createElement('canvas'); out.width=w; out.height=h;
+  const sctx=src.getContext('2d',{willReadFrequently:true}), octx=out.getContext('2d');
+  const img=sctx.getImageData(0,0,w,h), srcPix=img.data;
+  const buf=new Float32Array(w*h*3);
+  for(let i=0,p=0;i<srcPix.length;i+=4,p+=3){
+    buf[p]=srcPix[i]; buf[p+1]=srcPix[i+1]; buf[p+2]=srcPix[i+2];
+  }
+  const dst=octx.createImageData(w,h), d=dst.data;
+  const ERR_CAP=100;
+  const clamp=v=>v<0?0:v>255?255:v;
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const p=(y*w+x)*3;
+      const r=buf[p], g=buf[p+1], b=buf[p+2];
+      const rgb=nearestEink(r,g,b);
+      const oi=(y*w+x)*4;
+      d[oi]=rgb[0]; d[oi+1]=rgb[1]; d[oi+2]=rgb[2]; d[oi+3]=255;
+      let er=r-rgb[0], eg=g-rgb[1], eb=b-rgb[2];
+      er=er>ERR_CAP?ERR_CAP:er<-ERR_CAP?-ERR_CAP:er;
+      eg=eg>ERR_CAP?ERR_CAP:eg<-ERR_CAP?-ERR_CAP:eg;
+      eb=eb>ERR_CAP?ERR_CAP:eb<-ERR_CAP?-ERR_CAP:eb;
+      const diffuse=(xx,yy,w16)=>{
+        if(xx<0||yy<0||xx>=w||yy>=h) return;
+        const q=(yy*w+xx)*3;
+        buf[q]=clamp(buf[q]+er*w16/16);
+        buf[q+1]=clamp(buf[q+1]+eg*w16/16);
+        buf[q+2]=clamp(buf[q+2]+eb*w16/16);
+      };
+      diffuse(x+1,y,7); diffuse(x-1,y+1,3); diffuse(x,y+1,5); diffuse(x+1,y+1,1);
+    }
+  }
+  octx.putImageData(dst,0,0);
+  return out;
+}
+
+let colorMode='eink'; /* source | eink */
+let layoutGuideOn=false;
+let imgFit='cover';
+let imgBitmap=null;
+
+function syncGuideUI(){
+  document.querySelectorAll('[data-guide]').forEach(g=>g.classList.toggle('show', layoutGuideOn));
+  $('btnLayoutGuide').classList.toggle('on', layoutGuideOn);
+}
+function syncColorUI(){
+  document.querySelectorAll('#colorSeg button').forEach(b=>b.classList.toggle('on', b.dataset.color===colorMode));
+  const label=t(colorMode==='eink'?'disp.hint_eink':'disp.hint_source');
+  const img=$('imgStageHint'), ed=$('edStageHint'), md=$('mdStageHint');
+  if(img) img.textContent=t('disp.stage_img', label);
+  if(ed) ed.textContent=t('disp.stage_ed', label);
+  if(md) md.textContent=t('disp.stage_md', label);
+  if(typeof redrawAll==='function') redrawAll();
+}
+$('btnLayoutGuide').onclick=()=>{ layoutGuideOn=!layoutGuideOn; syncGuideUI(); toast(layoutGuideOn?t('toast.guide_on'):t('toast.guide_off')); };
+document.querySelectorAll('#colorSeg button').forEach(b=>{
+  b.addEventListener('click',()=>{ colorMode=b.dataset.color; syncColorUI(); toast(colorMode==='eink'?t('toast.color_eink'):t('toast.color_source')); });
+});
+
+function layerInk(color,eink){
+  const map={black:0,white:1,red:2,yellow:3,blue:4,green:5};
+  const i=map[color];
+  if(eink && i!=null) return EINK_HEX[i];
+  return E6_SWATCH[color]||'#090e17';
+}
+const edBitmaps={}; /* layerId → ImageBitmap */
+function layerImageSize(el){
+  const bmp=edBitmaps[el.dataset.id];
+  const w=+el.dataset.size||400;
+  const ratio=bmp ? (bmp.height/Math.max(1,bmp.width)) : (3/4);
+  return {w, h:Math.round(w*ratio)};
+}
+/** Bounds in panel coords (1600×1200). Text uses baseline y. */
+function layerBounds(el){
+  const type=el.dataset.type||'text';
+  const x=+el.dataset.x||0, y=+el.dataset.y||0;
+  if(type==='image'){ const d=layerImageSize(el); return {x,y,w:d.w,h:d.h}; }
+  if(type==='rect') return {x,y,w:220,h:48};
+  if(type==='qr'){ const s=+el.dataset.size||160; return {x,y,w:s,h:s}; }
+  const size=+el.dataset.size||42;
+  const w=Math.max(80, (el.dataset.content||'').length*size*0.55);
+  const h=size*1.25;
+  return {x, y:y-h, w, h};
+}
+function drawEditorScene(ctx,w,h,eink){
+  ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,w,h);
+  const sx=w/1600, sy=h/1200;
+  const list=$('layerList');
+  if(!list) return;
+  /* List top = front: paint bottom → top */
+  [...list.querySelectorAll('.layer')].reverse().forEach(el=>{
+    const type=el.dataset.type||'text';
+    const x=(+el.dataset.x||0)*sx, y=(+el.dataset.y||0)*sy;
+    const ink=layerInk(el.dataset.color||'black', eink);
+    if(type==='image'){
+      const dim=layerImageSize(el);
+      const dw=dim.w*sx, dh=dim.h*sy;
+      const bmp=edBitmaps[el.dataset.id];
+      if(bmp) ctx.drawImage(bmp, x, y, dw, dh);
+      else {
+        ctx.fillStyle='#e5e7eb'; ctx.fillRect(x,y,dw,dh);
+        ctx.strokeStyle=ink; ctx.strokeRect(x,y,dw,dh);
+      }
+    } else if(type==='rect'){
+      const ww=220*sx, hh=48*sy;
+      ctx.fillStyle=ink; ctx.fillRect(x,y,ww,hh);
+    } else if(type==='qr'){
+      const s=(+el.dataset.size||160)*sx;
+      ctx.strokeStyle=ink; ctx.lineWidth=Math.max(2,3*sx);
+      ctx.strokeRect(x,y,s,s);
+      ctx.fillStyle=ink; ctx.font=`${Math.round(14*sx)}px sans-serif`;
+      ctx.fillText('QR', x+s*0.35, y+s*0.55);
+    } else {
+      const size=(+el.dataset.size||42)*sx;
+      ctx.fillStyle=ink;
+      ctx.font=`600 ${Math.round(size)}px Sora,"Noto Sans SC",sans-serif`;
+      ctx.fillText(el.dataset.content||'', x, y);
+    }
+  });
+}
+/** Selection chrome drawn after content (not quantized). */
+function drawLayerSelection(ctx,w,h){
+  const el=selectedLayer(); if(!el) return;
+  const b=layerBounds(el);
+  const sx=w/1600, sy=h/1200;
+  const pad=6;
+  const rx=b.x*sx-pad, ry=b.y*sy-pad, rw=b.w*sx+pad*2, rh=b.h*sy+pad*2;
+  ctx.save();
+  ctx.strokeStyle='rgba(242,74,0,.95)';
+  ctx.lineWidth=1.5;
+  ctx.setLineDash([6,4]);
+  ctx.strokeRect(rx, ry, rw, rh);
+  ctx.setLineDash([]);
+  const hs=5;
+  ctx.fillStyle='#f24a00';
+  [[rx,ry],[rx+rw,ry],[rx,ry+rh],[rx+rw,ry+rh]].forEach(([hx,hy])=>{
+    ctx.fillRect(hx-hs/2, hy-hs/2, hs, hs);
+  });
+  ctx.restore();
+}
+
+function redrawEditor(){
+  const c=$('pv'); if(!c) return;
+  const ctx=c.getContext('2d');
+  if(colorMode==='source'){
+    drawEditorScene(ctx,c.width,c.height,false);
+  } else {
+    const off=document.createElement('canvas'); off.width=c.width; off.height=c.height;
+    drawEditorScene(off.getContext('2d'),off.width,off.height,false);
+    ctx.drawImage(quantizeCanvas(off),0,0);
+  }
+  drawLayerSelection(ctx, c.width, c.height);
+}
+
+function drawImagePreview(){
+  const c=$('imgPv'); if(!c) return;
+  const ctx=c.getContext('2d');
+  const w=c.width,h=c.height;
+  ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,w,h);
+  if(!imgBitmap){
+    /* demo gradient content so quantize is visible */
+    const g=ctx.createLinearGradient(0,0,w,h);
+    g.addColorStop(0,'#f24a00'); g.addColorStop(.35,'#6366f1');
+    g.addColorStop(.65,'#14b8a6'); g.addColorStop(1,'#fbbf24');
+    ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle='rgba(255,255,255,.92)';
+    ctx.fillRect(80,160,640,220);
+    ctx.fillStyle='#111'; ctx.font='600 36px Sora,sans-serif';
+    ctx.fillText(t('img.demo_title'), 120, 250);
+    ctx.font='400 18px "Noto Sans SC",sans-serif'; ctx.fillStyle='#555';
+    ctx.fillText(t('img.demo_sub'), 120, 290);
+  } else {
+    const iw=imgBitmap.width, ih=imgBitmap.height;
+    let dw,dh,dx,dy;
+    if(imgFit==='fill'){ dw=w; dh=h; dx=0; dy=0; }
+    else if(imgFit==='contain'){
+      const s=Math.min(w/iw,h/ih); dw=iw*s; dh=ih*s; dx=(w-dw)/2; dy=(h-dh)/2;
+    } else {
+      const s=Math.max(w/iw,h/ih); dw=iw*s; dh=ih*s; dx=(w-dw)/2; dy=(h-dh)/2;
+    }
+    ctx.drawImage(imgBitmap,dx,dy,dw,dh);
+  }
+  if(colorMode==='eink'){
+    const q=quantizeCanvas(c);
+    ctx.clearRect(0,0,w,h);
+    ctx.drawImage(q,0,0);
+  }
+}
+
+function parseMdToLines(text){
+  const lines=[];
+  (text||'').split(/\n/).forEach(raw=>{
+    const t=raw.trimEnd();
+    if(!t.trim()){ lines.push({type:'gap'}); return; }
+    if(/^#\s+/.test(t)) lines.push({type:'h1', text:t.replace(/^#\s+/,'')});
+    else if(/^##\s+/.test(t)) lines.push({type:'h2', text:t.replace(/^##\s+/,'')});
+    else if(/^[-*]\s+/.test(t)) lines.push({type:'li', text:t.replace(/^[-*]\s+/,'')});
+    else lines.push({type:'p', text:t});
+  });
+  return lines;
+}
+function redrawMd(){
+  const c=$('mdPv'); if(!c) return;
+  const off=document.createElement('canvas'); off.width=c.width; off.height=c.height;
+  const ctx=off.getContext('2d');
+  ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,off.width,off.height);
+  let y=72;
+  parseMdToLines($('mdText').value).forEach(ln=>{
+    if(ln.type==='gap'){ y+=18; return; }
+    if(ln.type==='h1'){
+      ctx.fillStyle='#111'; ctx.font='600 40px Sora,"Noto Sans SC",sans-serif';
+      ctx.fillText(ln.text, 56, y); y+=56;
+    } else if(ln.type==='h2'){
+      ctx.fillStyle='#111'; ctx.font='600 28px "Noto Sans SC",sans-serif';
+      ctx.fillText(ln.text, 56, y); y+=40;
+    } else if(ln.type==='li'){
+      ctx.fillStyle='#f24a00'; ctx.beginPath(); ctx.arc(68,y-6,5,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#222'; ctx.font='400 22px "Noto Sans SC",sans-serif';
+      ctx.fillText(ln.text, 86, y); y+=34;
+    } else {
+      ctx.fillStyle='#333'; ctx.font='400 22px "Noto Sans SC",sans-serif';
+      ctx.fillText(ln.text, 56, y); y+=32;
+    }
+  });
+  const dst=c.getContext('2d');
+  dst.clearRect(0,0,c.width,c.height);
+  if(colorMode==='eink') dst.drawImage(quantizeCanvas(off),0,0);
+  else dst.drawImage(off,0,0);
+}
+
+function redrawAll(){ redrawEditor(); drawImagePreview(); redrawMd(); }
+
+function setDispMode(mode){
+  document.querySelectorAll('#modeSwitch button').forEach(b=>b.classList.toggle('on', b.dataset.mode===mode));
+  ['image','editor','md'].forEach(m=>{
+    const el=$('mode-'+m); if(el) el.hidden = m!==mode;
+  });
+  if(mode!=='editor' && typeof closeEdSheet==='function') closeEdSheet(true);
+  if(mode==='editor' && typeof relocateEdChrome==='function') relocateEdChrome();
+  redrawAll();
+  toast({image:t('toast.mode_image'), editor:t('toast.mode_editor'), md:t('toast.mode_md')}[mode]);
+}
+document.querySelectorAll('#modeSwitch button').forEach(b=>{
+  b.addEventListener('click',()=>setDispMode(b.dataset.mode));
+});
+
+/* ===== Editor chrome: shared layers/props + desktop/phone shell ===== */
+let edSheetMode='layers';
+let _layerSeq=10;
+function isDesktop(){ return document.body.classList.contains('desktop'); }
+function selectedLayer(){ return document.querySelector('#layerList .layer.on'); }
+
+function relocateEdChrome(){
+  const chrome=$('edChrome'); if(!chrome) return;
+  chrome.hidden=false;
+  if(isDesktop()){
+    closeEdSheet(true);
+    const host=$('edInspectorHost');
+    if(host && chrome.parentElement!==host) host.appendChild(chrome);
+  } else {
+    const body=$('edSheetBody');
+    if(body && chrome.parentElement!==body) body.appendChild(chrome);
+  }
+}
+
+function openEdSheet(mode){
+  if(isDesktop()) return;
+  edSheetMode=mode||'layers';
+  const sheet=$('edSheet'); if(!sheet) return;
+  sheet.hidden=false;
+  sheet.classList.add('open');
+  sheet.dataset.mode=edSheetMode;
+  const title=$('edSheetTitle');
+  const back=$('edSheetBack');
+  const keys={add:'ed.sheet_add', layers:'ed.sheet_layers', props:'ed.sheet_props'};
+  if(title) title.textContent=t(keys[edSheetMode]||'ed.layers');
+  if(back) back.hidden=edSheetMode!=='props';
+  document.querySelectorAll('#edDock button').forEach(b=>{
+    b.classList.toggle('on',
+      (b.id==='btnEdDockAdd' && edSheetMode==='add') ||
+      (b.id==='btnEdDockLayers' && (edSheetMode==='layers'||edSheetMode==='props'))
+    );
+  });
+}
+function closeEdSheet(silent){
+  const sheet=$('edSheet'); if(!sheet) return;
+  sheet.classList.remove('open');
+  sheet.hidden=true;
+  document.querySelectorAll('#edDock button').forEach(b=>b.classList.remove('on'));
+}
+
+function bindLayerProps(el){
+  const empty=$('propsEmpty'), fields=$('propsFields');
+  if(!el){
+    if(empty) empty.hidden=false;
+    if(fields) fields.hidden=true;
+    return;
+  }
+  if(empty) empty.hidden=true;
+  if(fields) fields.hidden=false;
+  const type=el.dataset.type||'text';
+  const content=$('layerContent'), rowSize=$('rowSize'), sizeLab=$('layerSizeLabel');
+  const fieldContent=$('fieldContent'), fieldImage=$('fieldImage'), rowColor=$('rowColor');
+  if(fieldContent) fieldContent.hidden=type==='rect'||type==='image';
+  if(fieldImage) fieldImage.hidden=type!=='image';
+  if(rowColor) rowColor.hidden=type==='image';
+  if(content && type!=='rect' && type!=='image'){
+    content.value=el.dataset.content||'';
+    content.placeholder=type==='qr'?t('ed.qr_url'):t('ed.content');
+  }
+  if($('layerColor')) $('layerColor').value=el.dataset.color||'black';
+  const setSlider=(id, valId, v)=>{
+    const s=$(id); if(!s) return;
+    s.value=v;
+    const out=$(valId); if(out) out.textContent=String(v);
+  };
+  setSlider('layerX','layerXVal', +el.dataset.x||0);
+  setSlider('layerY','layerYVal', +el.dataset.y||0);
+  if(rowSize){
+    rowSize.hidden=type==='rect';
+    if(type!=='rect'){
+      if(sizeLab) sizeLab.textContent=
+        type==='text'?t('ed.fontsize'):(type==='image'?t('ed.width'):t('ed.size'));
+      const sizeEl=$('layerSize');
+      if(sizeEl){
+        if(type==='qr'){ sizeEl.min=40; sizeEl.max=400; }
+        else if(type==='image'){ sizeEl.min=80; sizeEl.max=1600; }
+        else { sizeEl.min=12; sizeEl.max=120; }
+        const def=type==='qr'?160:type==='image'?400:42;
+        setSlider('layerSize','layerSizeVal', +el.dataset.size||def);
+      }
+    }
+  }
+}
+function selectLayer(el, opts){
+  opts=opts||{};
+  document.querySelectorAll('#layerList .layer').forEach(x=>x.classList.toggle('on',x===el));
+  bindLayerProps(el);
+  redrawEditor();
+  if(opts.openProps && el && !isDesktop()) openEdSheet('props');
+}
+function bindLayerClicks(){
+  document.querySelectorAll('#layerList .layer').forEach(b=>{
+    b.onclick=()=>selectLayer(b, {openProps:true});
+  });
+}
+function syncLayerFromFields(){
+  const el=selectedLayer(); if(!el) return;
+  const content=$('layerContent');
+  if(content && el.dataset.type!=='rect'){
+    el.dataset.content=content.value;
+    const sm=el.querySelector('small');
+    if(sm){
+      const v=content.value.trim();
+      sm.textContent=el.dataset.type==='qr'
+        ? (v.replace(/^https?:\/\//,'').slice(0,28)||'QR')
+        : (v.slice(0,28)||t('ed.text'));
+    }
+  }
+  if($('layerColor')){
+    el.dataset.color=$('layerColor').value;
+    const sw=el.querySelector('.swatch');
+    if(sw) sw.style.background=E6_SWATCH[el.dataset.color]||'#090e17';
+  }
+  if($('layerX')){
+    el.dataset.x=$('layerX').value;
+    if($('layerXVal')) $('layerXVal').textContent=$('layerX').value;
+  }
+  if($('layerY')){
+    el.dataset.y=$('layerY').value;
+    if($('layerYVal')) $('layerYVal').textContent=$('layerY').value;
+  }
+  if($('layerSize')){
+    el.dataset.size=$('layerSize').value;
+    if($('layerSizeVal')) $('layerSizeVal').textContent=$('layerSize').value;
+  }
+  redrawEditor();
+}
+['layerContent','layerColor','layerX','layerY','layerSize'].forEach(id=>{
+  const el=$(id); if(!el) return;
+  el.addEventListener('input', syncLayerFromFields);
+  el.addEventListener('change', syncLayerFromFields);
+});
+function moveLayer(dir){
+  const el=selectedLayer(); if(!el) return;
+  const list=$('layerList');
+  if(dir<0 && el.previousElementSibling) list.insertBefore(el, el.previousElementSibling);
+  if(dir>0 && el.nextElementSibling) list.insertBefore(el.nextElementSibling, el);
+  redrawEditor();
+}
+if($('btnLayerUp')) $('btnLayerUp').onclick=()=>moveLayer(-1);
+if($('btnLayerDown')) $('btnLayerDown').onclick=()=>moveLayer(1);
+if($('btnLayerDel')) $('btnLayerDel').onclick=()=>{
+  const el=selectedLayer(); if(!el) return;
+  const next=el.nextElementSibling||el.previousElementSibling;
+  if(el.dataset.type==='image' && edBitmaps[el.dataset.id]){
+    try{ edBitmaps[el.dataset.id].close(); }catch(e){}
+    delete edBitmaps[el.dataset.id];
+  }
+  el.remove();
+  selectLayer(next||null);
+  redrawEditor();
+  toast(t('toast.layer_del'));
+};
+
+function createLayerButton(type, d, id){
+  const btn=document.createElement('button');
+  btn.type='button';
+  btn.className='layer';
+  btn.dataset.id=id; btn.dataset.type=type;
+  btn.dataset.content=d.content; btn.dataset.x=d.x; btn.dataset.y=d.y;
+  btn.dataset.size=d.size; btn.dataset.color=d.color;
+  const sub=d.sub!=null?d.sub:(type==='qr'
+    ? (d.content.replace(/^https?:\/\//,'').slice(0,28))
+    : (type==='rect'?t('ed.swatch_sub'):d.content.slice(0,28)));
+  const sw=d.swatchHtml||`<i class="swatch" style="background:${E6_SWATCH[d.color]||'#090e17'}"></i>`;
+  btn.innerHTML=sw+`<span class="meta"><b>${d.label}</b><small>${sub}</small></span>`;
+  return btn;
+}
+function insertLayerEl(btn){
+  const list=$('layerList'); if(!list) return;
+  list.insertBefore(btn, list.firstChild);
+  bindLayerClicks();
+  selectLayer(btn, {openProps:true});
+  redrawEditor();
+  if(!isDesktop() && edSheetMode==='add') openEdSheet('props');
+}
+async function pickImageForLayer(existingEl){
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept='image/*';
+  inp.onchange=async()=>{
+    const f=inp.files&&inp.files[0]; if(!f) return;
+    try{
+      const bmp=await createImageBitmap(f);
+      if(existingEl){
+        if(edBitmaps[existingEl.dataset.id]) try{ edBitmaps[existingEl.dataset.id].close(); }catch(e){}
+        edBitmaps[existingEl.dataset.id]=bmp;
+        existingEl.dataset.content=f.name;
+        const sm=existingEl.querySelector('small');
+        if(sm) sm.textContent=f.name.slice(0,28);
+        const sw=existingEl.querySelector('.swatch');
+        if(sw){ sw.style.background=`center/cover url(${URL.createObjectURL(f)})`; }
+        selectLayer(existingEl, {openProps:true});
+        redrawEditor();
+        toast(t('toast.img_replaced'));
+        return;
+      }
+      _layerSeq++;
+      const id='i'+_layerSeq;
+      edBitmaps[id]=bmp;
+      const maxW=720;
+      const size=Math.min(maxW, bmp.width);
+      const thumb=URL.createObjectURL(f);
+      const btn=createLayerButton('image', {
+        content:f.name, x:200, y:200, size, color:'black',
+        label:t('ed.image'), sub:f.name.slice(0,28),
+        swatchHtml:`<i class="swatch" style="background:center/cover url(${thumb})"></i>`
+      }, id);
+      insertLayerEl(btn);
+      toast(t('toast.layer_add', t('ed.image')));
+    }catch(err){
+      toast(t('toast.img_fail'));
+    }
+  };
+  inp.click();
+}
+function addEditorLayer(type){
+  if(type==='image'){ pickImageForLayer(null); return; }
+  const list=$('layerList'); if(!list) return;
+  _layerSeq++;
+  const id=type[0]+_layerSeq;
+  const defaults={
+    text:{content:t('ed.new_text'), x:200, y:360, size:36, color:'black', label:t('ed.text')},
+    rect:{content:'', x:200, y:200, size:'', color:'red', label:t('ed.swatch')},
+    qr:{content:t('ed.new_qr'), x:1000, y:800, size:160, color:'black', label:t('ed.qr')}
+  };
+  const d=defaults[type]||defaults.text;
+  insertLayerEl(createLayerButton(type, d, id));
+  toast(t('toast.layer_add', d.label));
+}
+
+document.querySelectorAll('#edTools [data-tool], #edAddStrip [data-tool]').forEach(b=>{
+  b.addEventListener('click',()=>addEditorLayer(b.dataset.tool));
+});
+if($('btnLayerReplaceImg')) $('btnLayerReplaceImg').onclick=()=>{
+  const el=selectedLayer();
+  if(el && el.dataset.type==='image') pickImageForLayer(el);
+};
+if($('btnEdDockAdd')) $('btnEdDockAdd').onclick=()=>openEdSheet('add');
+if($('btnEdDockLayers')) $('btnEdDockLayers').onclick=()=>openEdSheet('layers');
+if($('edSheetMask')) $('edSheetMask').onclick=()=>closeEdSheet();
+if($('edSheetClose')) $('edSheetClose').onclick=()=>closeEdSheet();
+if($('edSheetBack')) $('edSheetBack').onclick=()=>openEdSheet('layers');
+
+/* Canvas drag → move selected layer; tap without move opens props on phone */
+function hitTestLayerAt(lx, ly){
+  const layers=[...document.querySelectorAll('#layerList .layer')];
+  for(const el of layers){
+    const b=layerBounds(el);
+    if(lx>=b.x && lx<=b.x+b.w && ly>=b.y && ly<=b.y+b.h) return el;
+  }
+  return null;
+}
+(function(){
+  const c=$('pv'); if(!c) return;
+  let drag=null; /* {el, ox, oy, moved} */
+  const canvasXY=e=>{
+    const rect=c.getBoundingClientRect();
+    return {
+      lx:(e.clientX-rect.left)*(1600/rect.width),
+      ly:(e.clientY-rect.top)*(1200/rect.height)
+    };
+  };
+  const onDown=e=>{
+    if(e.button!=null && e.button!==0) return;
+    const {lx,ly}=canvasXY(e);
+    const hit=hitTestLayerAt(lx,ly);
+    if(!hit){ drag=null; return; }
+    e.preventDefault();
+    selectLayer(hit, {openProps:false});
+    drag={
+      el:hit,
+      ox:lx-(+hit.dataset.x||0),
+      oy:ly-(+hit.dataset.y||0),
+      moved:false,
+      pid:e.pointerId
+    };
+    try{ c.setPointerCapture(e.pointerId); }catch(err){}
+    c.style.cursor='grabbing';
+  };
+  const onMove=e=>{
+    if(!drag || (drag.pid!=null && e.pointerId!==drag.pid)) return;
+    const {lx,ly}=canvasXY(e);
+    let nx=Math.round(lx-drag.ox), ny=Math.round(ly-drag.oy);
+    nx=Math.max(0, Math.min(1600, nx));
+    ny=Math.max(0, Math.min(1200, ny));
+    if(nx!==(+drag.el.dataset.x||0) || ny!==(+drag.el.dataset.y||0)) drag.moved=true;
+    drag.el.dataset.x=nx;
+    drag.el.dataset.y=ny;
+    if($('layerX')){ $('layerX').value=nx; if($('layerXVal')) $('layerXVal').textContent=String(nx); }
+    if($('layerY')){ $('layerY').value=ny; if($('layerYVal')) $('layerYVal').textContent=String(ny); }
+    redrawEditor();
+  };
+  const onUp=e=>{
+    if(!drag) return;
+    const el=drag.el, moved=drag.moved;
+    drag=null;
+    c.style.cursor='grab';
+    try{ c.releasePointerCapture(e.pointerId); }catch(err){}
+    /* Tap without drag: open props sheet on phone */
+    if(!moved) selectLayer(el, {openProps:true});
+    else bindLayerProps(el);
+  };
+  c.addEventListener('pointerdown', onDown);
+  c.addEventListener('pointermove', onMove);
+  c.addEventListener('pointerup', onUp);
+  c.addEventListener('pointercancel', onUp);
+})();
+
+bindLayerClicks();
+bindLayerProps(selectedLayer());
+relocateEdChrome();
+document.querySelectorAll('#fitPills button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('#fitPills button').forEach(x=>x.classList.toggle('on',x===b));
+    imgFit=b.dataset.fit; drawImagePreview();
+  });
+});
+$('imgDrop').onclick=()=>{
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
+  inp.onchange=async()=>{
+    const f=inp.files&&inp.files[0]; if(!f) return;
+    imgBitmap=await createImageBitmap(f);
+    drawImagePreview();
+    toast(t('toast.img_loaded', f.name));
+  };
+  inp.click();
+};
+$('btnImgUrl').onclick=()=>{
+  const u=($('imgUrl').value||'').trim();
+  if(!u){ toast(t('toast.need_url')); return; }
+  const im=new Image(); im.crossOrigin='anonymous';
+  im.onload=async()=>{ imgBitmap=await createImageBitmap(im); drawImagePreview(); toast(t('toast.url_ok')); };
+  im.onerror=()=>toast(t('toast.url_fail'));
+  im.src=u;
+};
+$('btnMdApply').onclick=()=>{ redrawMd(); toast(t('toast.md_updated')); };
+$('mdText').addEventListener('input',()=>{
+  $('mdText').dataset.dirty='1';
+  clearTimeout(window.__mdT); window.__mdT=setTimeout(redrawMd,180);
+});
+if($('btnScanWifi')) $('btnScanWifi').onclick=()=>toast(t('toast.scan'));
+if($('eyeWfPass')) $('eyeWfPass').onclick=function(){ togglePass('wfPass', this); };
+if($('eyeMqPass')) $('eyeMqPass').onclick=function(){ togglePass('mqPass', this); };
+if($('dispPush')) $('dispPush').onclick=()=>toast(t('toast.push'));
+if($('btnImgPush')) $('btnImgPush').onclick=()=>toast(t('toast.quant_push'));
+if($('btnMdOpen')) $('btnMdOpen').onclick=()=>toast(t('toast.md_open'));
+if($('btnMdPaste')) $('btnMdPaste').onclick=()=>{ $('mdText').value=t('md.sample'); $('mdText').dataset.dirty=''; redrawMd(); toast(t('toast.md_paste')); };
+
+
+let workMode='always';
+function setWorkMode(mode){
+  workMode=mode==='cycle'?'cycle':'always';
+  document.querySelectorAll('#workModeCards .mode-card').forEach(b=>b.classList.toggle('on', b.dataset.mode===workMode));
+  const fields=$('sleepFields'); if(fields) fields.hidden = workMode!=='cycle';
+  const ov=$('ovSleepVal');
+  if(ov){
+    if(workMode==='always'){ ov.setAttribute('data-i18n','ov.sleep_on'); ov.textContent=t('ov.sleep_on'); }
+    else { ov.removeAttribute('data-i18n'); ov.textContent=t('ov.sleep_cycle', ($('pwrSleep')&&$('pwrSleep').value)||'60'); }
+  }
+}
+document.querySelectorAll('#workModeCards .mode-card').forEach(b=>{
+  b.addEventListener('click',()=>{ setWorkMode(b.dataset.mode); toast(workMode==='always'?t('toast.mode_always'):t('toast.mode_cycle')); });
+});
+if($('pwrSleep')) $('pwrSleep').addEventListener('input',()=>{ if(workMode==='cycle') setWorkMode('cycle'); });
+if($('btnSysSave')) $('btnSysSave').onclick=()=>toast(t('toast.sys_saved'));
+setWorkMode('always');
+
+document.querySelectorAll('#langSegPreview [data-lang], #langSegSys [data-lang]').forEach(b=>{
+  b.addEventListener('click',()=>setLang(b.dataset.lang));
+});
+
+syncGuideUI();
+applyI18n();
+</script>
+</body>
+</html>

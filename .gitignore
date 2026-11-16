@@ -1,0 +1,46 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / IDE
+.idea/
+.vscode/*
+!.vscode/settings.json.example
+!.vscode/c_cpp_properties.json.example
+*.swp
+*~
+.clangd/
+.compile_commands.json
+compile_commands.json
+
+# ESP-IDF build outputs
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.ci
+
+# Nested diagnostic firmware builds
+tools/gpio_scan/build/
+tools/gpio_scan/sdkconfig
+tools/gpio_scan/sdkconfig.old
+
+# Component manager (reproducible via dependencies.lock + idf_component.yml)
+managed_components/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Local flash / logs
+*.log
+/tmp/
+flash_args
+flasher_args.json
+
+# Generated previews (keep sources under assets/)
+*.tmp
+*.bak
