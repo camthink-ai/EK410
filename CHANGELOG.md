@@ -8,6 +8,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ---
 
+## [1.3.0] — 2026-11-17
+
+### Added
+
+- Dual OTA SKU: SoftAP (`ek410`) + BLE CT-Prov (`ek410_ble`); `tools/build_dual_sku.sh` / `flash_dual_sku.sh` / `ct_prov_dual_test.py`.
+- NeoLink CT-Prov SoftAP + BLE provisioning (`docs/ct_prov.md`).
+- Cycle power mode: configurable online window `wakeSec` (30–600, default 120) via SoftAP / HTTP / MQTT; DeviceTypes `ek410_Eink` updated.
+- Hardware RESET / power-on: exit SoftAP/BLE handoff and restore flash `lastfrm` (CamThink logo if empty).
+- Deep sleep: turn off status LED, panel rail, and battery sense before `esp_deep_sleep_start`.
+
+### Changed
+
+- SoftAP / BLE idle auto-close default **2 minutes**.
+- BLE SKU warms Wi-Fi STA for scan after NimBLE (reduced RX buffers / BA win).
+
+### Fixed
+
+- SoftAP web: desktop first paint no longer flashes the mobile dock layout (FOUC).
+- Wi-Fi `esp_wifi_init` `NO_MEM` after NimBLE blocking NeoLink scan.
+
+### 中文
+
+- SoftAP / BLE 双 OTA 镜像与 NeoLink CT-Prov；cycle 在线窗 `wakeSec` 可配。
+- 硬件 RESET 退出配网并恢复上次画面；深睡前关灯与面板供电。
+- SoftAP 网页桌面端首屏不再闪手机布局；修复 BLE 后 Wi‑Fi 扫描初始化失败。
+
+---
+
 ## [1.2.2] — 2026-11-16
 
 ### Added

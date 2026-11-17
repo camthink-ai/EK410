@@ -4,6 +4,10 @@
 |--------|---------|
 | `gen_www.py` | Embed `main/www/index.html` → `main/www_html.h` |
 | `bump_version.py` | Sync `VERSION` ↔ `main/version.h` (+ CHANGELOG stub) |
+| `build_dual_sku.sh` | Build SoftAP (`ek410`) + BLE (`ek410_ble`) into `dist/dual_sku/` |
+| `flash_dual_sku.sh` | Flash SoftAP → ota_0, BLE → ota_1 (boot SoftAP) |
+| `ct_prov_dual_test.py` | Automated SoftAP ↔ BLE SKU round-trip over serial |
+| `ct_prov_softap_test.py` | SoftAP CT-Prov smoke helper |
 | `frame_convert.py` | Arbitrary image → 960000-byte 4bpp panel frame |
 | `gen_font.py` | 8×16 ASCII font header |
 | `gen_font_hz.py` | 16×16 CJK subset font |
@@ -16,8 +20,15 @@
 ```bash
 python3 tools/gen_www.py
 python3 tools/bump_version.py --check
+
+# Dual SKU (needs IDF env)
+bash tools/build_dual_sku.sh
+bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
+
 python3 tools/gen_splash_logo.py assets/brand/CamThink_LOGO.png -o main/splash_logo_data.h
 python3 tools/frame_convert.py input.png output.raw
 ```
 
-`gpio_scan/build/` is gitignored; build only when diagnosing hardware.
+CT-Prov details: [docs/ct_prov.md](../docs/ct_prov.md).
+
+`gpio_scan/build/` and `dist/` are gitignored; rebuild artifacts locally.
