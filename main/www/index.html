@@ -868,9 +868,47 @@ body.desktop .disp-tools-row{width:auto; flex:1; min-width:0}
 body:not(.desktop) .disp-tools-row{flex-wrap:wrap}
 body:not(.desktop) .disp-tools-row .preview-toggles{flex:1}
 body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
+
+/*
+ * First-paint shell for wide viewports — do not wait for the late JS that
+ * toggles body.desktop (otherwise desktop users briefly see the phone dock).
+ * body.desktop / body.phone still drive editor chrome after applyShellLayout().
+ */
+@media (min-width:960px){
+  body{overflow:hidden}
+  .app{
+    flex-direction:row; align-items:stretch; width:100%; max-width:none; margin:0;
+    min-height:100%; height:100%;
+  }
+  .rail{
+    display:flex !important; width:220px; flex:0 0 220px; flex-direction:column;
+    padding:28px 18px; background:var(--ink); color:#fff; min-height:100%;
+  }
+  .dock{display:none !important}
+  .main{
+    flex:1; min-width:0; height:100%; overflow:auto;
+    display:flex; flex-direction:column; min-height:100%;
+    padding:24px 28px 28px; max-width:none; margin:0;
+  }
+  .ed-dock{display:none !important}
+}
+@media (max-width:959.98px){
+  .rail{display:none !important}
+}
 </style>
 </head>
 <body>
+<script>
+/* Sync body.desktop / body.phone before .app is parsed — kills mobile FOUC on desktop. */
+(function(){
+  try{
+    var desk=window.matchMedia('(min-width:960px)').matches;
+    document.body.classList.add(desk?'desktop':'phone');
+  }catch(e){
+    document.body.classList.add('phone');
+  }
+})();
+</script>
 <div class="app">
   <aside class="rail">
     <img class="logo" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iOTIiIGhlaWdodD0iMjgiIHZpZXdCb3g9IjAgMCA5MiAyOCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzE0OF8xNDEzMykiPgo8cGF0aCBkPSJNNy40ODA2OCA4LjI0NDQ2QzguODk4ODYgOC4yNDQ0NiAxMC4xNTM0IDguNzg5OTEgMTEuMDgwNyA5LjY2MjY0SDEzLjgwOEMxMi40OTg5IDcuNTM1MzcgMTAuMTUzNCA2LjExNzE5IDcuNDgwNjggNi4xMTcxOUMzLjM4OTc3IDYuMTE3MTkgMC4wNjI1IDkuNDQ0NDYgMC4wNjI1IDEzLjUzNTRDMC4wNjI1IDE3LjYyNjMgMy4zODk3NyAyMC45NTM2IDcuNDgwNjggMjAuOTUzNkMxMC4xNTM0IDIwLjk1MzYgMTIuNDk4OSAxOS41MzU0IDEzLjgwOCAxNy40MDgxSDExLjA4MDdDMTAuMTUzNCAxOC4yODA4IDguODQ0MzIgMTguODI2MyA3LjQ4MDY4IDE4LjgyNjNDNC41MzUyMyAxOC44MjYzIDIuMTg5NzcgMTYuNDI2MyAyLjE4OTc3IDEzLjUzNTRDMi4xODk3NyAxMC42NDQ1IDQuNTg5NzcgOC4yNDQ0NiA3LjQ4MDY4IDguMjQ0NDZaIiBmaWxsPSIjRkZGRkZGIi8+CjxwYXRoIGQ9Ik0yNC44MjU2IDEwLjg2MjlDMjMuODQzOCAxMC4wOTkzIDIyLjY0MzggOS42MDg0IDIxLjI4MDEgOS42MDg0QzE4LjE3MTEgOS42MDg0IDE1LjYwNzQgMTIuMTcyIDE1LjYwNzQgMTUuMjgxMUMxNS42MDc0IDE4LjM5MDIgMTguMTcxMSAyMC45NTM5IDIxLjI4MDEgMjAuOTUzOUMyMi4zMTY1IDIwLjk1MzkgMjMuMjk4MyAyMC42ODExIDI0LjExNjUgMjAuMTkwMlYxNy40MDg0QzIzLjQ2MiAxOC4yODExIDIyLjQyNTYgMTguODI2NiAyMS4yODAxIDE4LjgyNjZDMTkuMzE2NSAxOC44MjY2IDE3LjczNDcgMTcuMjQ0OCAxNy43MzQ3IDE1LjI4MTFDMTcuNzM0NyAxMy4zMTc1IDE5LjMxNjUgMTEuNzM1NyAyMS4yODAxIDExLjczNTdDMjMuMjQzOCAxMS43MzU3IDI0LjgyNTYgMTMuMzE3NSAyNC44MjU2IDE1LjI4MTFWMTguMTE3NUgyNi45NTI5VjkuNjYyOTRIMjQuODI1NlYxMC44NjI5WiIgZmlsbD0iI0ZGRkZGRiIvPgo8cGF0aCBkPSJNMjYuOTUzNCAxOC44MjYySDI0LjgyNjJWMjAuOTUzNEgyNi45NTM0VjE4LjgyNjJaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik0zMS4yMDkzIDkuNjYyMTFIMjkuMDgyVjIxLjAwNzZIMzEuMjA5M1Y5LjY2MjExWiIgZmlsbD0iI0ZGRkZGRiIvPgo8cGF0aCBkPSJNNTEuNzcxOCA4Ljk1MzEySDQ5LjY0NDVWMjEuMDA3N0g1MS43NzE4VjguOTUzMTJaIiBmaWxsPSIjRkZGRkZGIi8+CjxwYXRoIGQ9Ik0zOS43MTgxIDkuNjYzMDlDMzguNDYzNiA5LjY2MzA5IDM3LjMxODEgMTAuMjA4NSAzNi41NTQ1IDExLjA4MTNDMzUuNzkwOCAxMC4yMDg1IDM0LjY0NTQgOS42NjMwOSAzMy4zOTA4IDkuNjYzMDlDMzIuODk5OSA5LjY2MzA5IDMyLjQwOSA5Ljc3MjE4IDMxLjk3MjcgOS44ODEyN1YxMi4zMzU4QzMyLjM1NDUgMTIuMDA4NSAzMi44NDU0IDExLjc5MDQgMzMuMzkwOCAxMS43OTA0QzM0LjUzNjMgMTEuNzkwNCAzNS41MTgxIDEyLjcxNzYgMzUuNTE4MSAxMy45MTc2VjIxLjAwODVIMzcuNjQ1NFYxMy45MTc2QzM3LjY0NTQgMTIuNzcyMiAzOC41NzI3IDExLjc5MDQgMzkuNzcyNyAxMS43OTA0QzQwLjkxODEgMTEuNzkwNCA0MS44OTk5IDEyLjcxNzYgNDEuODk5OSAxMy45MTc2VjIxLjAwODVINDQuMDI3MlYxMy45MTc2QzQzLjk3MjcgMTEuNTcyMiA0Mi4wNjM2IDkuNjYzMDkgMzkuNzE4MSA5LjY2MzA5WiIgZmlsbD0iI0ZGRkZGRiIvPgo8cGF0aCBkPSJNNzMuMDQ1MiA5LjY2MjExSDcwLjkxOFYyMS4wMDc2SDczLjA0NTJWOS42NjIxMVoiIGZpbGw9IiNGRkZGRkYiLz4KPHBhdGggZD0iTTY4Ljc4OTQgOS42NjIxMUg2Ni42NjIxVjIxLjAwNzZINjguNzg5NFY5LjY2MjExWiIgZmlsbD0iI0ZGRkZGRiIvPgo8cGF0aCBkPSJNNzUuMTcyMSA5LjY2MjExQzc0LjY4MTIgOS42NjIxMSA3NC4xOTAzIDkuNzcxMiA3My43NTM5IDkuODgwMjlWMTIuMzM0OEM3NC4xMzU3IDEyLjAwNzYgNzQuNjI2NiAxMS43ODk0IDc1LjE3MjEgMTEuNzg5NEM3Ni4zMTc1IDExLjc4OTQgNzcuMjk5NCAxMi43MTY3IDc3LjI5OTQgMTMuOTE2N1YyMS4wMDc2SDc5LjQyNjZWMTMuOTE2N0M3OS40MjY2IDExLjU3MTIgNzcuNTE3NSA5LjY2MjExIDc1LjE3MjEgOS42NjIxMVoiIGZpbGw9IiNGRkZGRkYiLz4KPHBhdGggZD0iTTgzLjY4IDYuMTE3MTlIODEuNTUyN1YyMS4wMDgxSDgzLjY4VjYuMTE3MTlaIiBmaWxsPSIjRkZGRkZGIi8+CjxwYXRoIGQ9Ik02MC4yNzk1IDkuNjYzMDlDNTkuNzg4NiA5LjY2MzA5IDU5LjI5NzcgOS43NzIxOCA1OC44NjEzIDkuODgxMjdWMTIuMzM1OEM1OS4yNDMxIDEyLjAwODUgNTkuNzM0MSAxMS43OTA0IDYwLjI3OTUgMTEuNzkwNEM2MS40MjUgMTEuNzkwNCA2Mi40MDY4IDEyLjcxNzYgNjIuNDA2OCAxMy45MTc2VjIxLjAwODVINjQuNTM0MVYxMy45MTc2QzY0LjUzNDEgMTEuNTcyMiA2Mi42MjUgOS42NjMwOSA2MC4yNzk1IDkuNjYzMDlaIiBmaWxsPSIjRkZGRkZGIi8+CjxwYXRoIGQ9Ik00Ni4wOTk2IDYuMTE3MTlWOC4yNDQ0Nkg1Ni4wMjY5VjIwLjk1MzZINTguMTU0MlY4LjI0NDQ2VjYuMTE3MTlINDYuMDk5NloiIGZpbGw9IiNGRkZGRkYiLz4KPHBhdGggZD0iTTg1LjUzNTkgMTUuMjgwM0w5MC44MjY5IDkuNjYyMTFIODcuODgxNEw4NC4zMzU5IDEzLjQyNTdWMTcuMDgwM0w4OC4yNjMyIDIwLjk1M0g5MS4yNjMyTDg1LjUzNTkgMTUuMjgwM1oiIGZpbGw9IiNGRkZGRkYiLz4KPHBhdGggZD0iTTY2Ljk4NDcgNS45NTI4NEw2NS40ODA1IDcuNDU3MDNMNjYuOTg0NyA4Ljk2MTIzTDY4LjQ4ODkgNy40NTcwM0w2Ni45ODQ3IDUuOTUyODRaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik02OS43OTc0IDMuNzA3NDlMNjguMTkxNCA0LjYzNDc3TDY5LjExODcgNi4yNDA4TDcwLjcyNDcgNS4zMTM1M0w2OS43OTc0IDMuNzA3NDlaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik02Ny41MjU5IDEuNTI1Mkw2NS45OTggMS45MzQ1N0w2Ni40MDc0IDMuNDYyNDVMNjcuOTM1MyAzLjA1MzA3TDY3LjUyNTkgMS41MjUyWiIgZmlsbD0iI0YyNEEwMCIvPgo8L2c+CjxkZWZzPgo8Y2xpcFBhdGggaWQ9ImNsaXAwXzE0OF8xNDEzMyI+CjxyZWN0IHdpZHRoPSI5MiIgaGVpZ2h0PSIyMi40ODg5IiBmaWxsPSJ3aGl0ZSIvPgo8L2NsaXBQYXRoPgo8L2RlZnM+Cjwvc3ZnPgo=" alt="CamThink">
@@ -3510,17 +3548,19 @@ document.querySelectorAll('#langSegPreview [data-lang], #langSegSys [data-lang]'
 
 syncGuideUI();
 
-/* —— Production shell: desktop layout via matchMedia (no preview bar) —— */
+/* —— Production shell: keep body.desktop in sync with viewport (resize / rotate) —— */
 (function(){
-  const apply=()=>{
-    const desk=window.matchMedia('(min-width:960px)').matches;
+  const mq=window.matchMedia('(min-width:960px)');
+  const applyShellLayout=(redraw)=>{
+    const desk=mq.matches;
     document.body.classList.toggle('desktop', desk);
     document.body.classList.toggle('phone', !desk);
+    document.body.classList.remove('tablet');
     if(typeof relocateEdChrome==='function') relocateEdChrome();
-    if(typeof redrawAll==='function') redrawAll();
+    if(redraw && typeof redrawAll==='function') redrawAll();
   };
-  apply();
-  window.matchMedia('(min-width:960px)').addEventListener('change', apply);
+  applyShellLayout(false);
+  mq.addEventListener('change', ()=>applyShellLayout(true));
 })();
 
 /* Soft keyboard / visualViewport — floating chrome above keyboard; no top/bottom crush. */
