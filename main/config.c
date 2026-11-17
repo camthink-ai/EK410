@@ -163,6 +163,49 @@ int mqtt_default_port(int transport)
     return (transport == MQTT_TRANSPORT_TLS) ? 8883 : 1883;
 }
 
+/* MQTTS custom CA — BSS, not stack (see MQTT_CA_PEM_MAX note in config.h). */
+static char s_mqtt_ca[MQTT_CA_PEM_MAX];
+static bool s_mqtt_ca_loaded;
+
+static void mqtt_ca_load_from_nvs(void)
+{
+    nvs_handle_t h;
+    s_mqtt_ca[0] = '\0';
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
+        s_mqtt_ca_loaded = true;
+        return;
+    }
+    size_t len = sizeof(s_mqtt_ca);
+    nvs_get_str(h, "mqca", s_mqtt_ca, &len);
+    nvs_close(h);
+    s_mqtt_ca_loaded = true;
+}
+
+const char *cfg_mqtt_ca_pem(void)
+{
+    if (!s_mqtt_ca_loaded) {
+        mqtt_ca_load_from_nvs();
+    }
+    return s_mqtt_ca;
+}
+
+void cfg_set_mqtt_ca_pem(const char *pem)
+{
+    if (!pem) {
+        pem = "";
+    }
+    strlcpy(s_mqtt_ca, pem, sizeof(s_mqtt_ca));
+    s_mqtt_ca_loaded = true;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_str(h, "mqca", s_mqtt_ca);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "mqtt CA PEM saved (%u bytes)", (unsigned)strlen(s_mqtt_ca));
+}
+
 void cfg_get_mqtt_attr(mqttAttr_t *mqtt)
 {
     nvs_handle_t h;
@@ -170,6 +213,7 @@ void cfg_get_mqtt_attr(mqttAttr_t *mqtt)
     mqtt->port = 1883;
     mqtt->qos = 1;
     mqtt->transport = MQTT_TRANSPORT_TCP;
+    mqtt->tlsVerify = true;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
         return;
     }
@@ -186,6 +230,9 @@ void cfg_get_mqtt_attr(mqttAttr_t *mqtt)
     }
     if (nvs_get_i32(h, "tls", &v) == ESP_OK) {
         mqtt->transport = (v == MQTT_TRANSPORT_TLS) ? MQTT_TRANSPORT_TLS : MQTT_TRANSPORT_TCP;
+    }
+    if (nvs_get_i32(h, "mqverify", &v) == ESP_OK) {
+        mqtt->tlsVerify = (v != 0);
     }
     len = sizeof(mqtt->username);
     nvs_get_str(h, "mquser", mqtt->username, &len);
@@ -219,11 +266,14 @@ void cfg_set_mqtt_attr(const mqttAttr_t *mqtt)
     ESP_ERROR_CHECK(nvs_set_i32(h, "port", (int32_t)port));
     ESP_ERROR_CHECK(nvs_set_i32(h, "qos", (int32_t)mqtt->qos));
     ESP_ERROR_CHECK(nvs_set_i32(h, "tls", (int32_t)transport));
+    ESP_ERROR_CHECK(nvs_set_i32(h, "mqverify", mqtt->tlsVerify ? 1 : 0));
     ESP_ERROR_CHECK(nvs_set_str(h, "mquser", mqtt->username));
     ESP_ERROR_CHECK(nvs_set_str(h, "mqpass", mqtt->password));
     ESP_ERROR_CHECK(nvs_commit(h));
     nvs_close(h);
-    ESP_LOGI(TAG, "mqtt attr saved (%s://%s:%d)", mqtt_transport_str(transport), mqtt->host, port);
+    ESP_LOGI(TAG, "mqtt attr saved (%s://%s:%d verify=%d)",
+             mqtt_transport_str(transport), mqtt->host, port,
+             mqtt->tlsVerify ? 1 : 0);
 }
 
 void cfg_get_dev_info(devInfo_t *info)
@@ -303,12 +353,27 @@ int img_quality_from_str(const char *s)
     return IMG_QUALITY_QUALITY;
 }
 
+static int clamp_wake_sec(int sec)
+{
+    if (sec <= 0) {
+        return POWER_WAKE_SEC_DEFAULT;
+    }
+    if (sec < POWER_WAKE_SEC_MIN) {
+        return POWER_WAKE_SEC_MIN;
+    }
+    if (sec > POWER_WAKE_SEC_MAX) {
+        return POWER_WAKE_SEC_MAX;
+    }
+    return sec;
+}
+
 void cfg_get_power_attr(powerAttr_t *p)
 {
     nvs_handle_t h;
     memset(p, 0, sizeof(*p));
     p->mode = POWER_MODE_ALWAYS;
     p->sleepMin = 0;
+    p->wakeSec = POWER_WAKE_SEC_DEFAULT;
     p->batteryAdcGpio = 0;
     p->batteryDivMv = 4200;
     p->ledGpio = 0;
@@ -319,6 +384,9 @@ void cfg_get_power_attr(powerAttr_t *p)
     int32_t v = 0;
     if (nvs_get_i32(h, "sleepmin", &v) == ESP_OK) {
         p->sleepMin = (int)v;
+    }
+    if (nvs_get_i32(h, "wakesec", &v) == ESP_OK) {
+        p->wakeSec = clamp_wake_sec((int)v);
     }
     if (nvs_get_i32(h, "pwrmode", &v) == ESP_OK) {
         if (v == POWER_MODE_CYCLE || v == POWER_MODE_HIBERNATE) {
@@ -358,11 +426,13 @@ void cfg_set_power_attr(const powerAttr_t *p)
     if (mode == POWER_MODE_CYCLE && sleepMin < 1) {
         sleepMin = 60;
     }
+    int wakeSec = clamp_wake_sec(p->wakeSec);
     int imageQuality =
         (p->imageQuality == IMG_QUALITY_SPEED) ? IMG_QUALITY_SPEED : IMG_QUALITY_QUALITY;
     ESP_ERROR_CHECK(nvs_open(NS, NVS_READWRITE, &h));
     ESP_ERROR_CHECK(nvs_set_i32(h, "pwrmode", (int32_t)mode));
     ESP_ERROR_CHECK(nvs_set_i32(h, "sleepmin", (int32_t)sleepMin));
+    ESP_ERROR_CHECK(nvs_set_i32(h, "wakesec", (int32_t)wakeSec));
     ESP_ERROR_CHECK(nvs_set_i32(h, "batadc", (int32_t)p->batteryAdcGpio));
     ESP_ERROR_CHECK(nvs_set_i32(h, "batmv", (int32_t)p->batteryDivMv));
     ESP_ERROR_CHECK(nvs_set_i32(h, "ledgpio", (int32_t)p->ledGpio));
@@ -370,9 +440,88 @@ void cfg_set_power_attr(const powerAttr_t *p)
     ESP_ERROR_CHECK(nvs_set_str(h, "wakeurl", p->wakeUrl));
     ESP_ERROR_CHECK(nvs_commit(h));
     nvs_close(h);
-    ESP_LOGI(TAG, "power attr saved (mode=%s, sleep=%dmin, img=%s, wakeUrl=%s)",
-             power_mode_str(mode), sleepMin, img_quality_str(imageQuality),
+    ESP_LOGI(TAG, "power attr saved (mode=%s, sleep=%dmin, wake=%ds, img=%s, wakeUrl=%s)",
+             power_mode_str(mode), sleepMin, wakeSec, img_quality_str(imageQuality),
              p->wakeUrl[0] ? p->wakeUrl : "-");
+}
+
+bool cfg_ble_prov_boot_get(void)
+{
+    nvs_handle_t h;
+    int32_t v = 0;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    nvs_get_i32(h, "bleboot", &v);
+    nvs_close(h);
+    return v != 0;
+}
+
+void cfg_ble_prov_boot_set(bool on)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_i32(h, "bleboot", on ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "bleboot=%d", on ? 1 : 0);
+}
+
+bool cfg_softap_pending_get(void)
+{
+    nvs_handle_t h;
+    int32_t v = 0;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    nvs_get_i32(h, "apnding", &v);
+    nvs_close(h);
+    return v != 0;
+}
+
+void cfg_softap_pending_set(bool on)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_i32(h, "apnding", on ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+int cfg_ble_idle_sec_get(void)
+{
+    nvs_handle_t h;
+    int32_t v = 0;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
+        return 0;
+    }
+    nvs_get_i32(h, "bleidle", &v);
+    nvs_close(h);
+    if (v < 0) {
+        v = 0;
+    }
+    if (v > 24 * 3600) {
+        v = 24 * 3600;
+    }
+    return (int)v;
+}
+
+void cfg_ble_idle_sec_set(int sec)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    if (sec < 0) {
+        sec = 0;
+    }
+    nvs_set_i32(h, "bleidle", sec);
+    nvs_commit(h);
+    nvs_close(h);
 }
 
 void cfg_factory_reset(void)

@@ -12,6 +12,7 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "battery.h"
 #include "board_ioext.h"
@@ -22,6 +23,8 @@
 #define VBAT_ADC_CHANNEL    ADC_CHANNEL_2 /* GPIO4 on ESP32-C61 */
 #define VBAT_SETTLE_MS      50
 #define VBAT_SAMPLES        8
+
+static SemaphoreHandle_t s_batMutex;
 
 typedef struct {
     uint16_t mv;
@@ -101,46 +104,59 @@ int battery_read_mv(void)
     if (!board_ioext_ready()) {
         return -1;
     }
-    if (ensure_adc() != 0) {
-        return -1;
-    }
-
-    if (board_ioext_vbat_dect_en(true) != ESP_OK) {
-        return -1;
-    }
-    TickType_t settle = pdMS_TO_TICKS(VBAT_SETTLE_MS);
-    vTaskDelay(settle ? settle : 1);
-
-    int sum = 0;
-    int valid = 0;
-    for (int i = 0; i < VBAT_SAMPLES; i++) {
-        int raw = 0;
-        if (adc_oneshot_read(s_adc, VBAT_ADC_CHANNEL, &raw) != ESP_OK) {
-            continue;
+    if (!s_batMutex) {
+        s_batMutex = xSemaphoreCreateMutex();
+        if (!s_batMutex) {
+            return -1;
         }
-        int pin_mv = 0;
-        if (s_cali) {
-            if (adc_cali_raw_to_voltage(s_cali, raw, &pin_mv) != ESP_OK) {
+    }
+    if (xSemaphoreTake(s_batMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return -1;
+    }
+    int vbat = -1;
+    do {
+        if (ensure_adc() != 0) {
+            break;
+        }
+        if (board_ioext_vbat_dect_en(true) != ESP_OK) {
+            break;
+        }
+        TickType_t settle = pdMS_TO_TICKS(VBAT_SETTLE_MS);
+        vTaskDelay(settle ? settle : 1);
+
+        int sum = 0;
+        int valid = 0;
+        for (int i = 0; i < VBAT_SAMPLES; i++) {
+            int raw = 0;
+            if (adc_oneshot_read(s_adc, VBAT_ADC_CHANNEL, &raw) != ESP_OK) {
                 continue;
             }
-        } else {
-            /* Fallback: 12-bit @ 12dB ≈ 0..3300 mV */
-            pin_mv = raw * 3300 / 4095;
+            int pin_mv = 0;
+            if (s_cali) {
+                if (adc_cali_raw_to_voltage(s_cali, raw, &pin_mv) != ESP_OK) {
+                    continue;
+                }
+            } else {
+                /* Fallback: 12-bit @ 12dB ≈ 0..3300 mV */
+                pin_mv = raw * 3300 / 4095;
+            }
+            sum += pin_mv;
+            valid++;
         }
-        sum += pin_mv;
-        valid++;
-    }
-    board_ioext_vbat_dect_en(false);
+        board_ioext_vbat_dect_en(false);
 
-    if (valid == 0) {
-        return -1;
-    }
-    int vbat = (sum / valid) * BAT_DIV_MULT;
-    if (vbat < 0 || vbat > 4500) {
-        ESP_LOGW(TAG, "unreasonable %d mV", vbat);
-        return -1;
-    }
-    ESP_LOGI(TAG, "VBAT %d mV (n=%d)", vbat, valid);
+        if (valid == 0) {
+            break;
+        }
+        vbat = (sum / valid) * BAT_DIV_MULT;
+        if (vbat < 0 || vbat > 4500) {
+            ESP_LOGW(TAG, "unreasonable %d mV", vbat);
+            vbat = -1;
+            break;
+        }
+        ESP_LOGI(TAG, "VBAT %d mV (n=%d)", vbat, valid);
+    } while (0);
+    xSemaphoreGive(s_batMutex);
     return vbat;
 }
 

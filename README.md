@@ -9,7 +9,7 @@
 | **Product** | EK410 · CamThink E-Ink Display |
 | **SoC** | ESP32-C61HR2 (16MB flash, 2MB PSRAM) |
 | **Panel** | 7.09″ E Ink Spectra 6 · 1600×1200 · 6 colors |
-| **Firmware** | See [`VERSION`](VERSION) · currently **1.2.1** |
+| **Firmware** | See [`VERSION`](VERSION) · currently **1.2.2** |
 | **Platform** | [NeoMind](https://wiki.camthink.ai) · device type `ek410_Eink` |
 
 ---

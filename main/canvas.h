@@ -16,6 +16,7 @@ extern "C" {
 #define CANVAS_MAX_ITEMS 48
 #define CANVAS_TEXT_MAX 192 /* UTF-8; ~60 CJK or 190 ASCII */
 #define CANVAS_QR_SLOTS 2
+#define CANVAS_TEXT_SCALE_MAX 13 /* render_text / canvas text; was 8 */
 
 /* QR encoder state is embedded in the canvas struct so a queued render can
  * not be corrupted by the next parse (version capped at 10: ~200 char URLs). */

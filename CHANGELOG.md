@@ -8,6 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ---
 
+## [1.2.2] — 2026-11-16
+
+### Added
+
+- Persist last successful panel frame in flash (`lastfrm` partition, 960000B native 4bpp).
+- HTTP `GET /api/v1/display/getLastFrameMeta` and `GET /api/v1/display/lastFrame`.
+- SoftAP: auto-load current panel into content preview; "Load from panel" button.
+
+### 中文
+
+- 成功刷屏后把当前画面写入 Flash；Web/API 可读取并预览。
+
+---
+
 ## [1.2.1] — 2026-11-16
 
 ### Added

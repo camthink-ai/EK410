@@ -71,14 +71,15 @@ body.kb-open .mask{
 .preview-bar{display:none !important}
 
 /* ===== App shell ===== */
-.app{min-height:calc(100vh - 40px); display:flex; flex-direction:column}
+.app{min-height:100%; display:flex; flex-direction:column}
+body.desktop{overflow:hidden}
 body.desktop .app{
-  flex-direction:row; align-items:stretch; max-width:1440px; margin:0 auto;
-  min-height:calc(100vh - 40px);
+  flex-direction:row; align-items:stretch; width:100%; max-width:none; margin:0;
+  min-height:100%; height:100%;
 }
 body.desktop .rail{
   display:flex; width:220px; flex:0 0 220px; flex-direction:column;
-  padding:28px 18px; background:var(--ink); color:#fff;
+  padding:28px 18px; background:var(--ink); color:#fff; min-height:100%;
 }
 body:not(.desktop) .rail{display:none}
 .rail .logo{width:132px; margin-bottom:28px}
@@ -98,12 +99,14 @@ body:not(.desktop) .rail{display:none}
 body.phone .main{max-width:420px; margin:0 auto; width:100%}
 body.tablet .main{max-width:720px; margin:0 auto; width:100%}
 body.desktop .main{
-  padding:28px 32px 32px;
-  display:flex; flex-direction:column; min-height:calc(100vh - 40px);
+  padding:24px 28px 28px;
+  display:flex; flex-direction:column; min-height:100%; height:100%;
+  overflow:auto;
 }
-body.desktop .main.is-display{padding:0; background:var(--bg)}
+body.desktop .main.is-display{padding:0; background:var(--bg); overflow:hidden}
 
-.page[hidden]{display:none}
+/* Must beat page-specific display:flex rules (e.g. desktop #page-overview). */
+.page[hidden]{display:none !important}
 .btn{
   box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
   height:36px; padding:0 16px; border-radius:999px; font:inherit; font-size:13px; line-height:1;
@@ -144,13 +147,58 @@ body.desktop .banner{padding:14px 16px 14px 14px; border-radius:18px}
 body.desktop .main.is-display .banner{margin:16px 16px 12px}
 body:not(.desktop) .main.is-display .banner{margin-bottom:12px}
 
-/* ===== Overview: calm product surface (no glow / no rules) ===== */
+/* ===== Overview: device card + current panel snapshot ===== */
+.ov-grid{display:flex; flex-direction:column; gap:12px}
+body.desktop .ov-grid{
+  flex:1; min-height:0; display:grid;
+  grid-template-columns:minmax(300px, 360px) minmax(0, 1fr);
+  gap:20px; align-items:stretch;
+}
+body.desktop #page-overview:not([hidden]){
+  display:flex; flex-direction:column; flex:1; min-height:0;
+}
+.ov-panel{
+  border-radius:20px; background:var(--surface); color:var(--text);
+  padding:14px 14px 16px;
+  box-shadow:0 1px 0 rgba(9,14,23,.04);
+  display:flex; flex-direction:column; gap:10px; min-height:0;
+}
+body.desktop .ov-panel{border-radius:24px; padding:16px 18px 18px}
+.ov-panel-head{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+.ov-panel-head b{
+  font-size:13px; font-weight:600; color:var(--ink); letter-spacing:-.01em;
+}
+.ov-panel-head .ov-panel-meta{
+  flex:1; min-width:0; color:var(--sub); font-size:12px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.ov-panel-frame{
+  position:relative; width:100%;
+  aspect-ratio:1600 / 1200;
+  border-radius:14px; background:#e6e8ed; overflow:hidden;
+  display:flex; align-items:center; justify-content:center;
+}
+body.desktop .ov-panel-frame{
+  flex:1; aspect-ratio:auto; min-height:0; height:100%;
+}
+.ov-panel-frame canvas{
+  display:block; width:100%; height:100%;
+  object-fit:contain; background:#dddfe3;
+}
+.ov-panel-empty{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  padding:20px; text-align:center; color:var(--sub); font-size:13px; line-height:1.45;
+  background:#e6e8ed;
+}
+.ov-panel-empty[hidden]{display:none !important}
 .hero{
   border-radius:20px; background:var(--surface); color:var(--text);
   padding:24px 22px 22px;
   box-shadow:0 1px 0 rgba(9,14,23,.04);
 }
-body.desktop .hero{padding:32px 36px; border-radius:24px}
+body.desktop .hero{padding:28px 28px; border-radius:24px; height:100%; align-self:stretch}
 .hero-logo{width:120px; display:block}
 /* dark logo on light card */
 .hero-logo.light-bg{filter:none}
@@ -206,7 +254,7 @@ body:not(.desktop) .net-card{
   overflow:hidden;
 }
 body.desktop .net-stack{
-  display:grid; grid-template-columns:1.1fr .9fr; gap:0;
+  display:grid; grid-template-columns:1fr 1fr; gap:0;
   background:var(--surface); border-radius:24px; border:1px solid rgba(9,14,23,.05);
   overflow:hidden; min-height:560px;
 }
@@ -419,7 +467,7 @@ body.desktop .disp-head .push{width:auto; margin-left:auto}
 
 .mode-view[hidden]{display:none !important}
 .display-root{display:flex; flex-direction:column; gap:12px; flex:1; min-height:0}
-body.desktop .main.is-display .display-root{gap:0; height:calc(100vh - 40px - 57px); min-height:0}
+body.desktop .main.is-display .display-root{gap:0; height:100%; min-height:0; flex:1}
 
 /* Shared stage (light) */
 .stage{
@@ -442,7 +490,8 @@ body.desktop .stage{border-radius:0; padding:20px 24px 24px; min-height:0; backg
   border-radius:8px; background:#f6f4ef; overflow:hidden;
   box-shadow:0 1px 0 rgba(9,14,23,.06), 0 18px 40px rgba(9,14,23,.08);
 }
-body.desktop .epd-frame{max-height:calc(100vh - 200px); width:auto; height:100%; max-width:100%}
+body.desktop .epd-frame{max-height:100%; width:auto; height:100%; max-width:100%}
+body.desktop #page-display:not([hidden]){display:flex; flex-direction:column; flex:1; min-height:0; height:100%}
 .epd-frame canvas, .epd-frame .frame-fill{
   display:block; width:100%; height:100%;
 }
@@ -455,6 +504,7 @@ body.desktop .epd-frame{max-height:calc(100vh - 200px); width:auto; height:100%;
   pointer-events:none; position:absolute; inset:0; z-index:2;
   opacity:0; transition:opacity .15s;
 }
+.layout-guide, .layout-guide *{pointer-events:none !important}
 .layout-guide.show{opacity:1}
 .layout-guide .safe{
   position:absolute; inset:6%; border:1px dashed rgba(9,14,23,.28); border-radius:2px;
@@ -468,7 +518,8 @@ body.desktop .epd-frame{max-height:calc(100vh - 200px); width:auto; height:100%;
   position:absolute; left:8px; bottom:8px; padding:3px 8px; border-radius:6px;
   background:rgba(9,14,23,.72); color:#fff; font-size:10px; font-family:system-ui,-apple-system,sans-serif;
 }
-#pv{touch-action:none; cursor:grab; display:block; width:100%; height:100%}
+#pv{touch-action:none; cursor:grab; display:block; width:100%; height:100%; position:relative; z-index:1}
+.epd-frame{isolation:isolate}
 
 .side-panel{
   background:var(--surface); border-radius:20px; padding:8px 0 16px;
@@ -784,6 +835,18 @@ body.desktop .sys-lang-wrap{justify-content:flex-start}
   border:0; background:transparent; height:30px; padding:0 14px; border-radius:10px;
   font:inherit; font-size:13px; line-height:1; color:var(--sub); cursor:pointer}
 .mq-transport button.on{background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.mq-tls-panel{margin:4px 18px 8px; padding:12px 14px; border-radius:14px; background:#f5f6f8}
+body.desktop .mq-tls-panel{margin:4px 0 12px}
+.mq-tls-panel .card-lede{padding:0; margin:0 0 10px}
+.mq-tls-panel .row{padding:0; min-height:36px}
+.mq-tls-panel textarea.ghost{
+  width:100%; min-height:96px; margin-top:6px; padding:10px 12px;
+  border:1px solid var(--line); border-radius:12px; background:#fff;
+  text-align:left; resize:vertical; font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--text); box-sizing:border-box
+}
+.mq-tls-panel textarea.ghost:focus{outline:2px solid rgba(242,74,0,.25); outline-offset:1px}
+.mq-tls-panel[data-verify="0"] textarea.ghost{opacity:.45; pointer-events:none}
 .meta-val{text-align:right; color:var(--sub)}
 body.desktop .meta-val{text-align:left}
 .mode-cards{display:flex; flex-direction:column; gap:8px; padding:4px 18px 8px}
@@ -832,29 +895,42 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
 
     <!-- OVERVIEW -->
     <section class="page" id="page-overview">
-      <div class="hero">
-        <img class="hero-logo light-bg" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iOTIiIGhlaWdodD0iMjgiIHZpZXdCb3g9IjAgMCA5MiAyOCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzE0OF8xNDEzMykiPgo8cGF0aCBkPSJNNy40ODA2OCA4LjI0NDQ2QzguODk4ODYgOC4yNDQ0NiAxMC4xNTM0IDguNzg5OTEgMTEuMDgwNyA5LjY2MjY0SDEzLjgwOEMxMi40OTg5IDcuNTM1MzcgMTAuMTUzNCA2LjExNzE5IDcuNDgwNjggNi4xMTcxOUMzLjM4OTc3IDYuMTE3MTkgMC4wNjI1IDkuNDQ0NDYgMC4wNjI1IDEzLjUzNTRDMC4wNjI1IDE3LjYyNjMgMy4zODk3NyAyMC45NTM2IDcuNDgwNjggMjAuOTUzNkMxMC4xNTM0IDIwLjk1MzYgMTIuNDk4OSAxOS41MzU0IDEzLjgwOCAxNy40MDgxSDExLjA4MDdDMTAuMTUzNCAxOC4yODA4IDguODQ0MzIgMTguODI2MyA3LjQ4MDY4IDE4LjgyNjNDNC41MzUyMyAxOC44MjYzIDIuMTg5NzcgMTYuNDI2MyAyLjE4OTc3IDEzLjUzNTRDMi4xODk3NyAxMC42NDQ1IDQuNTg5NzcgOC4yNDQ0NiA3LjQ4MDY4IDguMjQ0NDZaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik0yNC44MjU2IDEwLjg2MjlDMjMuODQzOCAxMC4wOTkzIDIyLjY0MzggOS42MDg0IDIxLjI4MDEgOS42MDg0QzE4LjE3MTEgOS42MDg0IDE1LjYwNzQgMTIuMTcyIDE1LjYwNzQgMTUuMjgxMUMxNS42MDc0IDE4LjM5MDIgMTguMTcxMSAyMC45NTM5IDIxLjI4MDEgMjAuOTUzOUMyMi4zMTY1IDIwLjk1MzkgMjMuMjk4MyAyMC42ODExIDI0LjExNjUgMjAuMTkwMlYxNy40MDg0QzIzLjQ2MiAxOC4yODExIDIyLjQyNTYgMTguODI2NiAyMS4yODAxIDE4LjgyNjZDMTkuMzE2NSAxOC44MjY2IDE3LjczNDcgMTcuMjQ0OCAxNy43MzQ3IDE1LjI4MTFDMTcuNzM0NyAxMy4zMTc1IDE5LjMxNjUgMTEuNzM1NyAyMS4yODAxIDExLjczNTdDMjMuMjQzOCAxMS43MzU3IDI0LjgyNTYgMTMuMzE3NSAyNC44MjU2IDE1LjI4MTFWMTguMTE3NUgyNi45NTI5VjkuNjYyOTRIMjQuODI1NlYxMC44NjI5WiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNMjYuOTUzNCAxOC44MjYySDI0LjgyNjJWMjAuOTUzNEgyNi45NTM0VjE4LjgyNjJaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik0zMS4yMDkzIDkuNjYyMTFIMjkuMDgyVjIxLjAwNzZIMzEuMjA5M1Y5LjY2MjExWiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNNTEuNzcxOCA4Ljk1MzEySDQ5LjY0NDVWMjEuMDA3N0g1MS43NzE4VjguOTUzMTJaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik0zOS43MTgxIDkuNjYzMDlDMzguNDYzNiA5LjY2MzA5IDM3LjMxODEgMTAuMjA4NSAzNi41NTQ1IDExLjA4MTNDMzUuNzkwOCAxMC4yMDg1IDM0LjY0NTQgOS42NjMwOSAzMy4zOTA4IDkuNjYzMDlDMzIuODk5OSA5LjY2MzA5IDMyLjQwOSA5Ljc3MjE4IDMxLjk3MjcgOS44ODEyN1YxMi4zMzU4QzMyLjM1NDUgMTIuMDA4NSAzMi44NDU0IDExLjc5MDQgMzMuMzkwOCAxMS43OTA0QzM0LjUzNjMgMTEuNzkwNCAzNS41MTgxIDEyLjcxNzYgMzUuNTE4MSAxMy45MTc2VjIxLjAwODVIMzcuNjQ1NFYxMy45MTc2QzM3LjY0NTQgMTIuNzcyMiAzOC41NzI3IDExLjc5MDQgMzkuNzcyNyAxMS43OTA0QzQwLjkxODEgMTEuNzkwNCA0MS44OTk5IDEyLjcxNzYgNDEuODk5OSAxMy45MTc2VjIxLjAwODVINDQuMDI3MlYxMy45MTc2QzQzLjk3MjcgMTEuNTcyMiA0Mi4wNjM2IDkuNjYzMDkgMzkuNzE4MSA5LjY2MzA5WiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNNzMuMDQ1MiA5LjY2MjExSDcwLjkxOFYyMS4wMDc2SDczLjA0NTJWOS42NjIxMVoiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTY4Ljc4OTQgOS42NjIxMUg2Ni42NjIxVjIxLjAwNzZINjguNzg5NFY5LjY2MjExWiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNNzUuMTcyMSA5LjY2MjExQzc0LjY4MTIgOS42NjIxMSA3NC4xOTAzIDkuNzcxMiA3My43NTM5IDkuODgwMjlWMTIuMzM0OEM3NC4xMzU3IDEyLjAwNzYgNzQuNjI2NiAxMS43ODk0IDc1LjE3MjEgMTEuNzg5NEM3Ni4zMTc1IDExLjc4OTQgNzcuMjk5NCAxMi43MTY3IDc3LjI5OTQgMTMuOTE2N1YyMS4wMDc2SDc5LjQyNjZWMTMuOTE2N0M3OS40MjY2IDExLjU3MTIgNzcuNTE3NSA5LjY2MjExIDc1LjE3MjEgOS42NjIxMVoiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTgzLjY4IDYuMTE3MTlIODEuNTUyN1YyMS4wMDgxSDgzLjY4VjYuMTE3MTlaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik02MC4yNzk1IDkuNjYzMDlDNTkuNzg4NiA5LjY2MzA5IDU5LjI5NzcgOS43NzIxOCA1OC44NjEzIDkuODgxMjdWMTIuMzM1OEM1OS4yNDMxIDEyLjAwODUgNTkuNzM0MSAxMS43OTA0IDYwLjI3OTUgMTEuNzkwNEM2MS40MjUgMTEuNzkwNCA2Mi40MDY4IDEyLjcxNzYgNjIuNDA2OCAxMy45MTc2VjIxLjAwODVINjQuNTM0MVYxMy45MTc2QzY0LjUzNDEgMTEuNTcyMiA2Mi42MjUgOS42NjMwOSA2MC4yNzk1IDkuNjYzMDlaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik00Ni4wOTk2IDYuMTE3MTlWOC4yNDQ0Nkg1Ni4wMjY5VjIwLjk1MzZINTguMTU0MlY4LjI0NDQ2VjYuMTE3MTlINDYuMDk5NloiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTg1LjUzNTkgMTUuMjgwM0w5MC44MjY5IDkuNjYyMTFIODcuODgxNEw4NC4zMzU5IDEzLjQyNTdWMTcuMDgwM0w4OC4yNjMyIDIwLjk1M0g5MS4yNjMyTDg1LjUzNTkgMTUuMjgwM1oiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTY2Ljk4NDcgNS45NTI4NEw2NS40ODA1IDcuNDU3MDNMNjYuOTg0NyA4Ljk2MTIzTDY4LjQ4ODkgNy40NTcwM0w2Ni45ODQ3IDUuOTUyODRaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik02OS43OTc0IDMuNzA3NDlMNjguMTkxNCA0LjYzNDc3TDY5LjExODcgNi4yNDA4TDcwLjcyNDcgNS4zMTM1M0w2OS43OTc0IDMuNzA3NDlaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik02Ny41MjU5IDEuNTI1Mkw2NS45OTggMS45MzQ1N0w2Ni40MDc0IDMuNDYyNDVMNjcuOTM1MyAzLjA1MzA3TDY3LjUyNTkgMS41MjUyWiIgZmlsbD0iI0YyNEEwMCIvPgo8L2c+CjxkZWZzPgo8Y2xpcFBhdGggaWQ9ImNsaXAwXzE0OF8xNDEzMyI+CjxyZWN0IHdpZHRoPSI5MiIgaGVpZ2h0PSIyMi40ODg5IiBmaWxsPSJ3aGl0ZSIvPgo8L2NsaXBQYXRoPgo8L2RlZnM+Cjwvc3ZnPgo=" alt="CamThink">
-        <div class="product">EK<em>410</em></div>
-        <div class="tag">7.09″ Spectra 6 · 1600×1200</div>
-        <div class="meta">
-          <span class="chip" id="chipWlan"><i></i><span data-i18n="ov.wlan_off">WLAN 未连接</span></span>
-          <span class="chip" id="chipMqtt"><i></i><span data-i18n="ov.mqtt_off">MQTT 未连接</span></span>
-          <span class="chip" id="chipAp" hidden><i></i><span data-i18n="ov.ap_on">热点开启</span></span>
+      <div class="ov-grid">
+        <div class="hero">
+          <img class="hero-logo light-bg" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iOTIiIGhlaWdodD0iMjgiIHZpZXdCb3g9IjAgMCA5MiAyOCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzE0OF8xNDEzMykiPgo8cGF0aCBkPSJNNy40ODA2OCA4LjI0NDQ2QzguODk4ODYgOC4yNDQ0NiAxMC4xNTM0IDguNzg5OTEgMTEuMDgwNyA5LjY2MjY0SDEzLjgwOEMxMi40OTg5IDcuNTM1MzcgMTAuMTUzNCA2LjExNzE5IDcuNDgwNjggNi4xMTcxOUMzLjM4OTc3IDYuMTE3MTkgMC4wNjI1IDkuNDQ0NDYgMC4wNjI1IDEzLjUzNTRDMC4wNjI1IDE3LjYyNjMgMy4zODk3NyAyMC45NTM2IDcuNDgwNjggMjAuOTUzNkMxMC4xNTM0IDIwLjk1MzYgMTIuNDk4OSAxOS41MzU0IDEzLjgwOCAxNy40MDgxSDExLjA4MDdDMTAuMTUzNCAxOC4yODA4IDguODQ0MzIgMTguODI2MyA3LjQ4MDY4IDE4LjgyNjNDNC41MzUyMyAxOC44MjYzIDIuMTg5NzcgMTYuNDI2MyAyLjE4OTc3IDEzLjUzNTRDMi4xODk3NyAxMC42NDQ1IDQuNTg5NzcgOC4yNDQ0NiA3LjQ4MDY4IDguMjQ0NDZaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik0yNC44MjU2IDEwLjg2MjlDMjMuODQzOCAxMC4wOTkzIDIyLjY0MzggOS42MDg0IDIxLjI4MDEgOS42MDg0QzE4LjE3MTEgOS42MDg0IDE1LjYwNzQgMTIuMTcyIDE1LjYwNzQgMTUuMjgxMUMxNS42MDc0IDE4LjM5MDIgMTguMTcxMSAyMC45NTM5IDIxLjI4MDEgMjAuOTUzOUMyMi4zMTY1IDIwLjk1MzkgMjMuMjk4MyAyMC42ODExIDI0LjExNjUgMjAuMTkwMlYxNy40MDg0QzIzLjQ2MiAxOC4yODExIDIyLjQyNTYgMTguODI2NiAyMS4yODAxIDE4LjgyNjZDMTkuMzE2NSAxOC44MjY2IDE3LjczNDcgMTcuMjQ0OCAxNy43MzQ3IDE1LjI4MTFDMTcuNzM0NyAxMy4zMTc1IDE5LjMxNjUgMTEuNzM1NyAyMS4yODAxIDExLjczNTdDMjMuMjQzOCAxMS43MzU3IDI0LjgyNTYgMTMuMzE3NSAyNC44MjU2IDE1LjI4MTFWMTguMTE3NUgyNi45NTI5VjkuNjYyOTRIMjQuODI1NlYxMC44NjI5WiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNMjYuOTUzNCAxOC44MjYySDI0LjgyNjJWMjAuOTUzNEgyNi45NTM0VjE4LjgyNjJaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik0zMS4yMDkzIDkuNjYyMTFIMjkuMDgyVjIxLjAwNzZIMzEuMjA5M1Y5LjY2MjExWiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNNTEuNzcxOCA4Ljk1MzEySDQ5LjY0NDVWMjEuMDA3N0g1MS43NzE4VjguOTUzMTJaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik0zOS43MTgxIDkuNjYzMDlDMzguNDYzNiA5LjY2MzA5IDM3LjMxODEgMTAuMjA4NSAzNi41NTQ1IDExLjA4MTNDMzUuNzkwOCAxMC4yMDg1IDM0LjY0NTQgOS42NjMwOSAzMy4zOTA4IDkuNjYzMDlDMzIuODk5OSA5LjY2MzA5IDMyLjQwOSA5Ljc3MjE4IDMxLjk3MjcgOS44ODEyN1YxMi4zMzU4QzMyLjM1NDUgMTIuMDA4NSAzMi44NDU0IDExLjc5MDQgMzMuMzkwOCAxMS43OTA0QzM0LjUzNjMgMTEuNzkwNCAzNS41MTgxIDEyLjcxNzYgMzUuNTE4MSAxMy45MTc2VjIxLjAwODVIMzcuNjQ1NFYxMy45MTc2QzM3LjY0NTQgMTIuNzcyMiAzOC41NzI3IDExLjc5MDQgMzkuNzcyNyAxMS43OTA0QzQwLjkxODEgMTEuNzkwNCA0MS44OTk5IDEyLjcxNzYgNDEuODk5OSAxMy45MTc2VjIxLjAwODVINDQuMDI3MlYxMy45MTc2QzQzLjk3MjcgMTEuNTcyMiA0Mi4wNjM2IDkuNjYzMDkgMzkuNzE4MSA5LjY2MzA5WiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNNzMuMDQ1MiA5LjY2MjExSDcwLjkxOFYyMS4wMDc2SDczLjA0NTJWOS42NjIxMVoiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTY4Ljc4OTQgOS42NjIxMUg2Ni42NjIxVjIxLjAwNzZINjguNzg5NFY5LjY2MjExWiIgZmlsbD0iIzA5MEUxNyIvPgo8cGF0aCBkPSJNNzUuMTcyMSA5LjY2MjExQzc0LjY4MTIgOS42NjIxMSA3NC4xOTAzIDkuNzcxMiA3My43NTM5IDkuODgwMjlWMTIuMzM0OEM3NC4xMzU3IDEyLjAwNzYgNzQuNjI2NiAxMS43ODk0IDc1LjE3MjEgMTEuNzg5NEM3Ni4zMTc1IDExLjc4OTQgNzcuMjk5NCAxMi43MTY3IDc3LjI5OTQgMTMuOTE2N1YyMS4wMDc2SDc5LjQyNjZWMTMuOTE2N0M3OS40MjY2IDExLjU3MTIgNzcuNTE3NSA5LjY2MjExIDc1LjE3MjEgOS42NjIxMVoiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTgzLjY4IDYuMTE3MTlIODEuNTUyN1YyMS4wMDgxSDgzLjY4VjYuMTE3MTlaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik02MC4yNzk1IDkuNjYzMDlDNTkuNzg4NiA5LjY2MzA5IDU5LjI5NzcgOS43NzIxOCA1OC44NjEzIDkuODgxMjdWMTIuMzM1OEM1OS4yNDMxIDEyLjAwODUgNTkuNzM0MSAxMS43OTA0IDYwLjI3OTUgMTEuNzkwNEM2MS40MjUgMTEuNzkwNCA2Mi40MDY4IDEyLjcxNzYgNjIuNDA2OCAxMy45MTc2VjIxLjAwODVINjQuNTM0MVYxMy45MTc2QzY0LjUzNDEgMTEuNTcyMiA2Mi42MjUgOS42NjMwOSA2MC4yNzk1IDkuNjYzMDlaIiBmaWxsPSIjMDkwRTE3Ii8+CjxwYXRoIGQ9Ik00Ni4wOTk2IDYuMTE3MTlWOC4yNDQ0Nkg1Ni4wMjY5VjIwLjk1MzZINTguMTU0MlY4LjI0NDQ2VjYuMTE3MTlINDYuMDk5NloiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTg1LjUzNTkgMTUuMjgwM0w5MC44MjY5IDkuNjYyMTFIODcuODgxNEw4NC4zMzU5IDEzLjQyNTdWMTcuMDgwM0w4OC4yNjMyIDIwLjk1M0g5MS4yNjMyTDg1LjUzNTkgMTUuMjgwM1oiIGZpbGw9IiMwOTBFMTciLz4KPHBhdGggZD0iTTY2Ljk4NDcgNS45NTI4NEw2NS40ODA1IDcuNDU3MDNMNjYuOTg0NyA4Ljk2MTIzTDY4LjQ4ODkgNy40NTcwM0w2Ni45ODQ3IDUuOTUyODRaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik02OS43OTc0IDMuNzA3NDlMNjguMTkxNCA0LjYzNDc3TDY5LjExODcgNi4yNDA4TDcwLjcyNDcgNS4zMTM1M0w2OS43OTc0IDMuNzA3NDlaIiBmaWxsPSIjRjI0QTAwIi8+CjxwYXRoIGQ9Ik02Ny41MjU5IDEuNTI1Mkw2NS45OTggMS45MzQ1N0w2Ni40MDc0IDMuNDYyNDVMNjcuOTM1MyAzLjA1MzA3TDY3LjUyNTkgMS41MjUyWiIgZmlsbD0iI0YyNEEwMCIvPgo8L2c+CjxkZWZzPgo8Y2xpcFBhdGggaWQ9ImNsaXAwXzE0OF8xNDEzMyI+CjxyZWN0IHdpZHRoPSI5MiIgaGVpZ2h0PSIyMi40ODg5IiBmaWxsPSJ3aGl0ZSIvPgo8L2NsaXBQYXRoPgo8L2RlZnM+Cjwvc3ZnPgo=" alt="CamThink">
+          <div class="product">EK<em>410</em></div>
+          <div class="tag">7.09″ Spectra 6 · 1600×1200</div>
+          <div class="meta">
+            <span class="chip" id="chipWlan"><i></i><span data-i18n="ov.wlan_off">WLAN 未连接</span></span>
+            <span class="chip" id="chipMqtt"><i></i><span data-i18n="ov.mqtt_off">MQTT 未连接</span></span>
+            <span class="chip" id="chipAp" hidden><i></i><span data-i18n="ov.ap_on">热点开启</span></span>
+          </div>
+          <div class="hero-bottom">
+            <div><b>192.168.4.1</b><span>IP</span></div>
+            <div><b data-i18n="ov.uptime_val">2 分钟</b><span data-i18n="ov.uptime">运行</span></div>
+            <div><b>100%</b><span>4.28 V</span></div>
+          </div>
+          <div class="hero-actions">
+            <button class="btn brand" type="button" onclick="go('network')" data-i18n="ov.cfg_net">配置网络</button>
+            <button class="btn" type="button" onclick="go('display')" data-i18n="ov.edit_screen">编辑画面</button>
+          </div>
+          <div class="detail-line">
+            <span>MAC <strong>D8:85:AC:60:38:70</strong></span>
+            <span><span data-i18n="ov.fw">固件</span> <strong>0.1.0-dev</strong></span>
+            <span><span data-i18n="ov.part">分区</span> <strong>ota_0</strong></span>
+            <span><span data-i18n="ov.sleep">休眠</span> <strong id="ovSleepVal" data-i18n="ov.sleep_on">常开</strong></span>
+          </div>
         </div>
-        <div class="hero-bottom">
-          <div><b>192.168.4.1</b><span>IP</span></div>
-          <div><b data-i18n="ov.uptime_val">2 分钟</b><span data-i18n="ov.uptime">运行</span></div>
-          <div><b>100%</b><span>4.28 V</span></div>
-        </div>
-        <div class="hero-actions">
-          <button class="btn brand" type="button" onclick="go('network')" data-i18n="ov.cfg_net">配置网络</button>
-          <button class="btn" type="button" onclick="go('display')" data-i18n="ov.edit_screen">编辑画面</button>
-        </div>
-        <div class="detail-line">
-          <span>MAC <strong>D8:85:AC:60:38:70</strong></span>
-          <span><span data-i18n="ov.fw">固件</span> <strong>0.1.0-dev</strong></span>
-          <span><span data-i18n="ov.part">分区</span> <strong>ota_0</strong></span>
-          <span><span data-i18n="ov.sleep">休眠</span> <strong id="ovSleepVal" data-i18n="ov.sleep_on">常开</strong></span>
+        <div class="ov-panel">
+          <div class="ov-panel-head">
+            <b data-i18n="ov.panel_title">当前画面</b>
+            <span class="ov-panel-meta" id="ovPanelMeta">—</span>
+            <button class="btn tiny" type="button" id="btnOvRefreshPanel" data-i18n="ov.panel_refresh">刷新</button>
+          </div>
+          <div class="ov-panel-frame">
+            <canvas id="ovPanelCanvas" width="1600" height="1200" aria-label="Current panel"></canvas>
+            <div class="ov-panel-empty" id="ovPanelEmpty" data-i18n="ov.panel_empty">尚无已保存的画面。推屏后会出现在这里。</div>
+          </div>
         </div>
       </div>
     </section>
@@ -902,7 +978,21 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
               </div>
             </div>
           </div>
-          <p class="card-lede" id="mqTlsHint" hidden data-i18n="mq.tls_hint">MQTTS 使用系统 CA 证书包校验服务器（默认端口 8883）。</p>
+          <div class="mq-tls-panel" id="mqTlsPanel" hidden data-verify="1">
+            <p class="card-lede" data-i18n="mq.tls_hint">MQTTS 默认用系统 CA 包校验（端口 8883）。可改自定义 CA，或关闭校验用于自签调试。</p>
+            <div class="row"><label data-i18n="mq.tls_verify">校验证书</label>
+              <div class="grow" style="display:flex;justify-content:flex-end">
+                <div class="mq-transport" id="mqTlsVerify">
+                  <button type="button" class="on" data-verify="1" data-i18n="mq.tls_on">开启</button>
+                  <button type="button" data-verify="0" data-i18n="mq.tls_off">关闭</button>
+                </div>
+              </div>
+            </div>
+            <p class="card-lede" id="mqTlsInsecureHint" hidden data-i18n="mq.tls_insecure_hint">已关闭校验：不验证服务器证书，仅建议内网/自签调试使用。</p>
+            <label class="card-lede" style="display:block;margin:8px 0 0" data-i18n="mq.tls_ca">自定义 CA（PEM）</label>
+            <textarea class="ghost" id="mqCaPem" spellcheck="false" autocomplete="off" data-i18n-placeholder="mq.tls_ca_ph" placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----"></textarea>
+            <p class="card-lede" style="margin-top:8px" data-i18n="mq.tls_ca_hint">可选。留空则用系统 CA 包；填写后仅信任该证书。</p>
+          </div>
           <div class="row" id="rowMqHost"><label><span data-i18n="mq.host">服务器</span><span class="req">*</span></label><input class="ghost grow" id="mqHost" placeholder="Broker IP / hostname" data-i18n-placeholder="mq.host_ph" autocomplete="off"></div>
           <div class="err-msg" id="errMqHost" data-i18n="err.host">请填写 MQTT 服务器</div>
           <div class="row" id="rowMqPort"><label><span data-i18n="mq.port">端口</span><span class="req">*</span></label><input class="ghost grow" id="mqPort" type="number" min="1" max="65535" value="1883"></div>
@@ -987,6 +1077,7 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
             </div>
             <div class="actions">
               <button class="btn" type="button" id="btnImgUrl" data-i18n="disp.load_preview">加载预览</button>
+              <button class="btn" type="button" id="btnLastFrame" data-i18n="disp.load_screen">读取当前屏</button>
               <button class="btn solid" type="button" id="btnImgPush" data-i18n="disp.show_screen">显示到屏幕</button>
             </div>
           </aside>
@@ -1046,17 +1137,17 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
               <h2 class="card-title" data-i18n="ed.layers">图层</h2>
               <div class="layers" id="layerList">
                 <button class="layer on" type="button" data-id="t1" data-type="text"
-                  data-content="CamThink EK410" data-x="120" data-y="200" data-size="42" data-color="black">
+                  data-content="CamThink EK410" data-x="120" data-y="200" data-scale="3" data-color="black">
                   <i class="swatch" style="background:#090e17"></i>
                   <span class="meta"><b data-i18n="ed.text">文字</b><small>CamThink EK410</small></span>
                 </button>
                 <button class="layer" type="button" data-id="t2" data-type="text"
-                  data-content="你好，世界" data-x="120" data-y="280" data-size="28" data-color="black">
+                  data-content="你好，世界" data-x="120" data-y="280" data-scale="2" data-color="black">
                   <i class="swatch" style="background:#090e17"></i>
                   <span class="meta"><b data-i18n="ed.text">文字</b><small data-i18n="ed.hello">你好，世界</small></span>
                 </button>
                 <button class="layer" type="button" data-id="r1" data-type="rect"
-                  data-content="" data-x="80" data-y="80" data-size="" data-color="red">
+                  data-content="" data-x="80" data-y="80" data-w="220" data-h="48" data-color="red">
                   <i class="swatch" style="background:#ef4444"></i>
                   <span class="meta"><b data-i18n="ed.swatch">色块</b><small data-i18n="ed.swatch_sub">品牌橙 → 红</small></span>
                 </button>
@@ -1190,7 +1281,7 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
             </button>
             <button type="button" class="mode-card" data-mode="cycle">
               <b data-i18n="sys.mode_cycle">定时刷新</b>
-              <span data-i18n="sys.mode_cycle_desc">醒来约 2 分钟在线（可拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。</span>
+              <span data-i18n="sys.mode_cycle_desc">醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。</span>
             </button>
             <button type="button" class="mode-card" data-mode="hibernate">
               <b data-i18n="sys.mode_hibernate">休眠</b>
@@ -1198,6 +1289,7 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
             </button>
           </div>
           <div class="sys-sleep-fields" id="sleepFields" hidden>
+            <div class="row"><label style="min-width:88px" data-i18n="sys.wake_sec">在线窗（秒）</label><input class="ghost grow" id="pwrWakeSec" type="number" min="30" max="600" value="120"></div>
             <div class="row"><label style="min-width:88px" data-i18n="sys.sleep_min">周期（分）</label><input class="ghost grow" id="pwrSleep" type="number" min="1" value="60"></div>
             <div class="row"><label style="min-width:88px" data-i18n="sys.wake">唤醒图</label><input class="ghost grow" id="pwrWake" placeholder="http(s)://…/frame.bin" style="text-align:left"></div>
           </div>
@@ -1263,6 +1355,8 @@ zh:{
   "ov.wlan_off":"WLAN 未连接","ov.wlan_on":"WLAN 已连接","ov.mqtt_off":"MQTT 未连接","ov.mqtt_on":"MQTT 已连接","ov.ap_on":"热点开启","ov.ap_off":"热点关闭",
   "ov.uptime_val":"2 分钟","ov.uptime":"运行","ov.cfg_net":"配置网络","ov.edit_screen":"编辑画面",
   "ov.fw":"固件","ov.part":"分区","ov.sleep":"休眠","ov.sleep_on":"常开",
+  "ov.panel_title":"当前画面","ov.panel_refresh":"刷新","ov.panel_empty":"尚无已保存的画面。推屏后会出现在这里。","ov.panel_meta":"{0} · #{1}",
+
   "net.pick":"选择附近网络","net.refresh":"刷新","net.lock":"锁","net.ssid_ph":"必填",
   "net.pass":"密码","net.pass_ph_sec":"加密网络必填","net.pass_ph_open":"开放网络可留空",
   "net.show":"显示","net.hide":"隐藏","net.wifi_save":"保存并连接","net.st_idle":"未连接","net.st_connecting":"连接中…","net.st_connected":"已连接","net.st_reconnecting":"重连中…","net.st_failed":"连接失败","toast.wifi_ok":"已连接 {0}","toast.wifi_fail":"连接失败，请检查密码或信号","toast.wifi_connecting":"正在连接…",
@@ -1271,7 +1365,10 @@ zh:{
   "net.wifi_note_sec":"当前为加密网络，密码必填。",
   "net.wifi_note_open":"当前为开放网络，密码可留空。",
   "mq.status":"状态","mq.disconnected":"未连接","mq.connected":"已连接","mq.host":"服务器","mq.port":"端口",
-  "mq.transport":"协议","mq.tls_hint":"MQTTS 使用系统 CA 证书包校验服务器（默认端口 8883）。",
+  "mq.transport":"协议","mq.tls_hint":"MQTTS 默认用系统 CA 包校验（端口 8883）。可改自定义 CA，或关闭校验用于自签调试。",
+  "mq.tls_verify":"校验证书","mq.tls_on":"开启","mq.tls_off":"关闭",
+  "mq.tls_insecure_hint":"已关闭校验：不验证服务器证书，仅建议内网/自签调试使用。",
+  "mq.tls_ca":"自定义 CA（PEM）","mq.tls_ca_ph":"-----BEGIN CERTIFICATE-----","mq.tls_ca_hint":"可选。留空则用系统 CA 包；填写后仅信任该证书。",
   "mq.host_ph":"Broker IP / 主机名","mq.cid_ph":"ek410-XXXXXXXX（出厂写入）",
   "mq.user":"用户名","mq.qos0":"0 最多一次","mq.qos1":"1 至少一次","mq.qos2":"2 恰好一次",
   "mq.hint":"选择 MQTT 或 MQTTS。Topic 遵循 NeoMind 标准 uplink / downlink。",
@@ -1290,24 +1387,24 @@ zh:{
   "disp.content_preview":"内容预览","disp.layout_preview":"布局预览","disp.img_src":"图片来源",
   "disp.upload":"上传本地图片","disp.upload_hint":"点击选择或拖入 · JPG / PNG / WebP","disp.or_url":"或填 URL",
   "disp.fit":"适应方式","disp.fit_cover":"铺满裁切","disp.fit_contain":"完整显示","disp.fit_fill":"拉伸",
-  "disp.load_preview":"加载预览","disp.show_screen":"显示到屏幕",
+  "disp.load_preview":"加载预览","disp.load_screen":"读取当前屏","disp.show_screen":"显示到屏幕",
   "disp.img_note":"顶部可切换「原色 / 墨水六色」对比量化结果；布局辅助显示安全区与中线。",
   "disp.hint_eink":"墨水六色","disp.hint_source":"原色",
   "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"拖拽定位 · {0}","disp.stage_md":"Markdown → 画布 · {0}",
   "ed.add":"添加","ed.image":"图片","ed.width":"宽度","ed.replace_img":"更换图片","ed.text":"文字","ed.rect":"方框","ed.qr":"二维码","ed.layers":"图层","ed.props":"属性","ed.props_empty":"选中图层后在此编辑","ed.content":"内容","ed.qr_url":"链接","ed.size":"尺寸","ed.sheet_add":"添加元素","ed.sheet_layers":"图层","ed.sheet_props":"属性","ed.new_text":"新文字","ed.new_rect":"色块","ed.new_qr":"https://wiki.camthink.ai",
   "ed.hello":"你好，世界","ed.swatch":"色块","ed.swatch_sub":"品牌橙 → 红","ed.note":"墨水屏仅 6 色：黑白红黄蓝绿。原色模式下可见设计色，刷屏前请切到「墨水六色」核对。",
-  "ed.color":"颜色","ed.fontsize":"字号","ed.down":"下层","ed.up":"上层","ed.del":"删除",
+  "ed.color":"颜色","ed.fontsize":"字号","ed.scale_val":"×{0}","ed.down":"下层","ed.up":"上层","ed.del":"删除",
   "ed.subtitle":"边缘 AI · 墨水屏","ed.brand":"品牌","ed.accent":"强调","ed.aux":"辅色",
   "color.black":"黑","color.white":"白","color.red":"红","color.yellow":"黄","color.blue":"蓝","color.green":"绿",
   "md.write":"编写 Markdown","md.open":"打开文件","md.paste":"粘贴","md.apply":"生成预览",
   "md.note":"右侧为屏幕布局预览（非富文本）。H1→大字 · 段落→正文 · 列表→多行。",
   "md.sample":"# CamThink EK410\n\n边缘墨水屏 · 1600×1200\n\n- Wi‑Fi / MQTT 配网\n- 六色显示\n",
-  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。效果优先默认；较慢时屏上会显示阶段提示。","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来约 2 分钟在线（可拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开","toast.mode_cycle":"已选定时刷新","toast.mode_hibernate":"已选休眠（保存后将深睡）","toast.sys_saved":"系统设置已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
+  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。效果优先默认；较慢时屏上会显示阶段提示。","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.wake_sec":"在线窗（秒）","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开","toast.mode_cycle":"已选定时刷新","toast.mode_hibernate":"已选休眠（保存后将深睡）","toast.sys_saved":"系统设置已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
   "toast.guide_on":"已显示安全区 / 中线","toast.guide_off":"已隐藏布局辅助",
   "toast.color_eink":"预览：Spectra 6 量化","toast.color_source":"预览：原色（未量化）",
   "toast.mode_image":"图片：预览量化与布局","toast.mode_editor":"编辑器：布局 + 六色","toast.mode_md":"Markdown：映射到屏布局",
   "toast.tool":"工具：{0}","toast.layer_del":"已删除图层","toast.layer_add":"已添加 {0}","toast.img_replaced":"图片已更换","toast.img_fail":"图片加载失败","toast.img_loaded":"已加载 {0}（可切六色查看）","toast.need_url":"请填写图片 URL",
-  "toast.url_ok":"URL 预览已加载","toast.url_fail":"无法加载图片","toast.url_queued":"已让设备拉取 URL 并刷屏","toast.url_need_sta":"设备需已连家里 Wi‑Fi 才能拉外网图片","toast.need_preview":"请先加载预览后再推屏",
+  "toast.url_ok":"URL 预览已加载","toast.url_fail":"无法加载图片","toast.url_queued":"已让设备拉取 URL 并刷屏","toast.url_need_sta":"设备需已连家里 Wi‑Fi 才能拉外网图片","toast.url_busy":"正在拉取预览，请稍候","toast.need_preview":"请先加载预览后再推屏","toast.last_frame_ok":"已加载屏上当前画面","toast.last_frame_none":"设备尚无已保存的画面",
   "toast.md_updated":"已更新布局预览","toast.md_open":"选择 .md 文件","toast.md_paste":"已粘贴示例",
   "toast.md_trunc":"内容过长，末尾已截断（可缩短或减小字号）",
   "md.emoji_note":"墨水屏字库不含彩色表情，已自动替换为文字符号",
@@ -1320,6 +1417,8 @@ en:{
   "ov.wlan_off":"WLAN disconnected","ov.wlan_on":"WLAN connected","ov.mqtt_off":"MQTT disconnected","ov.mqtt_on":"MQTT connected","ov.ap_on":"Hotspot on","ov.ap_off":"Hotspot off",
   "ov.uptime_val":"2 min","ov.uptime":"Uptime","ov.cfg_net":"Configure network","ov.edit_screen":"Edit screen",
   "ov.fw":"Firmware","ov.part":"Partition","ov.sleep":"Sleep","ov.sleep_on":"Always on",
+  "ov.panel_title":"Current panel","ov.panel_refresh":"Refresh","ov.panel_empty":"No saved panel frame yet. It appears here after a push.","ov.panel_meta":"{0} · #{1}",
+
   "net.pick":"Nearby networks","net.refresh":"Refresh","net.lock":"Lock","net.ssid_ph":"Required",
   "net.pass":"Password","net.pass_ph_sec":"Required for secured Wi‑Fi","net.pass_ph_open":"Optional for open networks",
   "net.show":"Show","net.hide":"Hide","net.wifi_save":"Save & connect","net.st_idle":"Disconnected","net.st_connecting":"Connecting…","net.st_connected":"Connected","net.st_reconnecting":"Reconnecting…","net.st_failed":"Connection failed","toast.wifi_ok":"Connected to {0}","toast.wifi_fail":"Connect failed — check password or signal","toast.wifi_connecting":"Connecting…",
@@ -1328,7 +1427,10 @@ en:{
   "net.wifi_note_sec":"Secured network — password required.",
   "net.wifi_note_open":"Open network — password optional.",
   "mq.status":"Status","mq.disconnected":"Disconnected","mq.connected":"Connected","mq.host":"Broker","mq.port":"Port",
-  "mq.transport":"Protocol","mq.tls_hint":"MQTTS verifies the server with the system CA bundle (default port 8883).",
+  "mq.transport":"Protocol","mq.tls_hint":"MQTTS verifies with the system CA bundle by default (port 8883). Use a custom CA, or turn verify off for self-signed labs.",
+  "mq.tls_verify":"Verify cert","mq.tls_on":"On","mq.tls_off":"Off",
+  "mq.tls_insecure_hint":"Verify off: server certificate is not checked. Lab / self-signed only.",
+  "mq.tls_ca":"Custom CA (PEM)","mq.tls_ca_ph":"-----BEGIN CERTIFICATE-----","mq.tls_ca_hint":"Optional. Empty = system CA bundle; when set, only this CA is trusted.",
   "mq.host_ph":"Broker IP / hostname","mq.cid_ph":"ek410-XXXXXXXX (factory-burned)",
   "mq.user":"Username","mq.qos0":"0 at most once","mq.qos1":"1 at least once","mq.qos2":"2 exactly once",
   "mq.hint":"Choose MQTT or MQTTS. Topics follow NeoMind uplink / downlink.",
@@ -1347,24 +1449,24 @@ en:{
   "disp.content_preview":"Content preview","disp.layout_preview":"Layout preview","disp.img_src":"Image source",
   "disp.upload":"Upload image","disp.upload_hint":"Click or drop · JPG / PNG / WebP","disp.or_url":"Or enter URL",
   "disp.fit":"Fit","disp.fit_cover":"Cover","disp.fit_contain":"Contain","disp.fit_fill":"Stretch",
-  "disp.load_preview":"Load preview","disp.show_screen":"Show on screen",
+  "disp.load_preview":"Load preview","disp.load_screen":"Load from panel","disp.show_screen":"Show on screen",
   "disp.img_note":"Toggle Original / E‑ink 6 to compare quantization; layout guides show safe area and center.",
   "disp.hint_eink":"E‑ink 6","disp.hint_source":"Original",
   "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"Drag to place · {0}","disp.stage_md":"Markdown → canvas · {0}",
   "ed.add":"Add","ed.image":"Image","ed.width":"Width","ed.replace_img":"Replace image","ed.text":"Text","ed.rect":"Box","ed.qr":"QR code","ed.layers":"Layers","ed.props":"Properties","ed.props_empty":"Select a layer to edit","ed.content":"Content","ed.qr_url":"URL","ed.size":"Size","ed.sheet_add":"Add element","ed.sheet_layers":"Layers","ed.sheet_props":"Properties","ed.new_text":"New text","ed.new_rect":"Swatch","ed.new_qr":"https://wiki.camthink.ai",
   "ed.hello":"Hello, world","ed.swatch":"Swatch","ed.swatch_sub":"Brand orange → red","ed.note":"E‑ink has 6 colors only. Use Original to see design colors; switch to E‑ink 6 before pushing.",
-  "ed.color":"Color","ed.fontsize":"Size","ed.down":"Down","ed.up":"Up","ed.del":"Delete",
+  "ed.color":"Color","ed.fontsize":"Scale","ed.scale_val":"×{0}","ed.down":"Down","ed.up":"Up","ed.del":"Delete",
   "ed.subtitle":"Edge AI · e‑paper","ed.brand":"Brand","ed.accent":"Accent","ed.aux":"Accent 2",
   "color.black":"Black","color.white":"White","color.red":"Red","color.yellow":"Yellow","color.blue":"Blue","color.green":"Green",
   "md.write":"Write Markdown","md.open":"Open file","md.paste":"Paste","md.apply":"Generate preview",
   "md.note":"Right side is screen layout preview (not rich text). H1→large · paragraph→body · list→lines.",
   "md.sample":"# CamThink EK410\n\nEdge e‑paper · 1600×1200\n\n- Wi‑Fi / MQTT setup\n- 6‑color display\n",
-  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Quality is default; the panel shows stage text while waiting.","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"~2 min online after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected","toast.mode_cycle":"Timed refresh selected","toast.mode_hibernate":"Hibernate selected (saves will sleep)","toast.sys_saved":"System settings saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
+  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Quality is default; the panel shows stage text while waiting.","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"Stay online for a configurable window after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.wake_sec":"Online window (s)","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected","toast.mode_cycle":"Timed refresh selected","toast.mode_hibernate":"Hibernate selected (saves will sleep)","toast.sys_saved":"System settings saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
   "toast.guide_on":"Layout guides on","toast.guide_off":"Layout guides off",
   "toast.color_eink":"Preview: Spectra 6 quantized","toast.color_source":"Preview: original (not quantized)",
   "toast.mode_image":"Image: quantize & layout preview","toast.mode_editor":"Editor: layout + 6‑color","toast.mode_md":"Markdown: mapped to screen layout",
   "toast.tool":"Tool: {0}","toast.layer_del":"Layer deleted","toast.layer_add":"Added {0}","toast.img_replaced":"Image replaced","toast.img_fail":"Failed to load image","toast.img_loaded":"Loaded {0} (try E‑ink 6)","toast.need_url":"Enter an image URL",
-  "toast.url_ok":"URL preview loaded","toast.url_fail":"Failed to load image","toast.url_queued":"Device queued URL fetch + refresh","toast.url_need_sta":"Device needs home Wi‑Fi to fetch remote images","toast.need_preview":"Load preview before pushing to screen",
+  "toast.url_ok":"URL preview loaded","toast.url_fail":"Failed to load image","toast.url_queued":"Device queued URL fetch + refresh","toast.url_need_sta":"Device needs home Wi‑Fi to fetch remote images","toast.url_busy":"Preview fetch already in progress","toast.need_preview":"Load preview before pushing to screen","toast.last_frame_ok":"Loaded current panel frame","toast.last_frame_none":"No saved panel frame yet",
   "toast.md_updated":"Layout preview updated","toast.md_open":"Choose a .md file","toast.md_paste":"Sample pasted",
   "toast.md_trunc":"Content truncated to fit the panel — shorten text or use a smaller scale",
   "md.emoji_note":"Panel font has no color emoji; symbols are replaced with ASCII",
@@ -1418,7 +1520,12 @@ function syncNav(name){
   $('main').classList.toggle('is-display', name==='display');
   if(name!=='display') scrollTo(0,0);
 }
-function go(name){syncNav(name)}
+function go(name){
+  syncNav(name);
+  if(name==='overview' && typeof loadOverviewPanel==='function'){
+    loadOverviewPanel(true, false);
+  }
+}
 document.querySelectorAll('#dock button, #railNav button').forEach(b=>b.addEventListener('click',()=>go(b.dataset.page)));
 
 document.querySelectorAll('.preview-bar [data-mode]').forEach(b=>{ if(!b) return;
@@ -1480,11 +1587,18 @@ $('mqCid').addEventListener('input',()=>{
   setInvalid('rowMqCid','errMqCid',!raw,t('err.cid'));
 });
 
-function setWifiScanCollapsed(collapsed){
+/* User expand must win over loadInfo poll — otherwise STA "connected"
+ * keeps forcing the scan list shut while browsing APs. */
+let _wifiScanUserOpen=false;
+function setWifiScanCollapsed(collapsed, opts){
   const block=$('wifiScanBlock');
   const btn=$('btnScanToggle');
   if(!block) return;
   const on=!!collapsed;
+  const fromUser=!!(opts&&opts.fromUser);
+  const force=!!(opts&&opts.force);
+  if(fromUser) _wifiScanUserOpen=!on;
+  if(force) _wifiScanUserOpen=false;
   block.classList.toggle('collapsed', on);
   if(btn){
     const connected=($('wifiStatus')||{}).dataset&&$('wifiStatus').dataset.state==='connected';
@@ -1497,7 +1611,7 @@ if($('btnScanToggle')){
   $('btnScanToggle').onclick=()=>{
     const block=$('wifiScanBlock');
     if(!block) return;
-    setWifiScanCollapsed(!block.classList.contains('collapsed'));
+    setWifiScanCollapsed(!block.classList.contains('collapsed'), {fromUser:true});
   };
 }
 $('mqHost').addEventListener('input',()=>setInvalid('rowMqHost','errMqHost',!($('mqHost').value||'').trim(),t('err.host')));
@@ -1598,10 +1712,13 @@ function setWifiStatus(state, meta){
     reconnecting:'net.st_reconnecting',failed:'net.st_failed'}[state]||'net.st_idle';
   if(text){ text.setAttribute('data-i18n', key); text.textContent=t(key); }
   if(m) m.textContent=meta||'';
-  /* After Wi‑Fi is up, tuck the scan list away to reduce mobile clutter. */
+  /* Auto-collapse only when newly connected and user has not expanded. */
   if(typeof setWifiScanCollapsed==='function'){
-    if(state==='connected') setWifiScanCollapsed(true);
-    else if(state==='idle'||state==='failed') setWifiScanCollapsed(false);
+    if(state==='connected'){
+      if(!_wifiScanUserOpen) setWifiScanCollapsed(true);
+    } else if(state==='idle'||state==='failed'){
+      setWifiScanCollapsed(false, {force:true});
+    }
   }
 }
 setWifiStatus('idle');
@@ -1954,7 +2071,7 @@ function mdEmitPieces(pieces, x, y0, items, yMax, colW){
       if(items.length>=MD_MAX_ITEMS) return {y, truncated:true};
       const ruleH=Math.max(2, Math.round(p.scale));
       const yy=y+Math.round((p.h-ruleH)/2);
-      items.push({type:'rect',x,y:yy,w:colW,h:ruleH,color:'black',fill:1,thickness:1,mdRole:'hr'});
+      items.push({type:'rect',x,y:yy,w:colW,h:ruleH,color:'black',fill:true,thickness:1,mdRole:'hr'});
       y+=p.h;
       continue;
     }
@@ -2201,6 +2318,22 @@ function quantizeCanvas(src){
   octx.putImageData(dst,0,0);
   return out;
 }
+/**
+ * E-ink preview must dither at full panel size then downscale.
+ * Dithering the 800×600 stage canvas makes FS grain look muddy vs the real panel.
+ */
+function blitEinkPreview(dstCanvas, paintFull /* (ctx1600) => void */){
+  const off=document.createElement('canvas');
+  off.width=PANEL_W; off.height=PANEL_H;
+  const octx=off.getContext('2d',{willReadFrequently:true});
+  paintFull(octx);
+  const q=quantizeCanvas(off);
+  const ctx=dstCanvas.getContext('2d');
+  ctx.clearRect(0,0,dstCanvas.width,dstCanvas.height);
+  ctx.imageSmoothingEnabled=true;
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(q,0,0,dstCanvas.width,dstCanvas.height);
+}
 
 let colorMode='eink'; /* source | eink */
 let layoutGuideOn=false;
@@ -2242,23 +2375,136 @@ function layerInk(color,eink){
   return E6_SWATCH[color]||'#090e17';
 }
 const edBitmaps={}; /* layerId → ImageBitmap */
+/** Panel font cell is 8×16 (CJK 16×16); firmware text.scale is 1..13. */
+function layerTextScale(el){
+  const sc=+el.dataset.scale;
+  if(sc>=1 && sc<=8) return Math.round(sc);
+  /* Legacy: data-size was approximate px height → round(size/16). */
+  const size=+el.dataset.size||48;
+  return Math.max(1, Math.min(13, Math.round(size/16)||3));
+}
+function layerTextGlyphH(el){ return 16*layerTextScale(el); }
+let _textMeasureCtx=null;
+function layerTextWidth(el){
+  const scale=layerTextScale(el);
+  const text=el.dataset.content||'';
+  const px=16*scale;
+  if(!_textMeasureCtx){
+    _textMeasureCtx=document.createElement('canvas').getContext('2d');
+  }
+  const ctx=_textMeasureCtx;
+  ctx.font=`600 ${px}px ui-monospace,SFMono-Regular,Menlo,"PingFang SC",monospace`;
+  const measured=Math.ceil(ctx.measureText(text).width);
+  /* Cell estimate as floor so short CJK lines stay clickable. */
+  let cells=0;
+  for(const ch of text) cells += (ch.codePointAt(0)>0x7f) ? 2 : 1;
+  return Math.max(8*scale, measured, cells*8*scale);
+}
 function layerImageSize(el){
   const bmp=edBitmaps[el.dataset.id];
   const w=+el.dataset.size||400;
   const ratio=bmp ? (bmp.height/Math.max(1,bmp.width)) : (3/4);
   return {w, h:Math.round(w*ratio)};
 }
-/** Bounds in panel coords (1600×1200). Text uses baseline y. */
+function layerRectSize(el){
+  return {
+    w:Math.max(20, +el.dataset.w||220),
+    h:Math.max(12, +el.dataset.h||48)
+  };
+}
+/** Bounds in panel coords (1600×1200). Text y = baseline (bottom of glyph). */
 function layerBounds(el){
   const type=el.dataset.type||'text';
   const x=+el.dataset.x||0, y=+el.dataset.y||0;
   if(type==='image'){ const d=layerImageSize(el); return {x,y,w:d.w,h:d.h}; }
-  if(type==='rect') return {x,y,w:220,h:48};
+  if(type==='rect'){ const d=layerRectSize(el); return {x,y,w:d.w,h:d.h}; }
   if(type==='qr'){ const s=+el.dataset.size||160; return {x,y,w:s,h:s}; }
-  const size=+el.dataset.size||42;
-  const w=Math.max(80, (el.dataset.content||'').length*size*0.55);
-  const h=size*1.25;
-  return {x, y:y-h, w, h};
+  const scale=layerTextScale(el);
+  const h=16*scale;
+  /* Browser fonts sit slightly above/below the 16px cell — expand for hit+selection. */
+  const padY=Math.max(4, Math.round(h*0.2));
+  const w=layerTextWidth(el);
+  return {x, y:y-h-padY, w, h:h+padY*2};
+}
+/** Enlarged hit target in panel space (~28 CSS px pad, min ~44 CSS px box). */
+function layerHitBounds(el){
+  const b=layerBounds(el);
+  const c=$('pv');
+  const cssW=c ? Math.max(1, c.getBoundingClientRect().width) : 800;
+  const pad=Math.max(28, Math.round(28*(1600/cssW)));
+  const minW=Math.max(96, Math.round(44*(1600/cssW)));
+  const minH=Math.max(72, Math.round(44*(1600/cssW)));
+  let {x,y,w,h}=b;
+  if(w<minW){ x-=(minW-w)/2; w=minW; }
+  if(h<minH){ y-=(minH-h)/2; h=minH; }
+  return {x:x-pad, y:y-pad, w:w+pad*2, h:h+pad*2};
+}
+function selectionHandlesPanel(el){
+  const b=layerBounds(el);
+  return [
+    {id:'nw', x:b.x, y:b.y},
+    {id:'ne', x:b.x+b.w, y:b.y},
+    {id:'sw', x:b.x, y:b.y+b.h},
+    {id:'se', x:b.x+b.w, y:b.y+b.h}
+  ];
+}
+function handleHitRadiusPanel(){
+  const c=$('pv');
+  const cssW=c ? Math.max(1, c.getBoundingClientRect().width) : 800;
+  return Math.max(22, Math.round(16*(1600/cssW)));
+}
+function hitTestHandleAt(lx, ly, el){
+  if(!el) return null;
+  const r=handleHitRadiusPanel();
+  for(const h of selectionHandlesPanel(el)){
+    if(Math.abs(lx-h.x)<=r && Math.abs(ly-h.y)<=r) return h.id;
+  }
+  return null;
+}
+const _qrModCache={};
+/** Real QR modules via embedded Nayuki qrcodegen (SoftAP has no CDN). */
+function encodeQrModules(payload){
+  const text=String(payload||'');
+  if(_qrModCache[text]) return _qrModCache[text];
+  try{
+    if(typeof qrcodegen==='undefined' || !qrcodegen.QrCode) return null;
+    const qr=qrcodegen.QrCode.encodeText(text, qrcodegen.QrCode.Ecc.MEDIUM);
+    const mods=new Array(qr.size);
+    for(let y=0;y<qr.size;y++){
+      const row=new Array(qr.size);
+      for(let x=0;x<qr.size;x++) row[x]=qr.getModule(x,y);
+      mods[y]=row;
+    }
+    _qrModCache[text]=mods;
+    return mods;
+  }catch(e){ return null; }
+}
+/** Draw scannable QR with 4-module quiet zone into a square of side s. */
+function drawQrCode(ctx, x, y, s, ink, payload){
+  if(s<8) return;
+  const mods=encodeQrModules(payload);
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(x, y, s, s);
+  if(!mods){
+    /* Encoder missing — outline placeholder (not scannable). */
+    ctx.strokeStyle=ink||'#000';
+    ctx.lineWidth=Math.max(1, s*0.02);
+    ctx.strokeRect(x+0.5, y+0.5, s-1, s-1);
+    ctx.fillStyle=ink||'#000';
+    ctx.font=`${Math.max(10, Math.round(s*0.12))}px sans-serif`;
+    ctx.fillText('QR?', x+s*0.28, y+s*0.55);
+    return;
+  }
+  const quiet=4;
+  const total=mods.length+quiet*2;
+  const cell=s/total;
+  ctx.fillStyle=ink||'#000000';
+  for(let j=0;j<mods.length;j++){
+    for(let i=0;i<mods.length;i++){
+      if(!mods[j][i]) continue;
+      ctx.fillRect(x+(i+quiet)*cell, y+(j+quiet)*cell, cell+0.6, cell+0.6);
+    }
+  }
 }
 function drawEditorScene(ctx,w,h,eink){
   ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,w,h);
@@ -2280,18 +2526,19 @@ function drawEditorScene(ctx,w,h,eink){
         ctx.strokeStyle=ink; ctx.strokeRect(x,y,dw,dh);
       }
     } else if(type==='rect'){
-      const ww=220*sx, hh=48*sy;
-      ctx.fillStyle=ink; ctx.fillRect(x,y,ww,hh);
+      const d=layerRectSize(el);
+      ctx.fillStyle=ink; ctx.fillRect(x,y,d.w*sx,d.h*sy);
     } else if(type==='qr'){
       const s=(+el.dataset.size||160)*sx;
-      ctx.strokeStyle=ink; ctx.lineWidth=Math.max(2,3*sx);
-      ctx.strokeRect(x,y,s,s);
-      ctx.fillStyle=ink; ctx.font=`${Math.round(14*sx)}px sans-serif`;
-      ctx.fillText('QR', x+s*0.35, y+s*0.55);
+      /* Always black modules — color QR on Spectra-6 rarely scans. */
+      drawQrCode(ctx, x, y, s, '#000000', el.dataset.content||'');
     } else {
-      const size=(+el.dataset.size||42)*sx;
+      const scale=layerTextScale(el);
+      const px=Math.max(8, Math.round(16*scale*sy));
       ctx.fillStyle=ink;
-      ctx.font=`600 ${Math.round(size)}px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif`;
+      ctx.textBaseline='alphabetic';
+      /* Monospace tracks 8×16 cell font used on panel. */
+      ctx.font=`600 ${px}px ui-monospace,SFMono-Regular,Menlo,"PingFang SC",monospace`;
       ctx.fillText(el.dataset.content||'', x, y);
     }
   });
@@ -2309,12 +2556,81 @@ function drawLayerSelection(ctx,w,h){
   ctx.setLineDash([6,4]);
   ctx.strokeRect(rx, ry, rw, rh);
   ctx.setLineDash([]);
-  const hs=5;
-  ctx.fillStyle='#f24a00';
+  const hs=Math.max(8, Math.round(10*Math.min(sx,sy)*2));
+  ctx.fillStyle='#fff';
+  ctx.strokeStyle='#f24a00';
+  ctx.lineWidth=1.5;
   [[rx,ry],[rx+rw,ry],[rx,ry+rh],[rx+rw,ry+rh]].forEach(([hx,hy])=>{
     ctx.fillRect(hx-hs/2, hy-hs/2, hs, hs);
+    ctx.strokeRect(hx-hs/2, hy-hs/2, hs, hs);
   });
   ctx.restore();
+}
+function syncSizeSliderFromLayer(el){
+  if(!el || !$('layerSize')) return;
+  const type=el.dataset.type||'text';
+  if(type==='rect') return;
+  if(type==='text'){
+    const sc=layerTextScale(el);
+    $('layerSize').value=sc;
+    if($('layerSizeVal')) $('layerSizeVal').textContent=t('ed.scale_val', String(sc));
+  } else {
+    const v=+el.dataset.size||(type==='qr'?160:400);
+    $('layerSize').value=v;
+    if($('layerSizeVal')) $('layerSizeVal').textContent=String(v);
+  }
+}
+/** Resize from a corner handle; keeps opposite corner anchored. */
+function applyCornerResize(el, handle, lx, ly, start){
+  const type=el.dataset.type||'text';
+  const b=start.b;
+  let left=b.x, top=b.y, right=b.x+b.w, bottom=b.y+b.h;
+  if(handle.indexOf('w')>=0) left=lx;
+  if(handle.indexOf('e')>=0) right=lx;
+  if(handle.indexOf('n')>=0) top=ly;
+  if(handle.indexOf('s')>=0) bottom=ly;
+  if(right<left){ const t=left; left=right; right=t; }
+  if(bottom<top){ const t=top; top=bottom; bottom=t; }
+  let w=Math.max(8, right-left), h=Math.max(8, bottom-top);
+
+  if(type==='qr'){
+    const s=Math.max(40, Math.min(400, Math.round(Math.max(w,h))));
+    /* Anchor opposite corner of the square. */
+    if(handle==='se'){ el.dataset.x=String(Math.round(b.x)); el.dataset.y=String(Math.round(b.y)); }
+    else if(handle==='nw'){ el.dataset.x=String(Math.round(b.x+b.w-s)); el.dataset.y=String(Math.round(b.y+b.h-s)); }
+    else if(handle==='ne'){ el.dataset.x=String(Math.round(b.x+b.w-s)); el.dataset.y=String(Math.round(b.y)); }
+    else { el.dataset.x=String(Math.round(b.x)); el.dataset.y=String(Math.round(b.y+b.h-s)); }
+    el.dataset.size=String(s);
+  } else if(type==='image'){
+    const ratio=start.ratio||(3/4);
+    let nw=Math.max(80, Math.min(1600, Math.round(w)));
+    let nh=Math.round(nw*ratio);
+    if(handle.indexOf('n')>=0) top=bottom-nh;
+    else top=b.y;
+    if(handle.indexOf('w')>=0) left=right-nw;
+    else left=b.x;
+    el.dataset.x=String(Math.max(0, Math.round(left)));
+    el.dataset.y=String(Math.max(0, Math.round(top)));
+    el.dataset.size=String(nw);
+  } else if(type==='rect'){
+    const nw=Math.max(20, Math.min(1600, Math.round(w)));
+    const nh=Math.max(12, Math.min(1200, Math.round(h)));
+    el.dataset.x=String(Math.max(0, Math.round(left)));
+    el.dataset.y=String(Math.max(0, Math.round(top)));
+    el.dataset.w=String(nw);
+    el.dataset.h=String(nh);
+  } else {
+    /* Text: height → scale 1..13; keep visual top, update baseline y. */
+    const sc=Math.max(1, Math.min(13, Math.round(h/16)||1));
+    const glyphH=16*sc;
+    el.dataset.scale=String(sc);
+    el.dataset.size=String(glyphH);
+    el.dataset.x=String(Math.max(0, Math.round(left)));
+    el.dataset.y=String(Math.max(glyphH, Math.round(top+glyphH)));
+  }
+  if($('layerX')){ $('layerX').value=el.dataset.x; if($('layerXVal')) $('layerXVal').textContent=el.dataset.x; }
+  if($('layerY')){ $('layerY').value=el.dataset.y; if($('layerYVal')) $('layerYVal').textContent=el.dataset.y; }
+  syncSizeSliderFromLayer(el);
 }
 
 function redrawEditor(){
@@ -2323,30 +2639,32 @@ function redrawEditor(){
   if(colorMode==='source'){
     drawEditorScene(ctx,c.width,c.height,false);
   } else {
-    const off=document.createElement('canvas'); off.width=c.width; off.height=c.height;
-    drawEditorScene(off.getContext('2d'),off.width,off.height,false);
-    ctx.drawImage(quantizeCanvas(off),0,0);
+    blitEinkPreview(c, (octx)=>{
+      drawEditorScene(octx, PANEL_W, PANEL_H, false);
+    });
   }
   drawLayerSelection(ctx, c.width, c.height);
 }
 
-function drawImagePreview(){
-  const c=$('imgPv'); if(!c) return;
-  const ctx=c.getContext('2d');
-  const w=c.width,h=c.height;
+function paintImageStage(ctx, w, h){
   ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,w,h);
   if(!imgBitmap){
     /* demo gradient content so quantize is visible */
+    const sx=w/PANEL_W, sy=h/PANEL_H;
     const g=ctx.createLinearGradient(0,0,w,h);
     g.addColorStop(0,'#f24a00'); g.addColorStop(.35,'#6366f1');
     g.addColorStop(.65,'#14b8a6'); g.addColorStop(1,'#fbbf24');
     ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
     ctx.fillStyle='rgba(255,255,255,.92)';
-    ctx.fillRect(80,160,640,220);
-    ctx.fillStyle='#111'; ctx.font='600 36px -apple-system,BlinkMacSystemFont,sans-serif';
-    ctx.fillText(t('img.demo_title'), 120, 250);
-    ctx.font='400 18px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif'; ctx.fillStyle='#555';
-    ctx.fillText(t('img.demo_sub'), 120, 290);
+    ctx.fillRect(80*sx,160*sy,640*sx,220*sy);
+    ctx.fillStyle='#111';
+    ctx.font=`600 ${Math.round(36*sy)}px -apple-system,BlinkMacSystemFont,sans-serif`;
+    ctx.fillText(t('img.demo_title'), 120*sx, 250*sy);
+    ctx.font=`400 ${Math.round(18*sy)}px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif`;
+    ctx.fillStyle='#555';
+    ctx.fillText(t('img.demo_sub'), 120*sx, 290*sy);
+  } else if(w===PANEL_W && h===PANEL_H){
+    fitDrawImage(ctx, imgBitmap, imgFit||'cover');
   } else {
     const iw=imgBitmap.width, ih=imgBitmap.height;
     let dw,dh,dx,dy;
@@ -2356,13 +2674,19 @@ function drawImagePreview(){
     } else {
       const s=Math.max(w/iw,h/ih); dw=iw*s; dh=ih*s; dx=(w-dw)/2; dy=(h-dh)/2;
     }
+    ctx.imageSmoothingEnabled=true;
+    ctx.imageSmoothingQuality='high';
     ctx.drawImage(imgBitmap,dx,dy,dw,dh);
   }
+}
+function drawImagePreview(){
+  const c=$('imgPv'); if(!c) return;
   if(colorMode==='eink'){
-    const q=quantizeCanvas(c);
-    ctx.clearRect(0,0,w,h);
-    ctx.drawImage(q,0,0);
+    blitEinkPreview(c, (octx)=>paintImageStage(octx, PANEL_W, PANEL_H));
+    return;
   }
+  const ctx=c.getContext('2d');
+  paintImageStage(ctx, c.width, c.height);
 }
 
 function parseMdToLines(text){
@@ -2385,13 +2709,10 @@ function parseMdToLines(text){
   });
   return lines;
 }
-function redrawMd(){
-  const c=$('mdPv'); if(!c) return;
-  /* Preview is 800×600 ≈ ½ of panel; match pushMdToDevice layout. */
-  const sx=c.width/PANEL_W, sy=c.height/PANEL_H;
-  const off=document.createElement('canvas'); off.width=c.width; off.height=c.height;
-  const ctx=off.getContext('2d');
-  ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,off.width,off.height);
+function paintMdStage(ctx, w, h){
+  /* Layout in panel coords; scale only for source half-res preview. */
+  const sx=w/PANEL_W, sy=h/PANEL_H;
+  ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,w,h);
   const items=mdToCanvasItems($('mdText')?$('mdText').value:'');
   items.forEach(it=>{
     if(it.type==='rect'){
@@ -2414,10 +2735,16 @@ function redrawMd(){
       ctx.fillText(ln, it.x*sx, it.y*sy + i*lh);
     });
   });
+}
+function redrawMd(){
+  const c=$('mdPv'); if(!c) return;
+  if(colorMode==='eink'){
+    blitEinkPreview(c, (octx)=>paintMdStage(octx, PANEL_W, PANEL_H));
+    return;
+  }
   const dst=c.getContext('2d');
   dst.clearRect(0,0,c.width,c.height);
-  if(colorMode==='eink') dst.drawImage(quantizeCanvas(off),0,0);
-  else dst.drawImage(off,0,0);
+  paintMdStage(dst, c.width, c.height);
 }
 
 function redrawAll(){ redrawEditor(); drawImagePreview(); redrawMd(); }
@@ -2511,10 +2838,10 @@ function bindLayerProps(el){
     content.placeholder=type==='qr'?t('ed.qr_url'):t('ed.content');
   }
   if($('layerColor')) $('layerColor').value=el.dataset.color||'black';
-  const setSlider=(id, valId, v)=>{
+  const setSlider=(id, valId, v, fmt)=>{
     const s=$(id); if(!s) return;
     s.value=v;
-    const out=$(valId); if(out) out.textContent=String(v);
+    const out=$(valId); if(out) out.textContent=fmt?fmt(v):String(v);
   };
   setSlider('layerX','layerXVal', +el.dataset.x||0);
   setSlider('layerY','layerYVal', +el.dataset.y||0);
@@ -2525,11 +2852,19 @@ function bindLayerProps(el){
         type==='text'?t('ed.fontsize'):(type==='image'?t('ed.width'):t('ed.size'));
       const sizeEl=$('layerSize');
       if(sizeEl){
-        if(type==='qr'){ sizeEl.min=40; sizeEl.max=400; }
-        else if(type==='image'){ sizeEl.min=80; sizeEl.max=1600; }
-        else { sizeEl.min=12; sizeEl.max=120; }
-        const def=type==='qr'?160:type==='image'?400:42;
-        setSlider('layerSize','layerSizeVal', +el.dataset.size||def);
+        if(type==='text'){
+          /* Firmware text.scale is 1..13 (16px cell × scale). */
+          sizeEl.min=1; sizeEl.max=13; sizeEl.step=1;
+          const sc=layerTextScale(el);
+          el.dataset.scale=String(sc);
+          setSlider('layerSize','layerSizeVal', sc, v=>t('ed.scale_val', String(v)));
+        } else if(type==='qr'){
+          sizeEl.min=40; sizeEl.max=400; sizeEl.step=1;
+          setSlider('layerSize','layerSizeVal', +el.dataset.size||160);
+        } else {
+          sizeEl.min=80; sizeEl.max=1600; sizeEl.step=1;
+          setSlider('layerSize','layerSizeVal', +el.dataset.size||400);
+        }
       }
     }
   }
@@ -2573,8 +2908,16 @@ function syncLayerFromFields(){
     if($('layerYVal')) $('layerYVal').textContent=$('layerY').value;
   }
   if($('layerSize')){
-    el.dataset.size=$('layerSize').value;
-    if($('layerSizeVal')) $('layerSizeVal').textContent=$('layerSize').value;
+    const v=$('layerSize').value;
+    if(el.dataset.type==='text'){
+      const sc=Math.max(1, Math.min(13, Math.round(+v)||3));
+      el.dataset.scale=String(sc);
+      el.dataset.size=String(16*sc); /* keep legacy size in sync */
+      if($('layerSizeVal')) $('layerSizeVal').textContent=t('ed.scale_val', String(sc));
+    } else {
+      el.dataset.size=v;
+      if($('layerSizeVal')) $('layerSizeVal').textContent=v;
+    }
   }
   redrawEditor();
 }
@@ -2611,7 +2954,17 @@ function createLayerButton(type, d, id){
   btn.className='layer';
   btn.dataset.id=id; btn.dataset.type=type;
   btn.dataset.content=d.content; btn.dataset.x=d.x; btn.dataset.y=d.y;
-  btn.dataset.size=d.size; btn.dataset.color=d.color;
+  btn.dataset.size=d.size!=null?d.size:'';
+  btn.dataset.color=d.color;
+  if(type==='text'){
+    const sc=d.scale!=null?d.scale:layerTextScale({dataset:{scale:d.scale, size:d.size}});
+    btn.dataset.scale=String(Math.max(1, Math.min(13, +sc||3)));
+    btn.dataset.size=String(16*(+btn.dataset.scale));
+  }
+  if(type==='rect'){
+    btn.dataset.w=String(d.w!=null?d.w:220);
+    btn.dataset.h=String(d.h!=null?d.h:48);
+  }
   const sub=d.sub!=null?d.sub:(type==='qr'
     ? (d.content.replace(/^https?:\/\//,'').slice(0,28))
     : (type==='rect'?t('ed.swatch_sub'):d.content.slice(0,28)));
@@ -2672,8 +3025,8 @@ function addEditorLayer(type){
   _layerSeq++;
   const id=type[0]+_layerSeq;
   const defaults={
-    text:{content:t('ed.new_text'), x:200, y:360, size:36, color:'black', label:t('ed.text')},
-    rect:{content:'', x:200, y:200, size:'', color:'red', label:t('ed.swatch')},
+    text:{content:t('ed.new_text'), x:200, y:360, scale:3, color:'black', label:t('ed.text')},
+    rect:{content:'', x:200, y:200, w:220, h:48, size:'', color:'red', label:t('ed.swatch')},
     qr:{content:t('ed.new_qr'), x:1000, y:800, size:160, color:'black', label:t('ed.qr')}
   };
   const d=defaults[type]||defaults.text;
@@ -2694,49 +3047,116 @@ if($('edSheetMask')) $('edSheetMask').onclick=()=>closeEdSheet();
 if($('edSheetClose')) $('edSheetClose').onclick=()=>closeEdSheet();
 if($('edSheetBack')) $('edSheetBack').onclick=()=>openEdSheet('layers');
 
-/* Canvas drag → move selected layer; tap without move opens props on phone */
+/* Canvas drag → move / corner-resize; tap without move opens props on phone */
 function hitTestLayerAt(lx, ly){
   const layers=[...document.querySelectorAll('#layerList .layer')];
+  /* Front-to-back (list top = front). Prefer exact hit on padded bounds. */
   for(const el of layers){
-    const b=layerBounds(el);
+    const b=layerHitBounds(el);
     if(lx>=b.x && lx<=b.x+b.w && ly>=b.y && ly<=b.y+b.h) return el;
   }
-  return null;
+  /* Near miss: snap to closest layer within ~36 CSS px. */
+  const c=$('pv');
+  const cssW=c ? Math.max(1, c.getBoundingClientRect().width) : 800;
+  const snap=Math.max(40, Math.round(36*(1600/cssW)));
+  let best=null, bestD=snap*snap;
+  for(const el of layers){
+    const b=layerHitBounds(el);
+    const cx=Math.max(b.x, Math.min(lx, b.x+b.w));
+    const cy=Math.max(b.y, Math.min(ly, b.y+b.h));
+    const d=(lx-cx)*(lx-cx)+(ly-cy)*(ly-cy);
+    if(d<=bestD){ bestD=d; best=el; }
+  }
+  return best;
+}
+function cursorForHandle(id){
+  if(id==='nw'||id==='se') return 'nwse-resize';
+  if(id==='ne'||id==='sw') return 'nesw-resize';
+  return 'grab';
 }
 (function(){
   const c=$('pv'); if(!c) return;
-  let drag=null; /* {el, ox, oy, moved} */
+  let drag=null; /* move | resize */
   const canvasXY=e=>{
     const rect=c.getBoundingClientRect();
+    const rw=Math.max(1, rect.width), rh=Math.max(1, rect.height);
     return {
-      lx:(e.clientX-rect.left)*(1600/rect.width),
-      ly:(e.clientY-rect.top)*(1200/rect.height)
+      lx:(e.clientX-rect.left)*(PANEL_W/rw),
+      ly:(e.clientY-rect.top)*(PANEL_H/rh)
     };
   };
   const onDown=e=>{
     if(e.button!=null && e.button!==0) return;
+    if(activeDispMode()!=='editor') return;
     const {lx,ly}=canvasXY(e);
+    const sel=selectedLayer();
+    const handle=hitTestHandleAt(lx, ly, sel);
+    if(handle && sel){
+      e.preventDefault();
+      e.stopPropagation();
+      const b=layerBounds(sel);
+      const dim=layerImageSize(sel);
+      drag={
+        mode:'resize', handle, el:sel,
+        b:{x:b.x,y:b.y,w:b.w,h:b.h},
+        ratio:dim.h/Math.max(1,dim.w),
+        moved:false, pid:e.pointerId, x0:lx, y0:ly
+      };
+      try{ c.setPointerCapture(e.pointerId); }catch(err){}
+      c.style.cursor=cursorForHandle(handle);
+      return;
+    }
     const hit=hitTestLayerAt(lx,ly);
     if(!hit){ drag=null; return; }
     e.preventDefault();
+    e.stopPropagation();
     selectLayer(hit, {openProps:false});
-    drag={
-      el:hit,
-      ox:lx-(+hit.dataset.x||0),
-      oy:ly-(+hit.dataset.y||0),
-      moved:false,
-      pid:e.pointerId
-    };
+    /* Re-check handle after select (first click on unselected corner). */
+    const h2=hitTestHandleAt(lx, ly, hit);
+    if(h2){
+      const b=layerBounds(hit);
+      const dim=layerImageSize(hit);
+      drag={
+        mode:'resize', handle:h2, el:hit,
+        b:{x:b.x,y:b.y,w:b.w,h:b.h},
+        ratio:dim.h/Math.max(1,dim.w),
+        moved:false, pid:e.pointerId, x0:lx, y0:ly
+      };
+      c.style.cursor=cursorForHandle(h2);
+    } else {
+      drag={
+        mode:'move', el:hit,
+        ox:lx-(+hit.dataset.x||0),
+        oy:ly-(+hit.dataset.y||0),
+        moved:false, pid:e.pointerId, x0:lx, y0:ly
+      };
+      c.style.cursor='grabbing';
+    }
     try{ c.setPointerCapture(e.pointerId); }catch(err){}
-    c.style.cursor='grabbing';
   };
   const onMove=e=>{
-    if(!drag || (drag.pid!=null && e.pointerId!==drag.pid)) return;
     const {lx,ly}=canvasXY(e);
+    if(!drag){
+      if(activeDispMode()!=='editor') return;
+      const sel=selectedLayer();
+      const h=hitTestHandleAt(lx,ly,sel);
+      c.style.cursor=h?cursorForHandle(h):(hitTestLayerAt(lx,ly)?'grab':'default');
+      return;
+    }
+    if(drag.pid!=null && e.pointerId!==drag.pid) return;
+    if(!drag.moved){
+      const dx=lx-drag.x0, dy=ly-drag.y0;
+      if(dx*dx+dy*dy < 9) return;
+    }
+    drag.moved=true;
+    if(drag.mode==='resize'){
+      applyCornerResize(drag.el, drag.handle, lx, ly, drag);
+      redrawEditor();
+      return;
+    }
     let nx=Math.round(lx-drag.ox), ny=Math.round(ly-drag.oy);
-    nx=Math.max(0, Math.min(1600, nx));
-    ny=Math.max(0, Math.min(1200, ny));
-    if(nx!==(+drag.el.dataset.x||0) || ny!==(+drag.el.dataset.y||0)) drag.moved=true;
+    nx=Math.max(0, Math.min(PANEL_W, nx));
+    ny=Math.max(0, Math.min(PANEL_H, ny));
     drag.el.dataset.x=nx;
     drag.el.dataset.y=ny;
     if($('layerX')){ $('layerX').value=nx; if($('layerXVal')) $('layerXVal').textContent=String(nx); }
@@ -2745,12 +3165,11 @@ function hitTestLayerAt(lx, ly){
   };
   const onUp=e=>{
     if(!drag) return;
-    const el=drag.el, moved=drag.moved;
+    const el=drag.el, moved=drag.moved, mode=drag.mode;
     drag=null;
     c.style.cursor='grab';
     try{ c.releasePointerCapture(e.pointerId); }catch(err){}
-    /* Tap without drag: open props sheet on phone */
-    if(!moved) selectLayer(el, {openProps:true});
+    if(!moved && mode==='move') selectLayer(el, {openProps:true});
     else bindLayerProps(el);
   };
   c.addEventListener('pointerdown', onDown);
@@ -2787,6 +3206,157 @@ async function adoptImgBitmap(bmp, urlSrc){
   drawImagePreview();
   syncImgPushGate();
 }
+/** Decode device native 960000B frame (uploadFrame layout) → ImageData 1600×1200. */
+function nativeFrameToImageData(u8){
+  const w=PANEL_W, h=PANEL_H;
+  const img=new ImageData(w,h);
+  const d=img.data;
+  const rgbOf=code=>{
+    for(let i=0;i<E6_INK.length;i++) if(E6_INK[i].code===code) return E6_INK[i].rgb;
+    return E6_INK[1].rgb;
+  };
+  let o=0;
+  for(let cs=0;cs<2;cs++){
+    for(let ny=0;ny<1600;ny++){
+      for(let b=0;b<300;b++){
+        const byte=u8[o++];
+        const put=(nx,code)=>{
+          const lx=ny, ly=1199-nx;
+          if(lx<0||ly<0||lx>=w||ly>=h) return;
+          const rgb=rgbOf(code);
+          const i=(ly*w+lx)*4;
+          d[i]=rgb[0]; d[i+1]=rgb[1]; d[i+2]=rgb[2]; d[i+3]=255;
+        };
+        const nx=cs*600+b*2;
+        put(nx, byte>>4);
+        put(nx+1, byte&0xf);
+      }
+    }
+  }
+  return img;
+}
+function setOverviewPanelEmpty(msg){
+  const empty=$('ovPanelEmpty');
+  const meta=$('ovPanelMeta');
+  const cv=$('ovPanelCanvas');
+  if(meta) meta.textContent='—';
+  if(empty){
+    empty.hidden=false;
+    if(msg) empty.textContent=msg;
+    else { empty.setAttribute('data-i18n','ov.panel_empty'); empty.textContent=t('ov.panel_empty'); }
+  }
+  if(cv){
+    const ctx=cv.getContext('2d');
+    ctx.fillStyle='#e6e8ed';
+    ctx.fillRect(0,0,cv.width,cv.height);
+  }
+}
+/* Single-flight lastFrame download — SoftAP httpd cannot serve two 960KB streams. */
+let _lfFetchTail=Promise.resolve();
+async function fetchLastFrameBytes(){
+  const run=async()=>{
+    let lastErr=null;
+    for(let attempt=0; attempt<3; attempt++){
+      try{
+        const ctrl=new AbortController();
+        const to=setTimeout(()=>ctrl.abort(), 45000);
+        const res=await fetch('/api/v1/display/lastFrame',{signal:ctrl.signal,cache:'no-store'});
+        clearTimeout(to);
+        const ct=(res.headers.get('content-type')||'').toLowerCase();
+        if(res.status===503 || (ct.includes('json') && res.status>=400)){
+          lastErr=new Error('last frame busy');
+          await new Promise(r=>setTimeout(r, 600+attempt*400));
+          continue;
+        }
+        if(!res.ok || ct.includes('json')) throw new Error('no last frame');
+        const ab=await res.arrayBuffer();
+        if(ab.byteLength!==960000) throw new Error('bad frame size');
+        return new Uint8Array(ab);
+      }catch(e){
+        lastErr=e;
+        if(attempt<2) await new Promise(r=>setTimeout(r, 700+attempt*500));
+      }
+    }
+    const msg=(lastErr&&lastErr.name==='AbortError')?'timeout':(lastErr&&lastErr.message)||'Failed to fetch';
+    throw new Error(msg);
+  };
+  const p=_lfFetchTail.then(run, run);
+  _lfFetchTail=p.then(()=>{}, ()=>{});
+  return p;
+}
+/* Overview "current panel": poll meta cheaply; only re-download 960KB when seq/crc changes. */
+let _ovPanelKey='';
+let _ovPanelPollTimer=0;
+/** Draw last panel frame into Overview (not Display editor preview). */
+async function loadOverviewPanel(quiet, force){
+  try{
+    const meta=await get('/api/v1/display/getLastFrameMeta');
+    if(!meta||!meta.present){
+      _ovPanelKey='';
+      setOverviewPanelEmpty();
+      if(!quiet) toast(t('toast.last_frame_none'));
+      return false;
+    }
+    const key=String(meta.seq||0)+':'+String(meta.crc32||0);
+    if(!force && key===_ovPanelKey){
+      const m=$('ovPanelMeta');
+      if(m) m.textContent=t('ov.panel_meta', meta.source||'panel', String(meta.seq||1));
+      return true;
+    }
+    const bytes=await fetchLastFrameBytes();
+    const id=nativeFrameToImageData(bytes);
+    const cv=$('ovPanelCanvas');
+    if(cv){
+      cv.getContext('2d').putImageData(id,0,0);
+    }
+    const empty=$('ovPanelEmpty');
+    if(empty) empty.hidden=true;
+    const m=$('ovPanelMeta');
+    if(m){
+      const src=meta.source||'panel';
+      m.textContent=t('ov.panel_meta', src, String(meta.seq||1));
+    }
+    _ovPanelKey=key;
+    return true;
+  }catch(e){
+    if(!quiet){
+      setOverviewPanelEmpty(e.message||t('ov.panel_empty'));
+      toast(e.message||t('toast.last_frame_none'));
+    }
+    return false;
+  }
+}
+function armOverviewPanelPoll(){
+  if(_ovPanelPollTimer) clearInterval(_ovPanelPollTimer);
+  _ovPanelPollTimer=setInterval(()=>{
+    if(document.hidden) return;
+    const page=$('page-overview');
+    if(page && page.hidden) return;
+    loadOverviewPanel(true, false);
+  }, 8000);
+}
+/** Load last frame into Display image editor (manual "读取当前屏"). */
+async function loadLastFramePreview(quiet){
+  try{
+    const meta=await get('/api/v1/display/getLastFrameMeta');
+    if(!meta||!meta.present){
+      if(!quiet) toast(t('toast.last_frame_none'));
+      return false;
+    }
+    const bytes=await fetchLastFrameBytes();
+    const id=nativeFrameToImageData(bytes);
+    const c=document.createElement('canvas');
+    c.width=PANEL_W; c.height=PANEL_H;
+    c.getContext('2d').putImageData(id,0,0);
+    const bmp=await createImageBitmap(c);
+    await adoptImgBitmap(bmp, '');
+    if(!quiet) toast(t('toast.last_frame_ok')+(meta.source?(' · '+meta.source):''));
+    return true;
+  }catch(e){
+    if(!quiet) toast(e.message||t('toast.last_frame_none'));
+    return false;
+  }
+}
 $('imgDrop').onclick=()=>{
   const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
   inp.onchange=async()=>{
@@ -2800,46 +3370,76 @@ $('imgDrop').onclick=()=>{
 function imageSourceUrl(){
   return ($('imgUrl')&&$('imgUrl').value||'').trim();
 }
-/* Device STA fetch → same-origin bytes → content preview (no browser CORS). */
-async function loadUrlIntoPreview(url){
+/* Device STA fetch → same-origin bytes → content preview (no browser CORS).
+ * Single-flight: SoftAP only allows one proxyImage; debounce + button must not overlap. */
+let _urlProxyGen=0;
+let _urlProxyTail=Promise.resolve();
+function mapProxyErr(msg){
+  if(!msg) return t('toast.url_fail');
+  if(/STA|Wi-?Fi/i.test(msg)) return t('toast.url_need_sta');
+  if(/proxy busy|in progress/i.test(msg)) return t('toast.url_busy');
+  return msg;
+}
+function loadUrlIntoPreview(url){
   const u=(url||'').trim();
-  if(!u) throw new Error(t('toast.need_url'));
-  if(!/^https?:\/\//i.test(u)) throw new Error(t('toast.need_url'));
-  const res=await fetch('/api/v1/display/proxyImage',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({url:u})
-  });
-  const ct=(res.headers.get('content-type')||'').toLowerCase();
-  if(!res.ok || ct.includes('application/json')){
-    let msg=t('toast.url_fail');
-    try{
-      const j=await res.json();
-      if(j&&j.msg){
-        if(/STA|Wi-?Fi/i.test(j.msg)) msg=t('toast.url_need_sta');
-        else msg=j.msg;
-      }
-    }catch(_){}
-    throw new Error(msg);
-  }
-  const blob=await res.blob();
-  const bmp=await createImageBitmap(blob);
-  await adoptImgBitmap(bmp, u);
-  toast(t('toast.url_ok'));
+  if(!u) return Promise.reject(new Error(t('toast.need_url')));
+  if(!/^https?:\/\//i.test(u)) return Promise.reject(new Error(t('toast.need_url')));
+  const gen=++_urlProxyGen;
+  const run=async()=>{
+    if(gen!==_urlProxyGen) return; /* superseded by a newer request */
+    const res=await fetch('/api/v1/display/proxyImage',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:u})
+    });
+    if(gen!==_urlProxyGen) return;
+    const ct=(res.headers.get('content-type')||'').toLowerCase();
+    if(!res.ok || ct.includes('application/json')){
+      let msg=t('toast.url_fail');
+      try{
+        const j=await res.json();
+        if(j&&j.msg) msg=mapProxyErr(j.msg);
+      }catch(_){}
+      throw new Error(msg);
+    }
+    const blob=await res.blob();
+    if(gen!==_urlProxyGen) return;
+    const bmp=await createImageBitmap(blob);
+    if(gen!==_urlProxyGen){ try{bmp.close()}catch(_){} return; }
+    await adoptImgBitmap(bmp, u);
+    toast(t('toast.url_ok'));
+  };
+  const p=_urlProxyTail.then(run, run);
+  _urlProxyTail=p.catch(()=>{});
+  return p;
+}
+async function runUrlPreview(url){
+  clearTimeout(window.__urlPvT);
+  busy($('btnImgUrl'),1);
+  try{ await loadUrlIntoPreview(url); }
+  catch(e){ toast(e.message||t('toast.url_fail')); }
+  finally{ busy($('btnImgUrl'),0); syncImgPushGate(); }
 }
 $('btnImgUrl').onclick=async()=>{
   const u=imageSourceUrl();
   if(!u){ toast(t('toast.need_url')); return; }
-  busy($('btnImgUrl'),1);
-  try{
-    await loadUrlIntoPreview(u);
-  }catch(e){
-    toast(e.message||t('toast.url_fail'));
-  }finally{
-    busy($('btnImgUrl'),0);
-    syncImgPushGate();
-  }
+  await runUrlPreview(u);
 };
+if($('btnLastFrame')) $('btnLastFrame').onclick=async()=>{
+  busy($('btnLastFrame'),1);
+  try{ await loadLastFramePreview(false); }
+  finally{ busy($('btnLastFrame'),0); syncImgPushGate(); }
+};
+if($('btnOvRefreshPanel')) $('btnOvRefreshPanel').onclick=async()=>{
+  busy($('btnOvRefreshPanel'),1);
+  try{ await loadOverviewPanel(false, true); }
+  finally{ busy($('btnOvRefreshPanel'),0); }
+};
+function scheduleOverviewPanelRefresh(){
+  /* Panel refresh + lastfrm erase/write usually finishes within ~20s. */
+  setTimeout(()=>{ loadOverviewPanel(true, true); }, 8000);
+  setTimeout(()=>{ loadOverviewPanel(true, true); }, 22000);
+}
 if($('imgUrl')){
   $('imgUrl').addEventListener('input',()=>{
     const u=imageSourceUrl();
@@ -2847,13 +3447,10 @@ if($('imgUrl')){
       clearImgPreview();
     }
     clearTimeout(window.__urlPvT);
-    window.__urlPvT=setTimeout(async()=>{
+    window.__urlPvT=setTimeout(()=>{
       const uu=imageSourceUrl();
       if(!uu || !/^https?:\/\//i.test(uu) || uu===_urlPreviewSrc) return;
-      busy($('btnImgUrl'),1);
-      try{ await loadUrlIntoPreview(uu); }
-      catch(e){ toast(e.message||t('toast.url_fail')); }
-      finally{ busy($('btnImgUrl'),0); syncImgPushGate(); }
+      runUrlPreview(uu);
     }, 700);
   });
 }
@@ -3147,6 +3744,8 @@ async function loadCfg(){
     if($('mqQos')) $('mqQos').value=String(m.qos!=null?m.qos:1);
     if($('mqUser')) $('mqUser').value=m.username||'';
     if($('mqPass')) $('mqPass').value=m.password||'';
+    setMqTlsVerify(m.tlsVerify!==false, false);
+    if($('mqCaPem')) $('mqCaPem').value=m.caPem||'';
     /* Topics are device-derived (read-only). */
     if(m.topicUp) setTopicVal('tUp', m.topicUp);
     if(m.topicDown) setTopicVal('tDown', m.topicDown);
@@ -3159,7 +3758,7 @@ async function loadCfg(){
 }
 
 async function scanWifiNetworks(){
-  if(typeof setWifiScanCollapsed==='function') setWifiScanCollapsed(false);
+  if(typeof setWifiScanCollapsed==='function') setWifiScanCollapsed(false, {fromUser:true});
   const btn=$('btnScanWifi');
   busy(btn,1);
   const list=$('ssidList');
@@ -3202,6 +3801,7 @@ async function loadPower(){
     const mode=(p.mode==='cycle'||p.mode==='hibernate')?p.mode:(sm>0?'cycle':'always');
     if(typeof setWorkMode==='function') setWorkMode(mode);
     if($('pwrSleep')) $('pwrSleep').value=sm||60;
+    if($('pwrWakeSec')) $('pwrWakeSec').value=(+p.wakeSec>0?+p.wakeSec:120);
     if($('pwrWake')) $('pwrWake').value=p.wakeUrl||'';
     setImgQuality(p.imageQuality==='speed'?'speed':'quality');
   }catch(e){}
@@ -3224,6 +3824,7 @@ $('btnWifiSave').onclick=async()=>{
   toast(t('toast.wifi_connecting'));
   try{
     const r=await post('/api/v1/network/setWifiParam',{ssid,password:pass});
+    _wifiScanUserOpen=false;
     if(typeof setWifiStatus==='function') setWifiStatus('connected', ssid+(r&&r.ip?(' · '+r.ip):''));
     toast(t('toast.wifi_ok', ssid));
     loadInfo();
@@ -3237,6 +3838,26 @@ function getMqTransport(){
   const on=$('mqTransport')&&$('mqTransport').querySelector('button.on');
   return (on&&on.dataset.transport==='mqtts')?'mqtts':'mqtt';
 }
+function getMqTlsVerify(){
+  const on=$('mqTlsVerify')&&$('mqTlsVerify').querySelector('button.on');
+  return !(on&&on.dataset.verify==='0');
+}
+function setMqTlsVerify(on, toastMsg){
+  const next=!!on;
+  const box=$('mqTlsVerify');
+  if(box){
+    box.querySelectorAll('button').forEach(b=>{
+      b.classList.toggle('on', (b.dataset.verify==='1')===next);
+    });
+  }
+  const panel=$('mqTlsPanel');
+  if(panel) panel.dataset.verify=next?'1':'0';
+  const tip=$('mqTlsInsecureHint');
+  if(tip) tip.hidden=next;
+  if(toastMsg){
+    toast(next?(lang==='zh'?'已开启证书校验':'Cert verify on'):(lang==='zh'?'已关闭证书校验（不安全）':'Cert verify off (insecure)'));
+  }
+}
 function setMqTransport(tr, syncPort){
   const next=(tr==='mqtts')?'mqtts':'mqtt';
   const prev=getMqTransport();
@@ -3246,8 +3867,8 @@ function setMqTransport(tr, syncPort){
       b.classList.toggle('on', b.dataset.transport===next);
     });
   }
-  const hint=$('mqTlsHint');
-  if(hint) hint.hidden=(next!=='mqtts');
+  const panel=$('mqTlsPanel');
+  if(panel) panel.hidden=(next!=='mqtts');
   if(syncPort && $('mqPort')){
     const p=+$('mqPort').value;
     const prevDef=prev==='mqtts'?8883:1883;
@@ -3258,18 +3879,29 @@ function setMqTransport(tr, syncPort){
 function mqttPayload(){
   const transport=getMqTransport();
   const def=transport==='mqtts'?8883:1883;
-  return {
+  const payload={
     host:($('mqHost').value||'').trim(),
     port:+($('mqPort').value)||def,
     transport,
     qos:+($('mqQos').value||1),
     username:$('mqUser').value||'',
-    password:$('mqPass').value||''
+    password:$('mqPass').value||'',
+    tlsVerify:getMqTlsVerify(),
+    caPem:($('mqCaPem')&&$('mqCaPem').value||'').trim()
   };
+  if(payload.caPem.length>=3072){
+    throw new Error(lang==='zh'?'CA 证书过长（最多约 3KB）':'CA PEM too long (~3KB max)');
+  }
+  return payload;
 }
 if($('mqTransport')){
   $('mqTransport').querySelectorAll('button').forEach(btn=>{
     btn.onclick=()=>setMqTransport(btn.dataset.transport, true);
+  });
+}
+if($('mqTlsVerify')){
+  $('mqTlsVerify').querySelectorAll('button').forEach(btn=>{
+    btn.onclick=()=>setMqTlsVerify(btn.dataset.verify!=='0', true);
   });
 }
 if($('btnMqttSave')) $('btnMqttSave').onclick=async()=>{
@@ -3315,9 +3947,11 @@ if($('btnSysSave')) $('btnSysSave').onclick=async()=>{
     if(name) await post('/api/v1/system/setDevInfo',{devName:name});
     const mode = (typeof workMode!=='undefined') ? workMode : 'always';
     const sleepMin = (+($('pwrSleep')&&$('pwrSleep').value)||60);
+    let wakeSec = (+($('pwrWakeSec')&&$('pwrWakeSec').value)||120);
+    if(wakeSec<30) wakeSec=30; if(wakeSec>600) wakeSec=600;
     const wakeUrl = ($('pwrWake')&&$('pwrWake').value||'').trim();
     const hibernate = mode==='hibernate';
-    await post('/api/v1/system/setPowerParam',{mode, sleepMin, wakeUrl, imageQuality});
+    await post('/api/v1/system/setPowerParam',{mode, sleepMin, wakeSec, wakeUrl, imageQuality});
     if(hibernate){ toast(t('toast.sleeping')); return; }
     toast(t('toast.sys_saved'));
     loadInfo(); loadPower();
@@ -3391,6 +4025,7 @@ async function uploadPanelCanvas(panelCanvas){
   const j=await res.json().catch(()=>({}));
   if(!res.ok||(j.code!=null&&j.code!==0)) throw new Error(j.msg||('HTTP '+res.status));
   toast(lang==='zh'?'已上传，正在刷新…':'Uploaded — refreshing…',4000);
+  scheduleOverviewPanelRefresh();
 }
 async function pushImageToDevice(){
   const u=imageSourceUrl();
@@ -3412,10 +4047,19 @@ async function pushImageToDevice(){
 async function pushEditorToDevice(){
   const layers=[...document.querySelectorAll('#layerList .layer')];
   const hasImage=layers.some(el=>(el.dataset.type||'')==='image');
+  /*
+   * Firmware renderCanvas only supports text / rect / qr — not bitmaps.
+   * With image layers, rasterize the editor at full panel size and uploadFrame
+   * (same path as Image mode), instead of blocking with an error.
+   */
   if(hasImage){
-    throw new Error(lang==='zh'
-      ? '编辑器图片层无法直接上屏，请改用「图片」模式上传整帧'
-      : 'Editor image layers need Image mode (full-frame upload)');
+    const c=document.createElement('canvas');
+    c.width=PANEL_W; c.height=PANEL_H;
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    drawEditorScene(ctx, PANEL_W, PANEL_H, false);
+    await uploadPanelCanvas(c);
+    scheduleOverviewPanelRefresh();
+    return;
   }
   const items=[];
   layers.forEach(el=>{
@@ -3423,19 +4067,31 @@ async function pushEditorToDevice(){
     const x=+el.dataset.x||0, y=+el.dataset.y||0;
     const color=el.dataset.color||'black';
     if(type==='text'){
-      const size=+el.dataset.size||42;
-      const scale=Math.max(1, Math.min(8, Math.round(size/16)));
-      const top=Math.max(0, y - size);
+      const scale=layerTextScale(el);
+      const glyphH=16*scale;
+      /* Editor y is baseline; firmware canvas y is top of glyph box. */
+      const top=Math.max(0, y - glyphH);
       items.push({type:'text',x,y:top,text:panelTextClip(normalizePanelText(el.dataset.content||'')),color,scale});
     } else if(type==='rect'){
-      items.push({type:'rect',x,y,w:220,h:48,color,fill:1,thickness:4});
+      const rs=layerRectSize(el);
+      items.push({type:'rect',x,y,w:rs.w,h:rs.h,color,fill:true,thickness:4});
     } else if(type==='qr'){
-      const scale=Math.max(2, Math.round((+el.dataset.size||160)/25));
-      items.push({type:'qr',x,y,text:el.dataset.content||'https://wiki.camthink.ai',color,scale});
+      const sizePx=Math.max(40, +el.dataset.size||160);
+      /* Firmware picks scale from size (incl. quiet zone). Keep scale as fallback. */
+      const scale=Math.max(2, Math.round(sizePx/33));
+      items.push({
+        type:'qr', x, y,
+        text:el.dataset.content||'https://wiki.camthink.ai',
+        color:'black', size:sizePx, scale
+      });
     }
   });
+  if(!items.length){
+    throw new Error(lang==='zh'?'没有可推送的图层':'No layers to push');
+  }
   await post('/api/v1/display/renderCanvas',{bg:'white',items});
   toast(lang==='zh'?'已提交刷屏':'Pushed to screen',4000);
+  scheduleOverviewPanelRefresh();
 }
 async function pushMdToDevice(){
   const items=mdToCanvasItems($('mdText')?$('mdText').value:'');
@@ -3445,6 +4101,7 @@ async function pushMdToDevice(){
   await post('/api/v1/display/renderCanvas',{bg:'white',items});
   if(_mdLastMeta && _mdLastMeta.truncated) toast(t('toast.md_trunc'), 4000);
   else toast(lang==='zh'?'已提交刷屏':'Pushed to screen',4000);
+  scheduleOverviewPanelRefresh();
 }
 
 if($('dispPush')) $('dispPush').onclick=async()=>{
@@ -3467,6 +4124,9 @@ if($('btnImgPush')) $('btnImgPush').onclick=async()=>{
 /* boot */
 loadCfg(); loadPower(); loadInfo().then(()=>armInfoPoll());
 armInfoPoll();
+/* Show current panel snapshot on Overview (not Display editor). */
+setTimeout(()=>{ loadOverviewPanel(true, true); }, 400);
+armOverviewPanelPoll();
 /* Auto-scan only while SoftAP is up (avoid disrupting STA). */
 setTimeout(async()=>{
   try{
@@ -3475,7 +4135,12 @@ setTimeout(async()=>{
   }catch(_){}
 }, 800);
 window.addEventListener('online',()=>loadInfo());
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden) loadInfo(); });
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden) return;
+  loadInfo();
+  const page=$('page-overview');
+  if(!page || !page.hidden) loadOverviewPanel(true, false);
+});
 
 applyI18n();
 </script>

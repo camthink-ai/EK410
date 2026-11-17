@@ -3,7 +3,7 @@
 .AppleDouble
 .LSOverride
 
-# Editor / IDE
+# Editor / IDE / agent scratch
 .idea/
 .vscode/*
 !.vscode/settings.json.example
@@ -13,17 +13,29 @@
 .clangd/
 .compile_commands.json
 compile_commands.json
+.zcode/
+.cursor/
+.claude/
 
-# ESP-IDF build outputs
+# ESP-IDF build outputs (SoftAP + dual-SKU BLE tree)
 build/
+build_ble/
+build_*/
 sdkconfig
 sdkconfig.old
 sdkconfig.ci
+sdkconfig.*.bak
+
+# Dual-SKU flash artifacts (rebuild via tools/build_dual_sku.sh)
+dist/
 
 # Nested diagnostic firmware builds
 tools/gpio_scan/build/
 tools/gpio_scan/sdkconfig
 tools/gpio_scan/sdkconfig.old
+
+# Local NeoLink / experiment drops (not EK410 firmware)
+tools/neolink/
 
 # Component manager (reproducible via dependencies.lock + idf_component.yml)
 managed_components/
@@ -35,12 +47,14 @@ __pycache__/
 venv/
 .env
 
-# Local flash / logs
+# Local flash / logs / serial captures
 *.log
 /tmp/
 flash_args
 flasher_args.json
 
-# Generated previews (keep sources under assets/)
+# Generated / local scratch (keep sources under assets/)
 *.tmp
 *.bak
+*.orig
+*.rej

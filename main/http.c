@@ -10,7 +10,8 @@
  * GET/POST /api/v1/network/getWifiParam | setWifiParam {ssid,password}
  * GET  /api/v1/network/scanWifi           {aps:[{ssid,rssi,secure,authmode}]}
  * GET/POST /api/v1/network/getMqttParam | setMqttParam
- *        {host,port,transport:"mqtt"|"mqtts",clientId,qos,username,password}
+ *        {host,port,transport:"mqtt"|"mqtts",clientId,qos,username,password,
+ *         tlsVerify,caPem}
  * POST /api/v1/display/renderText         {text,color,bg,scale}
  * POST /api/v1/display/testPattern
  * POST /api/v1/network/testMqtt           probe connect + publish ping
@@ -18,8 +19,10 @@
  * POST /api/v1/display/renderCanvas       {bg,items[]}
  * POST /api/v1/display/displayUrl         {url}  device-side fetch + decode
  * POST /api/v1/display/proxyImage         {url}  STA fetch → raw image bytes (SoftAP preview)
+ * GET  /api/v1/display/getLastFrameMeta   {present,seq,source,savedUs,bytes,crc32}
+ * GET  /api/v1/display/lastFrame          raw 960000-byte native 4bpp frame
  * GET/POST /api/v1/system/getPowerParam | setPowerParam
- *        {mode:always|cycle|hibernate, sleepMin, wakeUrl,
+ *        {mode:always|cycle|hibernate, sleepMin, wakeSec, wakeUrl,
  *         imageQuality:"quality"|"speed"}
  * POST /api/v1/system/sleepNow            deep sleep (MAIN wakes; cycle also timer)
  *
@@ -31,13 +34,10 @@
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_http_server.h"
-#include "esp_http_client.h"
-#include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "cJSON.h"
 
@@ -51,7 +51,8 @@
 #include "ota.h"
 #include "sleep.h"
 #include "led.h"
-#include "img_decode.h"
+#include "last_frame.h"
+#include "ct_prov.h"
 #include "www_html.h"
 
 #define TAG "-->HTTP"
@@ -134,6 +135,9 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     }
     cJSON_AddBoolToObject(obj, "mqttConnected", mqtt_is_connected());
     cJSON_AddBoolToObject(obj, "softapUp", wifi_softap_is_up());
+    cJSON_AddBoolToObject(obj, "bleProvUp", wifi_ble_prov_is_up());
+    cJSON_AddBoolToObject(obj, "bleSkuAvailable", ota_ble_sku_available());
+    cJSON_AddStringToObject(obj, "projectName", ota_running_project_name());
     cJSON_AddBoolToObject(obj, "provisioned", config_is_provisioned());
     cJSON_AddBoolToObject(obj, "panelOk", app_epd_panel_ok());
     if (wifi_softap_is_up()) {
@@ -154,6 +158,7 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     cfg_get_power_attr(&p);
     cJSON_AddStringToObject(obj, "powerMode", power_mode_str(p.mode));
     cJSON_AddNumberToObject(obj, "sleepMin", p.sleepMin);
+    cJSON_AddNumberToObject(obj, "wakeSec", p.wakeSec);
     char *str = cJSON_PrintUnformatted(obj);
     esp_err_t res = send_json(req, str);
     cJSON_free(str);
@@ -316,6 +321,8 @@ static esp_err_t get_mqtt_param_handle(httpd_req_t *req)
     cJSON_AddNumberToObject(obj, "port", mqtt.port);
     cJSON_AddStringToObject(obj, "transport", mqtt_transport_str(mqtt.transport));
     cJSON_AddBoolToObject(obj, "tls", mqtt.transport == MQTT_TRANSPORT_TLS);
+    cJSON_AddBoolToObject(obj, "tlsVerify", mqtt.tlsVerify);
+    cJSON_AddStringToObject(obj, "caPem", cfg_mqtt_ca_pem());
     cJSON_AddStringToObject(obj, "clientId", mqtt.clientId);
     cJSON_AddNumberToObject(obj, "qos", mqtt.qos);
     cJSON_AddStringToObject(obj, "username", mqtt.username);
@@ -348,6 +355,8 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     cJSON *qos = root ? cJSON_GetObjectItem(root, "qos") : NULL;
     cJSON *user = root ? cJSON_GetObjectItem(root, "username") : NULL;
     cJSON *pass = root ? cJSON_GetObjectItem(root, "password") : NULL;
+    cJSON *tlsVerify = root ? cJSON_GetObjectItem(root, "tlsVerify") : NULL;
+    cJSON *caPem = root ? cJSON_GetObjectItem(root, "caPem") : NULL;
     if (!cJSON_IsString(host) || host->valuestring[0] == '\0' || strlen(host->valuestring) >= 64) {
         cJSON_Delete(root);
         return send_err(req, "invalid host");
@@ -359,6 +368,10 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (cJSON_IsString(pass) && strlen(pass->valuestring) >= 65) {
         cJSON_Delete(root);
         return send_err(req, "password too long");
+    }
+    if (cJSON_IsString(caPem) && strlen(caPem->valuestring) >= MQTT_CA_PEM_MAX) {
+        cJSON_Delete(root);
+        return send_err(req, "caPem too long");
     }
     (void)cid; /* clientId is device-bound; ignore client overrides */
 
@@ -394,7 +407,13 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (cJSON_IsString(pass)) {
         strlcpy(mqtt.password, pass->valuestring, sizeof(mqtt.password));
     }
+    if (cJSON_IsBool(tlsVerify)) {
+        mqtt.tlsVerify = cJSON_IsTrue(tlsVerify);
+    }
     cfg_set_mqtt_attr(&mqtt);
+    if (cJSON_IsString(caPem)) {
+        cfg_set_mqtt_ca_pem(caPem->valuestring);
+    }
     cJSON_Delete(root);
     if (wifi_sta_is_connected()) {
         mqtt_restart();
@@ -441,6 +460,63 @@ static esp_err_t open_softap_handle(httpd_req_t *req)
     esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"SoftAP opening\",\"softapUp\":true}");
     if (xTaskCreate(softap_open_deferred_task, "ap_on", 10240, NULL, 5, NULL) != pdPASS) {
         wifi_softap_open();
+    }
+    return res;
+}
+
+static void ble_open_deferred_task(void *arg)
+{
+    (void)arg;
+    wifi_ble_prov_open();
+    vTaskDelete(NULL);
+}
+
+static void ble_close_deferred_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(300));
+    wifi_ble_prov_close();
+    vTaskDelete(NULL);
+}
+
+static esp_err_t open_ble_handle(httpd_req_t *req)
+{
+    if (wifi_ble_prov_is_up()) {
+        wifi_ble_prov_touch();
+        return send_json(req, "{\"code\":0,\"msg\":\"already on\",\"bleProvUp\":true}");
+    }
+    if (!ota_ble_sku_available()) {
+        return send_json(req,
+            "{\"code\":1,\"msg\":\"BLE SKU image missing on other OTA slot\",\"bleSkuAvailable\":false}");
+    }
+    /* Optional {"idleSec":N} for CI auto-exit from BLE SKU. */
+    char *body = read_body(req);
+    if (body) {
+        cJSON *root = cJSON_Parse(body);
+        free(body);
+        if (root) {
+            cJSON *idle = cJSON_GetObjectItem(root, "idleSec");
+            if (cJSON_IsNumber(idle) && idle->valuedouble > 0) {
+                cfg_ble_idle_sec_set((int)idle->valuedouble);
+            }
+            cJSON_Delete(root);
+        }
+    }
+    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"BLE SKU boot armed\",\"bleProvUp\":true}");
+    if (xTaskCreate(ble_open_deferred_task, "ble_on", 8192, NULL, 5, NULL) != pdPASS) {
+        wifi_ble_prov_open();
+    }
+    return res;
+}
+
+static esp_err_t close_ble_handle(httpd_req_t *req)
+{
+    if (!wifi_ble_prov_is_up()) {
+        return send_json(req, "{\"code\":0,\"msg\":\"already off\",\"bleProvUp\":false}");
+    }
+    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"BLE closing\",\"bleProvUp\":false}");
+    if (xTaskCreate(ble_close_deferred_task, "ble_off", 8192, NULL, 5, NULL) != pdPASS) {
+        wifi_ble_prov_close();
     }
     return res;
 }
@@ -578,119 +654,8 @@ static esp_err_t display_url_handle(httpd_req_t *req)
     return send_json(req, "{\"code\":0,\"msg\":\"queued\"}");
 }
 
-/* SoftAP SPA preview: browser cannot fetch remote images (CORS / no WAN on
- * phone SoftAP). Device pulls via STA and returns bytes so the page can
- * createImageBitmap same-origin, then push via uploadFrame. */
-#define PROXY_IMG_MAX_BYTES (768 * 1024)
-#define PROXY_READ_CHUNK    4096
-
-typedef struct {
-    char url[512];
-    uint8_t *data;
-    size_t len;
-    char ctype[48];
-    char err[48];
-    SemaphoreHandle_t done;
-} proxy_job_t;
-
+/* SoftAP SPA preview: STA fetch via boot-time img_proxy task (TLS stack). */
 static volatile bool s_proxy_busy;
-
-static void proxy_fail(proxy_job_t *job, const char *msg)
-{
-    snprintf(job->err, sizeof(job->err), "%s", msg ? msg : "proxy fail");
-}
-
-static void proxy_image_task(void *arg)
-{
-    proxy_job_t *job = (proxy_job_t *)arg;
-    esp_http_client_config_t cfg = {
-        .url = job->url,
-        .timeout_ms = 60000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .max_redirection_count = 5,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
-        proxy_fail(job, "http init fail");
-        goto done;
-    }
-    if (esp_http_client_open(client, 0) != ESP_OK) {
-        proxy_fail(job, "http open/TLS fail");
-        goto cleanup;
-    }
-    long clen = esp_http_client_fetch_headers(client);
-    int status = esp_http_client_get_status_code(client);
-    if (status > 0 && (status < 200 || status >= 300)) {
-        char buf[40];
-        snprintf(buf, sizeof(buf), "HTTP status %d", status);
-        proxy_fail(job, buf);
-        goto close;
-    }
-    if (clen > (long)PROXY_IMG_MAX_BYTES) {
-        proxy_fail(job, "file >768KB limit");
-        goto close;
-    }
-    size_t cap = (clen > 0) ? (size_t)clen : PROXY_IMG_MAX_BYTES;
-    uint8_t *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!body) {
-        body = malloc(cap);
-    }
-    if (!body) {
-        proxy_fail(job, "download OOM");
-        goto close;
-    }
-    size_t total = 0;
-    while (total < cap) {
-        int want = (int)((cap - total) > PROXY_READ_CHUNK ? PROXY_READ_CHUNK : (cap - total));
-        int got = esp_http_client_read(client, (char *)body + total, want);
-        if (got < 0) {
-            free(body);
-            proxy_fail(job, "http read error");
-            goto close;
-        }
-        if (got == 0) {
-            break;
-        }
-        total += (size_t)got;
-    }
-    if (clen <= 0 && total >= PROXY_IMG_MAX_BYTES) {
-        char probe;
-        int extra = esp_http_client_read(client, &probe, 1);
-        if (extra > 0) {
-            free(body);
-            proxy_fail(job, "file >768KB limit");
-            goto close;
-        }
-    }
-    if (total == 0) {
-        free(body);
-        proxy_fail(job, "empty download");
-        goto close;
-    }
-    img_fmt_t fmt = img_sniff_format(body, total);
-    if (fmt == IMG_FMT_JPEG) {
-        snprintf(job->ctype, sizeof(job->ctype), "image/jpeg");
-    } else if (fmt == IMG_FMT_PNG) {
-        snprintf(job->ctype, sizeof(job->ctype), "image/png");
-    } else if (fmt == IMG_FMT_WEBP) {
-        snprintf(job->ctype, sizeof(job->ctype), "image/webp");
-    } else {
-        free(body);
-        proxy_fail(job, "not JPEG/PNG/WebP");
-        goto close;
-    }
-    job->data = body;
-    job->len = total;
-    ESP_LOGI(TAG, "proxyImage %u bytes %s", (unsigned)total, job->ctype);
-
-close:
-    esp_http_client_close(client);
-cleanup:
-    esp_http_client_cleanup(client);
-done:
-    xSemaphoreGive(job->done);
-    vTaskDelete(NULL);
-}
 
 static esp_err_t display_proxy_image_handle(httpd_req_t *req)
 {
@@ -699,8 +664,10 @@ static esp_err_t display_proxy_image_handle(httpd_req_t *req)
         return send_err(req, "need STA Wi-Fi");
     }
     if (s_proxy_busy) {
+        ESP_LOGW(TAG, "proxyImage rejected: busy");
         return send_err(req, "proxy busy");
     }
+
     char *body = read_body(req);
     if (!body) {
         return send_err(req, "bad body");
@@ -712,8 +679,7 @@ static esp_err_t display_proxy_image_handle(httpd_req_t *req)
         cJSON_Delete(root);
         return send_err(req, "missing url");
     }
-    size_t ulen = strlen(u->valuestring);
-    if (ulen >= sizeof(((proxy_job_t *)0)->url)) {
+    if (strlen(u->valuestring) >= 512) {
         cJSON_Delete(root);
         return send_err(req, "url too long");
     }
@@ -723,52 +689,39 @@ static esp_err_t display_proxy_image_handle(httpd_req_t *req)
         return send_err(req, "url must be http(s)");
     }
 
-    proxy_job_t *job = calloc(1, sizeof(*job));
+    epd_proxy_job_t *job = calloc(1, sizeof(*job));
     if (!job) {
         cJSON_Delete(root);
         return send_err(req, "OOM");
     }
-    memcpy(job->url, u->valuestring, ulen + 1);
+    strlcpy(job->url, u->valuestring, sizeof(job->url));
     cJSON_Delete(root);
-    job->done = xSemaphoreCreateBinary();
-    if (!job->done) {
-        free(job);
-        return send_err(req, "OOM");
-    }
 
     s_proxy_busy = true;
-    /* TLS download needs a large stack — same as epd_render display_url. */
-    if (xTaskCreate(proxy_image_task, "img_proxy", 32768, job, 5, NULL) != pdPASS) {
+    ESP_LOGI(TAG, "proxyImage queue %.96s%s", job->url, strlen(job->url) > 96 ? "…" : "");
+    /* May wait behind splash/panel refresh (20–40s) then TLS download. */
+    int rc = app_epd_proxy_fetch(job, 90000);
+    if (rc != 0) {
+        char errcopy[48];
+        strlcpy(errcopy, job->err[0] ? job->err : "proxy fail", sizeof(errcopy));
+        ESP_LOGW(TAG, "proxyImage fail: %s", errcopy);
+        if (job->orphaned) {
+            /* Render task frees job + data when download finishes. */
+        } else {
+            free(job->data);
+            free(job);
+        }
         s_proxy_busy = false;
-        vSemaphoreDelete(job->done);
-        free(job);
-        return send_err(req, "proxy busy");
-    }
-    if (xSemaphoreTake(job->done, pdMS_TO_TICKS(70000)) != pdTRUE) {
-        ESP_LOGE(TAG, "proxyImage timeout — waiting for task cleanup");
-        xSemaphoreTake(job->done, portMAX_DELAY);
-        s_proxy_busy = false;
-        vSemaphoreDelete(job->done);
-        free(job->data);
-        free(job);
-        return send_err(req, "proxy timeout");
-    }
-    s_proxy_busy = false;
-    vSemaphoreDelete(job->done);
-
-    if (job->err[0] || !job->data || job->len == 0) {
-        const char *msg = job->err[0] ? job->err : "proxy fail";
-        free(job->data);
-        free(job);
-        return send_err(req, msg);
+        return send_err(req, errcopy);
     }
 
     softap_touch();
-    httpd_resp_set_type(req, job->ctype);
+    httpd_resp_set_type(req, job->ctype[0] ? job->ctype : "application/octet-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     esp_err_t res = httpd_resp_send(req, (const char *)job->data, job->len);
     free(job->data);
     free(job);
+    s_proxy_busy = false;
     return res;
 }
 
@@ -800,6 +753,83 @@ static esp_err_t display_upload_frame_handle(httpd_req_t *req)
     return send_json(req, "{\"code\":0,\"msg\":\"uploaded, refreshing\"}");
 }
 
+static esp_err_t display_last_frame_meta_handle(httpd_req_t *req)
+{
+    softap_touch();
+    last_frame_meta_t m;
+    cJSON *obj = cJSON_CreateObject();
+    if (last_frame_get_meta(&m) != 0 || !m.present) {
+        cJSON_AddBoolToObject(obj, "present", false);
+        cJSON_AddNumberToObject(obj, "bytes", LAST_FRAME_BYTES);
+    } else {
+        cJSON_AddBoolToObject(obj, "present", true);
+        cJSON_AddNumberToObject(obj, "seq", (double)m.seq);
+        cJSON_AddNumberToObject(obj, "crc32", (double)m.crc32);
+        cJSON_AddNumberToObject(obj, "savedUs", (double)m.saved_us);
+        cJSON_AddNumberToObject(obj, "bytes", LAST_FRAME_BYTES);
+        cJSON_AddStringToObject(obj, "source", m.source);
+    }
+    char *s = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    if (!s) {
+        return send_err(req, "OOM");
+    }
+    esp_err_t res = send_json(req, s);
+    free(s);
+    return res;
+}
+
+typedef struct {
+    httpd_req_t *req;
+    const last_frame_meta_t *meta;
+    bool hdr_sent;
+} last_frame_http_ctx_t;
+
+static int last_frame_http_writer(const uint8_t *data, size_t len, void *ctx)
+{
+    last_frame_http_ctx_t *c = (last_frame_http_ctx_t *)ctx;
+    if (!c->hdr_sent) {
+        httpd_resp_set_type(c->req, "application/octet-stream");
+        httpd_resp_set_hdr(c->req, "Cache-Control", "no-store");
+        httpd_resp_set_hdr(c->req, "X-EK410-Frame", "native-4bpp-960000");
+        char src_hdr[40];
+        snprintf(src_hdr, sizeof(src_hdr), "%s",
+                 (c->meta && c->meta->source[0]) ? c->meta->source : "panel");
+        httpd_resp_set_hdr(c->req, "X-EK410-Source", src_hdr);
+        c->hdr_sent = true;
+    }
+    if (httpd_resp_send_chunk(c->req, (const char *)data, len) != ESP_OK) {
+        return -1;
+    }
+    return 0;
+}
+
+static esp_err_t display_last_frame_handle(httpd_req_t *req)
+{
+    softap_touch();
+    last_frame_meta_t m;
+    if (last_frame_get_meta(&m) != 0 || !m.present) {
+        return send_err(req, "no last frame");
+    }
+
+    /* Stream from flash in 4KB chunks — a one-shot 960KB alloc+send stalls SoftAP
+     * and causes browser "Failed to fetch" under concurrent page loads. */
+    last_frame_http_ctx_t ctx = { .req = req, .meta = &m, .hdr_sent = false };
+    int rc = last_frame_stream(last_frame_http_writer, &ctx);
+    if (rc == -2) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return send_err(req, "last frame busy");
+    }
+    if (rc != 0) {
+        if (ctx.hdr_sent) {
+            httpd_resp_send_chunk(req, NULL, 0);
+            return ESP_FAIL;
+        }
+        return send_err(req, "last frame corrupt");
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 /* ---------- OTA ---------- */
 
 static void ota_task(void *arg)
@@ -814,7 +844,8 @@ static void ota_task(void *arg)
         esp_restart();
     }
     ESP_LOGE(TAG, "OTA failed: %s", err);
-    led_set(LEDC_ERR_R, LED_BLINK); /* red: upgrade failed */
+    wifi_led_refresh(); /* restore green/blue — do not leave sticky red */
+    led_pulse(LEDC_ERR_R, 2000);
     free(url);
     vTaskDelete(NULL);
 }
@@ -854,6 +885,7 @@ static esp_err_t get_power_param_handle(httpd_req_t *req)
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "mode", power_mode_str(p.mode));
     cJSON_AddNumberToObject(obj, "sleepMin", p.sleepMin);
+    cJSON_AddNumberToObject(obj, "wakeSec", p.wakeSec);
     cJSON_AddStringToObject(obj, "wakeUrl", p.wakeUrl);
     cJSON_AddStringToObject(obj, "imageQuality", img_quality_str(p.imageQuality));
     cJSON_AddNumberToObject(obj, "batteryAdcGpio", p.batteryAdcGpio);
@@ -890,6 +922,9 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
     }
     if ((v = cJSON_GetObjectItem(root, "sleepMin")) && cJSON_IsNumber(v)) {
         p.sleepMin = v->valueint < 0 ? 0 : v->valueint;
+    }
+    if ((v = cJSON_GetObjectItem(root, "wakeSec")) && cJSON_IsNumber(v)) {
+        p.wakeSec = v->valueint;
     }
     if ((v = cJSON_GetObjectItem(root, "wakeUrl")) && cJSON_IsString(v)) {
         strlcpy(p.wakeUrl, v->valuestring, sizeof(p.wakeUrl));
@@ -975,31 +1010,62 @@ static const httpd_uri_t g_handlers[] = {
     { .uri = "/api/v1/network/testMqtt", .method = HTTP_POST, .handler = test_mqtt_handle },
     { .uri = "/api/v1/network/closeSoftAp", .method = HTTP_POST, .handler = close_softap_handle },
     { .uri = "/api/v1/network/openSoftAp", .method = HTTP_POST, .handler = open_softap_handle },
+    { .uri = "/api/v1/network/openBleProv", .method = HTTP_POST, .handler = open_ble_handle },
+    { .uri = "/api/v1/network/closeBleProv", .method = HTTP_POST, .handler = close_ble_handle },
     { .uri = "/api/v1/display/renderText", .method = HTTP_POST, .handler = display_render_text_handle },
     { .uri = "/api/v1/display/renderCanvas", .method = HTTP_POST, .handler = display_render_canvas_handle },
     { .uri = "/api/v1/display/uploadFrame", .method = HTTP_POST, .handler = display_upload_frame_handle },
     { .uri = "/api/v1/display/displayUrl", .method = HTTP_POST, .handler = display_url_handle },
     { .uri = "/api/v1/display/proxyImage", .method = HTTP_POST, .handler = display_proxy_image_handle },
+    { .uri = "/api/v1/display/getLastFrameMeta", .method = HTTP_GET, .handler = display_last_frame_meta_handle },
+    { .uri = "/api/v1/display/lastFrame", .method = HTTP_GET, .handler = display_last_frame_handle },
     { .uri = "/api/v1/display/testPattern", .method = HTTP_POST, .handler = display_test_pattern_handle },
     { .uri = "/api/v1/system/setDevUpgrade", .method = HTTP_POST, .handler = set_dev_upgrade_handle },
     { .uri = "/api/v1/system/getPowerParam", .method = HTTP_GET, .handler = get_power_param_handle },
     { .uri = "/api/v1/system/setPowerParam", .method = HTTP_POST, .handler = set_power_param_handle },
     { .uri = "/api/v1/system/sleepNow", .method = HTTP_POST, .handler = sleep_now_handle },
+    /* NeoLink CT-Prov/1 SoftAP binding (§16) — also reachable on STA IP for tests. */
+    { .uri = "/api/v1/ctprov", .method = HTTP_POST, .handler = ct_prov_http_handle },
 };
+
+static httpd_handle_t s_httpd;
+
+bool http_server_is_up(void)
+{
+    return s_httpd != NULL;
+}
+
+void http_server_stop(void)
+{
+    if (!s_httpd) {
+        return;
+    }
+    httpd_stop(s_httpd);
+    s_httpd = NULL;
+    ESP_LOGI(TAG, "web server stopped");
+}
 
 void http_server_start(void)
 {
+    if (s_httpd) {
+        return;
+    }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = sizeof(g_handlers) / sizeof(g_handlers[0]);
-    /* Canvas/upload paths need headroom beyond the 4KB default. */
-    config.stack_size = 12288;
+    /* Canvas/upload + ctprov Wi-Fi scan need headroom beyond 4KB default.
+     * Do NOT raise to 32KB — each httpd worker would exhaust C61 internal RAM. */
+    config.stack_size = 14336;
     /* setWifiParam may block up to ~20s while trying STA association */
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;
-    httpd_handle_t server = NULL;
-    ESP_ERROR_CHECK(httpd_start(&server, &config));
+    esp_err_t err = httpd_start(&s_httpd, &config);
+    if (err != ESP_OK || !s_httpd) {
+        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+        s_httpd = NULL;
+        return;
+    }
     for (size_t i = 0; i < sizeof(g_handlers) / sizeof(g_handlers[0]); i++) {
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &g_handlers[i]));
+        ESP_ERROR_CHECK(httpd_register_uri_handler(s_httpd, &g_handlers[i]));
     }
     ESP_LOGI(TAG, "web server up (%d endpoints)", config.max_uri_handlers);
 }

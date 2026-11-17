@@ -9,7 +9,7 @@
 | **产品** | EK410 · CamThink 电子墨水屏 |
 | **主控** | ESP32-C61HR2（16MB Flash，2MB PSRAM） |
 | **面板** | 7.09″ Spectra 6 · 1600×1200 · 六色 |
-| **固件版本** | 见 [`VERSION`](VERSION) · 当前 **1.2.1** |
+| **固件版本** | 见 [`VERSION`](VERSION) · 当前 **1.2.2** |
 | **平台** | [NeoMind](https://wiki.camthink.ai) · 设备类型 `ek410_Eink` |
 
 ---

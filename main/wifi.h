@@ -20,6 +20,7 @@ extern "C" {
 
 #define WIFI_STA_CONNECTED_BIT BIT2
 #define WIFI_STA_FAIL_BIT      BIT3
+#define WIFI_SCAN_DONE_BIT     BIT4
 
 typedef enum {
     WIFI_STA_IDLE = 0,
@@ -53,6 +54,17 @@ bool wifi_softap_is_up(void);
 /* Call from HTTP handlers while SoftAP is up to postpone idle auto-close. */
 void wifi_softap_touch(void);
 
+/**
+ * On-demand BLE CT-Prov window (PAGE hold). Mutually exclusive with SoftAP:
+ * open closes SoftAP/httpd/mqtt first; SoftAP open closes BLE first.
+ * Exit paths: PAGE hold again, idle timeout, session.close, SoftAP open.
+ */
+void wifi_ble_prov_open(void);   /* arm NVS + reboot into BLE boot (or refresh) */
+void wifi_ble_prov_enter(void);  /* start NimBLE on BLE boot (no reboot) */
+void wifi_ble_prov_close(void);  /* full stop + clear NVS + reboot to SoftAP boot */
+bool wifi_ble_prov_is_up(void);
+void wifi_ble_prov_touch(void);
+
 /* Back-compat names used by button/main. */
 void wifi_ap_start(void);
 void wifi_enter_ap_mode(void);
@@ -60,6 +72,12 @@ void wifi_enter_ap_mode(void);
 bool wifi_sta_is_connected(void);
 void wifi_get_ip_str(char *buf, int buflen);
 void wifi_get_ap_ssid(char *buf, int buflen);
+
+/**
+ * Recompute status LED from current SoftAP/BLE/STA/panel state.
+ * Call after any transient fault (SoftAP/BLE/OTA fail) so red blink does not stick.
+ */
+void wifi_led_refresh(void);
 
 #define WIFI_SCAN_MAX 24
 

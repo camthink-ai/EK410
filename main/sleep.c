@@ -3,7 +3,7 @@
  * @brief Deep-sleep scheduler + MAIN GPIO wake (ESP32-C61 GPIO0–6).
  *
  * POWER_MODE_ALWAYS:     no auto sleep; sleep_now → until MAIN
- * POWER_MODE_CYCLE:      after WAKE_WINDOW_S online, sleep sleepMin minutes
+ * POWER_MODE_CYCLE:      after wakeSec online (default 120s), sleep sleepMin
  *                        (timer + MAIN can wake early)
  * POWER_MODE_HIBERNATE:  no auto cycle; sleep_now / save → until MAIN
  * SoftAP open always cancels an armed window.
@@ -20,15 +20,30 @@
 #include "mqtt.h"
 #include "wifi.h"
 #include "app_epd.h"
+#include "led.h"
+#include "board_ioext.h"
 #include "pindefine.h"
 
 #define TAG "-->SLP"
-#define WAKE_WINDOW_S 120
 
 static esp_timer_handle_t s_sleepTimer;
 static bool s_armed;
 static bool s_cycleStarted; /* wake+arm once per boot */
 static bool s_entering;
+
+static int wake_window_sec(void)
+{
+    powerAttr_t p;
+    cfg_get_power_attr(&p);
+    int sec = p.wakeSec;
+    if (sec < POWER_WAKE_SEC_MIN) {
+        sec = POWER_WAKE_SEC_DEFAULT;
+    }
+    if (sec > POWER_WAKE_SEC_MAX) {
+        sec = POWER_WAKE_SEC_MAX;
+    }
+    return sec;
+}
 
 static void sleep_enable_main_wakeup(void)
 {
@@ -43,8 +58,8 @@ static void sleep_enable_main_wakeup(void)
 static void sleep_go_task(void *arg)
 {
     (void)arg;
-    if (wifi_softap_is_up()) {
-        ESP_LOGW(TAG, "SoftAP up — abort deep sleep");
+    if (wifi_softap_is_up() || wifi_ble_prov_is_up()) {
+        ESP_LOGW(TAG, "provisioning window up — abort deep sleep");
         s_entering = false;
         vTaskDelete(NULL);
         return;
@@ -65,6 +80,14 @@ static void sleep_go_task(void *arg)
     }
     esp_wifi_stop();
     vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* AW9523B keeps last I2C state across ESP deep-sleep — extinguish LED
+     * and drop panel rail so sleep actually saves peripheral current. */
+    led_set(0, 0, 0, LED_OFF);
+    (void)board_ioext_led_rgb(0, 0, 0);
+    (void)board_ioext_epad_power(false);
+    (void)board_ioext_vbat_dect_en(false);
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     sleep_enable_main_wakeup();
     if (timed) {
@@ -94,8 +117,9 @@ static void sleep_schedule(void)
         const esp_timer_create_args_t args = { .name = "sleep", .callback = sleep_timer_cb };
         ESP_ERROR_CHECK(esp_timer_create(&args, &s_sleepTimer));
     }
+    int wake_s = wake_window_sec();
     esp_timer_stop(s_sleepTimer);
-    ESP_ERROR_CHECK(esp_timer_start_once(s_sleepTimer, (uint64_t)WAKE_WINDOW_S * 1000000ULL));
+    ESP_ERROR_CHECK(esp_timer_start_once(s_sleepTimer, (uint64_t)wake_s * 1000000ULL));
     s_armed = true;
 }
 
@@ -104,7 +128,8 @@ void sleep_arm_from_config(void)
     powerAttr_t p;
     cfg_get_power_attr(&p);
     if (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0) {
-        ESP_LOGI(TAG, "sleep cycle armed: %d min, wake window %d s", p.sleepMin, WAKE_WINDOW_S);
+        ESP_LOGI(TAG, "sleep cycle armed: %d min, wake window %d s",
+                 p.sleepMin, wake_window_sec());
         sleep_schedule();
     } else {
         ESP_LOGI(TAG, "no auto sleep (mode=%s)", power_mode_str(p.mode));
@@ -117,8 +142,8 @@ void sleep_on_sta_online(void)
     if (s_cycleStarted) {
         return;
     }
-    if (wifi_softap_is_up()) {
-        ESP_LOGI(TAG, "defer sleep cycle — SoftAP up");
+    if (wifi_softap_is_up() || wifi_ble_prov_is_up()) {
+        ESP_LOGI(TAG, "defer sleep cycle — provisioning window up");
         return;
     }
     powerAttr_t p;
@@ -155,6 +180,10 @@ void sleep_cancel(void)
 
 void sleep_now(void)
 {
+    if (wifi_ble_prov_is_up()) {
+        ESP_LOGW(TAG, "sleep_now: closing BLE first");
+        wifi_ble_prov_close();
+    }
     if (wifi_softap_is_up()) {
         ESP_LOGW(TAG, "sleep_now: closing SoftAP first");
         wifi_softap_close();

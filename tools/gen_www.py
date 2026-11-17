@@ -4,9 +4,14 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "main", "www", "index.html")
+QRJS = os.path.join(ROOT, "main", "www", "qrcodegen.min.js")
 DST = os.path.join(ROOT, "main", "www_html.h")
 
 html = open(SRC, encoding="utf-8").read()
+# SoftAP has no CDN — embed Nayuki qrcodegen before the page script.
+if os.path.isfile(QRJS) and "<script>" in html:
+    qr = open(QRJS, encoding="utf-8").read().strip()
+    html = html.replace("<script>", "<script>\n/* qrcodegen (Nayuki) */\n" + qr + "\n", 1)
 
 def esc(s):
     out = []

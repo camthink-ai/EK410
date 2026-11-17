@@ -120,7 +120,7 @@ int canvas_parse_json(const cJSON *root, canvas_t *cv, char *errBuf, int errLen)
             canvas_utf8_strlcpy(item->text, t->valuestring, sizeof(item->text));
             item->scale = json_int(it, "scale", 3);
             if (item->scale < 1) item->scale = 1;
-            if (item->scale > 8) item->scale = 8;
+            if (item->scale > CANVAS_TEXT_SCALE_MAX) item->scale = CANVAS_TEXT_SCALE_MAX;
             /* UTF-8 advance: ASCII / punctuation-fallback 8px, CJK/emoji cell 16px. */
             int lines = 1, maxAdv = 0, adv = 0;
             for (int i = 0; item->text[i];) {
@@ -149,8 +149,15 @@ int canvas_parse_json(const cJSON *root, canvas_t *cv, char *errBuf, int errLen)
             item->w = json_int(it, "w", 100);
             item->h = json_int(it, "h", 100);
             item->thickness = json_int(it, "thickness", 4);
+            /* Accept JSON bool or number (SoftAP historically sent fill:1). */
             const cJSON *f = cJSON_GetObjectItem(it, "fill");
-            item->fill = cJSON_IsBool(f) ? cJSON_IsTrue(f) : false;
+            if (cJSON_IsBool(f)) {
+                item->fill = cJSON_IsTrue(f);
+            } else if (cJSON_IsNumber(f)) {
+                item->fill = (f->valuedouble != 0.0);
+            } else {
+                item->fill = false;
+            }
         } else if (!strcasecmp(type->valuestring, "qr")) {
             if (qrSlot >= CANVAS_QR_SLOTS) {
                 snprintf(errBuf, errLen, "max %d qr items", CANVAS_QR_SLOTS);
@@ -163,7 +170,7 @@ int canvas_parse_json(const cJSON *root, canvas_t *cv, char *errBuf, int errLen)
             if (!qrcodegen_encodeText(t->valuestring, s_qrTemp,
                                       cv->qr[qrSlot], qrcodegen_Ecc_MEDIUM,
                                       qrcodegen_VERSION_MIN, CANVAS_QR_VERSION_MAX,
-                                      qrcodegen_Ecc_MEDIUM, false)) {
+                                      qrcodegen_Mask_AUTO, true)) {
                 snprintf(errBuf, errLen, "qr encode failed (payload > v%d?)", CANVAS_QR_VERSION_MAX);
                 return -1;
             }
@@ -171,9 +178,21 @@ int canvas_parse_json(const cJSON *root, canvas_t *cv, char *errBuf, int errLen)
             canvas_utf8_strlcpy(item->text, t->valuestring, sizeof(item->text)); /* keep payload for logs */
             item->qrSlot = qrSlot;
             item->qrSize = qrcodegen_getSize(cv->qr[qrSlot]);
-            item->scale = json_int(it, "scale", 6);
-            if (item->scale < 2) item->scale = 2;
-            if (item->scale > 16) item->scale = 16;
+            /* Prefer target pixel size (includes 4-module quiet zone); else scale. */
+            int size_px = json_int(it, "size", 0);
+            int scale = json_int(it, "scale", 0);
+            if (size_px > 0 && item->qrSize > 0) {
+                scale = size_px / (item->qrSize + 8);
+            }
+            if (scale < 2) {
+                scale = 2;
+            }
+            if (scale > 16) {
+                scale = 16;
+            }
+            item->scale = scale;
+            /* Dark modules must be black for phone cameras on Spectra-6. */
+            item->color = 0x00;
             qrSlot++;
         } else {
             snprintf(errBuf, errLen, "unknown item type");
@@ -351,10 +370,17 @@ static bool rect_pixel(const canvas_item_t *it, int x, int y)
 
 static bool qr_pixel(const canvas_t *cv, const canvas_item_t *it, int x, int y)
 {
+    /* ISO quiet zone: ≥4 light modules around the symbol (critical for scanners). */
+    const int margin = 4 * it->scale;
+    const int outer = (it->qrSize + 8) * it->scale;
     int dx = x - it->x, dy = y - it->y;
-    int px = dx / it->scale, py = dy / it->scale;
-    if (px < 0 || py < 0 || px >= it->qrSize || py >= it->qrSize) {
+    if (dx < 0 || dy < 0 || dx >= outer || dy >= outer) {
         return false;
+    }
+    int px = (dx - margin) / it->scale;
+    int py = (dy - margin) / it->scale;
+    if (px < 0 || py < 0 || px >= it->qrSize || py >= it->qrSize) {
+        return false; /* quiet zone → panel background (must stay light) */
     }
     return qrcodegen_getModule(cv->qr[it->qrSlot], px, py);
 }
@@ -397,8 +423,8 @@ static int setup_add_text(canvas_t *cv, int x, int y, int scale, const char *tex
     if (scale < 1) {
         scale = 1;
     }
-    if (scale > 8) {
-        scale = 8;
+    if (scale > CANVAS_TEXT_SCALE_MAX) {
+        scale = CANVAS_TEXT_SCALE_MAX;
     }
     canvas_item_t *it = &cv->items[cv->count++];
     memset(it, 0, sizeof(*it));
@@ -425,8 +451,8 @@ int canvas_fill_text_screen(canvas_t *cv, const char *const *lines, int line_cou
     if (scale < 1) {
         scale = 1;
     }
-    if (scale > 8) {
-        scale = 8;
+    if (scale > CANVAS_TEXT_SCALE_MAX) {
+        scale = CANVAS_TEXT_SCALE_MAX;
     }
     if (line_count < 0) {
         line_count = 0;
@@ -507,15 +533,15 @@ int canvas_fill_setup_screen(canvas_t *cv, const char *ssid)
         return -1;
     }
     int qrSize = qrcodegen_getSize(cv->qr[0]);
-    /* Target ~420px modules on the right half. */
-    int qrScale = 420 / (qrSize > 0 ? qrSize : 1);
+    /* Target ~420px including 4-module quiet zone. */
+    int qrScale = 420 / ((qrSize > 0 ? qrSize : 1) + 8);
     if (qrScale < 8) {
         qrScale = 8;
     }
     if (qrScale > 16) {
         qrScale = 16;
     }
-    int qrPx = qrSize * qrScale;
+    int qrPx = (qrSize + 8) * qrScale;
     int qrX = 1600 - 72 - qrPx;
     int qrY = 220;
     if (cv->count >= CANVAS_MAX_ITEMS) {

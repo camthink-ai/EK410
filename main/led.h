@@ -4,9 +4,12 @@
  *
  * Policy:
  *   blue blink  — SoftAP / Wi-Fi connecting (shared)
+ *   cyan blink  — BLE CT-Prov window
  *   green solid — running normally (STA up)
- *   red blink   — fault / factory reset
+ *   red         — brief pulse on SoftAP/BLE/OTA/panel fault (must not stick)
  *   purple blink— OTA in progress
+ * BLE idle timeout is normal — exit with blue then SoftAP green, never sticky red.
+ * Transient faults must call wifi_led_refresh() after any red pulse.
  * MQTT does not drive the LED.
  */
 #ifndef __LED_H__
@@ -19,6 +22,7 @@ extern "C" {
 #endif
 
 #define LEDC_NET_R 0, 0, 255       /* blue: SoftAP / Wi-Fi joining */
+#define LEDC_BLE_R 0, 200, 255     /* cyan: BLE provisioning window */
 #define LEDC_OK_R  0, 255, 0       /* green solid: running OK      */
 #define LEDC_ERR_R 255, 0, 0       /* red: fault                   */
 #define LEDC_OTA_R 180, 0, 180     /* purple: upgrading            */

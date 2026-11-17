@@ -35,6 +35,7 @@
 #include "canvas.h"
 #include "battery.h"
 #include "sleep.h"
+#include "last_frame.h"
 
 #define TAG "-->MQTT"
 /* Must match NeoMind-DeviceTypes/types/ek410_Eink.json */
@@ -44,7 +45,8 @@
 #define CMD_QUEUE_LEN 4
 /* ESP32-C61 internal RAM is tight once Wi-Fi is up — 16KB MQTT buffers OOM+panic. */
 #define MQTT_RX_BUF 4096
-#define MQTT_TX_BUF 2048
+/* Telemetry JSON with preview stays ≤200KB; out buffer with margin. */
+#define MQTT_TX_BUF (220 * 1024)
 #define MQTT_KEEPALIVE_S 30
 #define TELEMETRY_PERIOD_US (30ULL * 1000000ULL)
 
@@ -70,7 +72,8 @@ static char s_lwtMsg[192];
 /* Task stacks must live in internal RAM on ESP32-C61 (PSRAM stacks break create). */
 #define MQTT_TASK_STACK_TCP 5120
 #define MQTT_TASK_STACK_TLS 10240
-#define MQTT_TASK_STACK_SLACK 2048
+/* SoftAP APSTA often leaves largest_int ≈6.5KB; keep slack tight so MQTT recovers. */
+#define MQTT_TASK_STACK_SLACK 1024
 
 static int64_t now_s(void)
 {
@@ -108,7 +111,13 @@ static void publish_raw(const char *topic, const char *json, int qos, int retain
     if (!g_MQ.client || !topic || !json) {
         return;
     }
-    esp_mqtt_client_publish(g_MQ.client, topic, json, 0, qos, retain);
+    int len = (int)strlen(json);
+    int msg_id = esp_mqtt_client_publish(g_MQ.client, topic, json, len, qos, retain);
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "publish fail topic=%s len=%d qos=%d", topic, len, qos);
+    } else {
+        ESP_LOGI(TAG, "publish ok id=%d topic=%s len=%d", msg_id, topic, len);
+    }
 }
 
 static void publish_up(const char *json, int retain)
@@ -119,6 +128,11 @@ static void publish_up(const char *json, int retain)
     mqttAttr_t mqtt;
     cfg_get_mqtt_attr(&mqtt);
     int qos = (mqtt.qos >= 0 && mqtt.qos <= 2) ? mqtt.qos : 1;
+    /* Large telemetry (preview) — QoS0 avoids outbox doubling / publish fail. */
+    int len = json ? (int)strlen(json) : 0;
+    if (len > 16 * 1024) {
+        qos = 0;
+    }
     publish_raw(g_MQ.topicUp, json, qos, retain);
 }
 
@@ -170,10 +184,17 @@ void mqtt_publish_telemetry(void)
     if (!root) {
         return;
     }
+    char ip[48] = "";
+    wifi_get_ip_str(ip, sizeof(ip));
+
+    last_frame_meta_t frame = {0};
+    (void)last_frame_get_meta(&frame);
+
     cJSON_AddStringToObject(root, "type", "telemetry");
     cJSON_AddStringToObject(root, "devName", info.devName);
     cJSON_AddStringToObject(root, "deviceId", info.deviceId);
     cJSON_AddStringToObject(root, "clientId", mqtt.clientId);
+    cJSON_AddStringToObject(root, "ip", ip);
     cJSON_AddNumberToObject(root, "rssi_dbm", rssi);
     cJSON_AddNumberToObject(root, "heap_free", (double)esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "uptime_s", (double)now_s());
@@ -183,15 +204,71 @@ void mqtt_publish_telemetry(void)
         cJSON_AddNumberToObject(root, "battery_percent", bat);
         cJSON_AddNumberToObject(root, "battery_mv", bat_mv);
     }
+    /* Last panel frame meta in cJSON; preview b64 appended manually — cJSON
+     * Print would duplicate ~230KB and OOM on C61. Base64 needs no escaping. */
+    cJSON_AddBoolToObject(root, "frame_present", frame.present);
+    const char *prev = NULL;
+    if (frame.present) {
+        cJSON_AddNumberToObject(root, "frame_seq", (double)frame.seq);
+        cJSON_AddNumberToObject(root, "frame_crc32", (double)frame.crc32);
+        cJSON_AddNumberToObject(root, "frame_saved_us", (double)frame.saved_us);
+        cJSON_AddStringToObject(root, "frame_source",
+                                frame.source[0] ? frame.source : "");
+        cJSON_AddNumberToObject(root, "frame_bytes", (double)LAST_FRAME_BYTES);
+        prev = last_frame_preview_b64();
+        if (prev && prev[0]) {
+            cJSON_AddStringToObject(root, "frame_preview_mime",
+                                    last_frame_preview_mime());
+            cJSON_AddNumberToObject(root, "frame_preview_w",
+                                    last_frame_preview_w());
+            cJSON_AddNumberToObject(root, "frame_preview_h",
+                                    last_frame_preview_h());
+        } else {
+            prev = NULL;
+        }
+    }
     cJSON_AddNumberToObject(root, "hb", 1);
     cJSON_AddBoolToObject(root, "online", true);
     cJSON_AddNumberToObject(root, "ts", (double)now_s());
-    char *json = cJSON_PrintUnformatted(root);
+    ESP_LOGI(TAG, "telemetry build frame_present=%d preview_b64=%u (%dx%d)",
+             frame.present ? 1 : 0,
+             (unsigned)(prev ? strlen(prev) : 0),
+             last_frame_preview_w(), last_frame_preview_h());
+    char *head = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
-    if (json) {
-        publish_up(json, 0);
-        free(json);
+    if (!head) {
+        ESP_LOGE(TAG, "telemetry JSON print OOM");
+        return;
     }
+    char *json = head;
+    if (prev) {
+        size_t hlen = strlen(head);
+        while (hlen > 0 && (head[hlen - 1] == '}' || head[hlen - 1] == ' ' ||
+                            head[hlen - 1] == '\n' || head[hlen - 1] == '\r')) {
+            hlen--;
+        }
+        size_t plen = strlen(prev);
+        const char *prefix = ",\"frame_preview_b64\":\"";
+        const char *suffix = "\"}";
+        size_t out_len = hlen + strlen(prefix) + plen + strlen(suffix) + 1;
+        char *out = heap_caps_malloc(out_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!out) {
+            out = malloc(out_len);
+        }
+        if (!out) {
+            ESP_LOGE(TAG, "telemetry preview append OOM (need %u)", (unsigned)out_len);
+            free(head);
+            return;
+        }
+        memcpy(out, head, hlen);
+        memcpy(out + hlen, prefix, strlen(prefix));
+        memcpy(out + hlen + strlen(prefix), prev, plen);
+        memcpy(out + hlen + strlen(prefix) + plen, suffix, strlen(suffix) + 1);
+        free(head);
+        json = out;
+    }
+    publish_up(json, 0);
+    free(json);
 }
 
 void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detail)
@@ -322,6 +399,7 @@ static void handle_command(const char *raw, int len)
         cfg_get_power_attr(&pwr);
         cJSON *m = cJSON_GetObjectItem(p, "mode");
         cJSON *sm = cJSON_GetObjectItem(p, "sleepMin");
+        cJSON *ws = cJSON_GetObjectItem(p, "wakeSec");
         cJSON *wu = cJSON_GetObjectItem(p, "wakeUrl");
         cJSON *iq = cJSON_GetObjectItem(p, "imageQuality");
         if (cJSON_IsString(m)) {
@@ -329,6 +407,9 @@ static void handle_command(const char *raw, int len)
         }
         if (cJSON_IsNumber(sm)) {
             pwr.sleepMin = sm->valueint < 0 ? 0 : sm->valueint;
+        }
+        if (cJSON_IsNumber(ws)) {
+            pwr.wakeSec = ws->valueint;
         }
         if (cJSON_IsString(wu)) {
             strlcpy(pwr.wakeUrl, wu->valuestring, sizeof(pwr.wakeUrl));
@@ -593,7 +674,17 @@ static bool mqtt_esp_start_locked(void)
         .task.priority = 5,
     };
     if (use_tls) {
-        cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+        if (!mqtt.tlsVerify) {
+            /* Requires CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY — lab / self-signed. */
+            cfg.broker.verification.skip_cert_common_name_check = true;
+            ESP_LOGW(TAG, "MQTTS insecure — server certificate verify disabled");
+        } else if (cfg_mqtt_ca_pem()[0] != '\0') {
+            cfg.broker.verification.certificate = cfg_mqtt_ca_pem();
+            ESP_LOGI(TAG, "MQTTS using custom CA PEM (%u bytes)",
+                     (unsigned)strlen(cfg_mqtt_ca_pem()));
+        } else {
+            cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+        }
     }
     if (mqtt.username[0] != '\0') {
         cfg.credentials.username = mqtt.username;
@@ -664,8 +755,13 @@ void mqtt_start(void)
 
 void mqtt_stop(void)
 {
+    if (!g_MQ.mutex) {
+        return; /* mqtt_open not called yet (BLE SKU early NimBLE bring-up) */
+    }
     xSemaphoreTake(g_MQ.mutex, portMAX_DELAY);
-    esp_timer_stop(s_telemetryTimer);
+    if (s_telemetryTimer) {
+        esp_timer_stop(s_telemetryTimer);
+    }
     if (g_MQ.client && g_MQ.isConnected) {
         publish_status("offline", 1);
         vTaskDelay(pdMS_TO_TICKS(50));

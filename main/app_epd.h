@@ -2,6 +2,8 @@
 #define APP_EPD_H_
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 /* Full panel power-up + init (vendor demo main() sequence). */
 int app_epd_init(void);
@@ -33,6 +35,9 @@ void epd_logo_screen(void);
 
 /* Queue default splash on the render task. */
 int app_epd_splash_async(void);
+
+/* Queue replay of flash lastfrm; -1 if none stored. */
+int app_epd_last_frame_async(void);
 
 /* ---- async render API (for HTTP/MQTT callers; a full refresh blocks
  * the display task for 20-40 s and must not stall a request handler) ---- */
@@ -77,6 +82,22 @@ int app_epd_fill_async(unsigned char color_code);
 
 /* Queue a raw-frame fetch+render from an HTTP URL (max 511 chars). */
 int app_epd_url_async(const char *url);
+
+/* Next epd_stream_render / fill will persist the native frame to flash. */
+void app_epd_mark_frame_capture(const char *source);
+
+/* SoftAP preview: download image bytes on epd_render (TLS stack), no panel.
+ * On success: job->data/len/ctype set; caller frees job->data. Returns 0 / -1. */
+typedef struct {
+    char url[512];
+    uint8_t *data;
+    size_t len;
+    char ctype[48];
+    char err[48];
+    volatile bool orphaned; /* HTTP timed out — render task cleans up */
+} epd_proxy_job_t;
+
+int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms);
 
 /* Raw frame upload streaming (used by the HTTP upload endpoint). The DMA
  * scratch buffer is shared — recv into it, then hand each chunk over. */

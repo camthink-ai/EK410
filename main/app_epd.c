@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -35,7 +36,47 @@
 #include "splash.h"
 #include "img_decode.h"
 #include "mqtt.h"
+#include "wifi.h"
 #include "config.h"
+#include "last_frame.h"
+
+/* Pause MQTT TLS before a second HTTPS client — C61 cannot hold both. */
+static void url_tls_prepare(void)
+{
+    mqtt_stop();
+    vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+static void url_tls_release(void)
+{
+    if (wifi_sta_is_connected() && !wifi_softap_is_up() && !wifi_ble_prov_is_up()) {
+        mqtt_start();
+    }
+}
+
+static int lf_to_upload_writer(const uint8_t *data, size_t len, void *ctx)
+{
+    (void)ctx;
+    return epd_upload_write(data, (int)len) == 0 ? 0 : -1;
+}
+
+/** Replay flash lastfrm onto the panel (no sticky error text). */
+static int panel_replay_last_frame(void)
+{
+    last_frame_meta_t m;
+    if (last_frame_get_meta(&m) != 0 || !m.present) {
+        return -1;
+    }
+    if (epd_upload_start() != 0) {
+        return -1;
+    }
+    last_frame_capture_abort(); /* keep existing flash copy */
+    if (last_frame_stream(lf_to_upload_writer, NULL) != 0) {
+        epd_upload_abort();
+        return -1;
+    }
+    return epd_upload_finish();
+}
 
 static const char *TAG = "app_epd";
 
@@ -62,12 +103,15 @@ static unsigned char *s_chunk; /* DMA-capable staging (also used per-line) */
 /* ---- async render queue (HTTP/MQTT callers must not block on a refresh) ---- */
 
 typedef struct {
-    int kind; /* 0 text, 1 test pattern, 2 canvas, 3 refresh, 4 fill color, 5 frame url */
+    int kind; /* 0 text … 8 splash, 9 SoftAP proxyImage, 10 lastfrm replay */
+    bool persist_frame; /* save lastfrm after this job (user content only) */
     espd_render_t render;
     canvas_t canvas;
     unsigned char fillColor;
     char url[512];
     char bootTitle[40];
+    epd_proxy_job_t *proxy;       /* kind 9 */
+    SemaphoreHandle_t proxy_done; /* kind 9 */
 } render_msg_t;
 
 static QueueHandle_t s_renderQueue;
@@ -95,6 +139,7 @@ static void epd_unlock(void)
 
 static void stream_begin(unsigned char csx);
 static void stream_end(unsigned char csx);
+static void epd_proxy_download(epd_proxy_job_t *job);
 
 /* Native (nx,ny) -> logical landscape (lx,ly), inverse of 90° CCW (left). */
 static inline void native_to_logic(int nx, int ny, int *lx, int *ly)
@@ -103,8 +148,20 @@ static inline void native_to_logic(int nx, int ny, int *lx, int *ly)
     *ly = EPD_NATIVE_W - 1 - nx;
 }
 
+static char s_stream_cap_src[LAST_FRAME_SOURCE_MAX];
+
+void app_epd_mark_frame_capture(const char *source)
+{
+    if (source && source[0]) {
+        strlcpy(s_stream_cap_src, source, sizeof(s_stream_cap_src));
+    } else {
+        s_stream_cap_src[0] = '\0';
+    }
+}
+
 static void stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void *ctx), void *ctx)
 {
+    const bool cap = last_frame_capturing();
     /* CS0 = left nx[0..599], CS1 = right nx[600..1199]; each 1600 x 300B. */
     for (int csx = 0; csx < 2; csx++) {
         stream_begin(csx);
@@ -121,6 +178,9 @@ static void stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void 
                 row[b] = (hi & 0x0F) << 4 | (lo & 0x0F);
             }
             writeEpdData(row, EPD_CS_LINE_BYTES);
+            if (cap) {
+                last_frame_capture_write(row, (size_t)EPD_CS_LINE_BYTES);
+            }
         }
         stream_end(csx);
     }
@@ -130,7 +190,17 @@ static void stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void 
 void epd_stream_render(unsigned char (*pixel_fn)(int x, int y, void *ctx), void *ctx)
 {
     epd_lock();
+    bool do_cap = s_stream_cap_src[0] != '\0';
+    if (do_cap) {
+        if (last_frame_capture_begin(s_stream_cap_src) != 0) {
+            do_cap = false;
+        }
+        s_stream_cap_src[0] = '\0';
+    }
     stream_render_unlocked(pixel_fn, ctx);
+    if (do_cap) {
+        last_frame_capture_commit();
+    }
     epd_unlock();
 }
 
@@ -146,10 +216,16 @@ static void render_task(void *arg)
         switch (msg->kind) {
         case 1: {
             const char *lines[] = { "EPAPER OK", "six color test" };
+            if (msg->persist_frame) {
+                app_epd_mark_frame_capture("test");
+            }
             epd_text_screen(lines, 2, 0x00, 0x11, 4);
             break;
         }
         case 2:
+            if (msg->persist_frame) {
+                app_epd_mark_frame_capture("canvas");
+            }
             canvas_render(&msg->canvas);
             break;
         case 3:
@@ -158,29 +234,36 @@ static void render_task(void *arg)
             epd_unlock();
             break;
         case 4:
+            if (msg->persist_frame) {
+                app_epd_mark_frame_capture("fill");
+            }
             epd_fill_refresh(msg->fillColor);
             break;
         case 5:
             if (epd_url_frame(msg->url) != 0) {
-                /* Do not blame the URL for decode/OOM — show the real reason
-                 * plus how to get SoftAP-quality frames on this 2MB device. */
                 const char *why = epd_url_last_error();
                 if (!why || !why[0]) {
                     why = "unknown error";
                 }
-                char why_line[48];
-                snprintf(why_line, sizeof(why_line), "Reason: %s", why);
-                const char *err[] = {
-                    "Image display failed",
-                    why_line,
-                    "",
-                    "For best results use:",
-                    "1. SoftAP web Image upload",
-                    "2. Preconvert 6-color raw",
-                    "   (960000 bytes 4bpp)",
-                    "3. JPEG/PNG <300KB, no WebP",
-                };
-                epd_text_screen(err, 8, 0x00, 0x11, 2);
+                /* E-ink keeps the last paint forever — prefer replaying the
+                 * saved frame over a sticky "http init fail" wall of text. */
+                if (panel_replay_last_frame() != 0) {
+                    char why_line[48];
+                    snprintf(why_line, sizeof(why_line), "Reason: %s", why);
+                    const char *err[] = {
+                        "Image display failed",
+                        why_line,
+                        "",
+                        "For best results use:",
+                        "1. SoftAP web Image upload",
+                        "2. Preconvert 6-color raw",
+                        "   (960000 bytes 4bpp)",
+                        "3. JPEG/PNG <300KB, no WebP",
+                    };
+                    epd_text_screen(err, 8, 0x00, 0x11, 2);
+                } else {
+                    ESP_LOGW(TAG, "url fail (%s) — restored last frame", why);
+                }
                 mqtt_publish_cmd_ack("display_url", "error", why);
             } else {
                 mqtt_publish_cmd_ack("display_url", "ok", "displayed");
@@ -189,6 +272,7 @@ static void render_task(void *arg)
         case 7: {
             /* embedded test frame: stream flash -> panel */
             if (epd_upload_start() == 0) {
+                last_frame_capture_begin("testframe");
                 for (unsigned long off = 0; off < 960000;) {
                     int n = (960000 - off) > CHUNK_SIZE ? CHUNK_SIZE : (int)(960000 - off);
                     memcpy(s_chunk, FRAME_TEST + off, n);
@@ -203,6 +287,33 @@ static void render_task(void *arg)
             ESP_LOGI(TAG, "render: default splash");
             splash_show_default();
             break;
+        case 10:
+            ESP_LOGI(TAG, "render: restore last frame");
+            if (panel_replay_last_frame() != 0) {
+                ESP_LOGW(TAG, "last frame missing — CamThink splash");
+                splash_show_default();
+            } else {
+                app_epd_note_user_content();
+            }
+            break;
+        case 9:
+            if (msg->proxy) {
+                epd_proxy_download(msg->proxy);
+                if (msg->proxy->orphaned) {
+                    free(msg->proxy->data);
+                    if (msg->proxy_done) {
+                        vSemaphoreDelete(msg->proxy_done);
+                    }
+                    free(msg->proxy);
+                    msg->proxy = NULL;
+                    ESP_LOGW(TAG, "proxy fetch orphan cleaned");
+                } else if (msg->proxy_done) {
+                    xSemaphoreGive(msg->proxy_done);
+                }
+            } else if (msg->proxy_done) {
+                xSemaphoreGive(msg->proxy_done);
+            }
+            break;
         case 6: {
             const char *linePtrs[EPD_TEXT_MAX_LINES] = { 0 };
             for (int i = 0; i < msg->render.count && i < EPD_TEXT_MAX_LINES; i++) {
@@ -215,6 +326,9 @@ static void render_task(void *arg)
             const char *linePtrs[EPD_TEXT_MAX_LINES] = { 0 };
             for (int i = 0; i < msg->render.count && i < EPD_TEXT_MAX_LINES; i++) {
                 linePtrs[i] = msg->render.lines[i];
+            }
+            if (msg->persist_frame) {
+                app_epd_mark_frame_capture("text");
             }
             epd_text_screen(linePtrs, msg->render.count, msg->render.fg, msg->render.bg,
                             msg->render.scale);
@@ -277,6 +391,7 @@ int app_epd_render_async(const espd_render_t *render)
     if (!msg) {
         return -1;
     }
+    msg->persist_frame = true;
     msg->render = *render;
     if (msg->render.count > EPD_TEXT_MAX_LINES) {
         msg->render.count = EPD_TEXT_MAX_LINES;
@@ -286,6 +401,9 @@ int app_epd_render_async(const espd_render_t *render)
     }
     if (msg->render.scale < 1) {
         msg->render.scale = 1;
+    }
+    if (msg->render.scale > CANVAS_TEXT_SCALE_MAX) {
+        msg->render.scale = CANVAS_TEXT_SCALE_MAX;
     }
     int rc = queue_render_owned(msg, 0);
     if (rc == 0) {
@@ -297,6 +415,10 @@ int app_epd_render_async(const espd_render_t *render)
 int app_epd_test_pattern_async(void)
 {
     render_msg_t *msg = alloc_render_msg(1);
+    if (!msg) {
+        return -1;
+    }
+    msg->persist_frame = true;
     int rc = queue_render_owned(msg, 0);
     if (rc == 0) {
         app_epd_note_user_content();
@@ -310,6 +432,7 @@ int app_epd_canvas_async(const canvas_t *cv)
     if (!msg) {
         return -1;
     }
+    msg->persist_frame = true;
     msg->canvas = *cv; /* deep copy: QR bitmaps ride inside the struct */
     /* Allow a short wait so a finishing splash does not reject the push. */
     int rc = queue_render_owned(msg, pdMS_TO_TICKS(3000));
@@ -323,6 +446,10 @@ int app_epd_canvas_async(const canvas_t *cv)
 int app_epd_refresh_async(void)
 {
     render_msg_t *msg = alloc_render_msg(3);
+    if (!msg) {
+        return -1;
+    }
+    msg->persist_frame = true;
     int rc = queue_render_owned(msg, 0);
     if (rc == 0) {
         app_epd_note_user_content();
@@ -363,10 +490,18 @@ int app_epd_setup_screen_async(const char *ssid)
         free(cv);
         return rc;
     }
-    rc = app_epd_canvas_async(cv);
+    /* Queue directly with persist_frame=false — SoftAP QR is not user art. */
+    render_msg_t *msg = alloc_render_msg(2);
+    if (!msg) {
+        free(cv);
+        return -1;
+    }
+    msg->persist_frame = false;
+    msg->canvas = *cv;
     free(cv);
+    rc = queue_render_owned(msg, pdMS_TO_TICKS(3000));
     if (rc == 0) {
-        app_epd_note_system_frame(); /* not customer art */
+        app_epd_note_system_frame();
     }
     return rc;
 }
@@ -374,6 +509,10 @@ int app_epd_setup_screen_async(const char *ssid)
 int app_epd_test_frame_async(void)
 {
     render_msg_t *msg = alloc_render_msg(7);
+    if (!msg) {
+        return -1;
+    }
+    msg->persist_frame = true;
     int rc = queue_render_owned(msg, 0);
     if (rc == 0) {
         app_epd_note_user_content();
@@ -397,12 +536,23 @@ int app_epd_splash_async(void)
     return rc;
 }
 
+int app_epd_last_frame_async(void)
+{
+    last_frame_meta_t m;
+    if (last_frame_get_meta(&m) != 0 || !m.present) {
+        return -1;
+    }
+    render_msg_t *msg = alloc_render_msg(10);
+    return queue_render_owned(msg, 0);
+}
+
 int app_epd_fill_async(unsigned char color_code)
 {
     render_msg_t *msg = alloc_render_msg(4);
     if (!msg) {
         return -1;
     }
+    msg->persist_frame = true;
     msg->fillColor = color_code;
     int rc = queue_render_owned(msg, 0);
     if (rc == 0) {
@@ -417,6 +567,7 @@ int app_epd_url_async(const char *url)
     if (!msg) {
         return -1;
     }
+    msg->persist_frame = true;
     if (strlen(url) >= sizeof(msg->url)) {
         free(msg);
         return -1;
@@ -427,6 +578,138 @@ int app_epd_url_async(const char *url)
         app_epd_note_user_content();
     }
     return rc;
+}
+
+int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
+{
+    if (!job || !job->url[0]) {
+        return -1;
+    }
+    job->data = NULL;
+    job->len = 0;
+    job->ctype[0] = '\0';
+    job->err[0] = '\0';
+    job->orphaned = false;
+
+    SemaphoreHandle_t done = xSemaphoreCreateBinary();
+    if (!done) {
+        snprintf(job->err, sizeof(job->err), "OOM");
+        return -1;
+    }
+    render_msg_t *msg = alloc_render_msg(9);
+    if (!msg) {
+        vSemaphoreDelete(done);
+        snprintf(job->err, sizeof(job->err), "OOM");
+        return -1;
+    }
+    msg->proxy = job;
+    msg->proxy_done = done;
+    /* Allow splash / prior URL job to finish — panel refresh is 20–40s. */
+    if (queue_render_owned(msg, pdMS_TO_TICKS(60000)) != 0) {
+        vSemaphoreDelete(done);
+        snprintf(job->err, sizeof(job->err), "render busy");
+        return -1;
+    }
+    int wait = (timeout_ms > 0) ? timeout_ms : 90000;
+    if (xSemaphoreTake(done, pdMS_TO_TICKS(wait)) != pdTRUE) {
+        ESP_LOGE(TAG, "proxy fetch timeout");
+        snprintf(job->err, sizeof(job->err), "proxy timeout");
+        job->orphaned = true;
+        return -1;
+    }
+    vSemaphoreDelete(done);
+    return job->err[0] ? -1 : 0;
+}
+
+#define PROXY_FETCH_MAX (768 * 1024)
+#define PROXY_FETCH_CHUNK 4096
+
+static void epd_proxy_download(epd_proxy_job_t *job)
+{
+    if (!job) {
+        return;
+    }
+    ESP_LOGI(TAG, "proxy fetch %.96s%s", job->url, strlen(job->url) > 96 ? "…" : "");
+    url_tls_prepare();
+    esp_http_client_config_t cfg = {
+        .url = job->url,
+        .timeout_ms = 25000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .max_redirection_count = 5,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        snprintf(job->err, sizeof(job->err), "http init fail");
+        ESP_LOGE(TAG, "proxy http init fail — free %u int %u largest_int %u",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        url_tls_release();
+        return;
+    }
+    if (esp_http_client_open(client, 0) != ESP_OK) {
+        snprintf(job->err, sizeof(job->err), "http open/TLS fail");
+        esp_http_client_cleanup(client);
+        return;
+    }
+    long clen = esp_http_client_fetch_headers(client);
+    int status = esp_http_client_get_status_code(client);
+    if (status > 0 && (status < 200 || status >= 300)) {
+        snprintf(job->err, sizeof(job->err), "HTTP status %d", status);
+        goto out_close;
+    }
+    if (clen > (long)PROXY_FETCH_MAX) {
+        snprintf(job->err, sizeof(job->err), "file >768KB limit");
+        goto out_close;
+    }
+    size_t cap = (clen > 0) ? (size_t)clen : PROXY_FETCH_MAX;
+    uint8_t *body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!body) {
+        body = malloc(cap);
+    }
+    if (!body) {
+        snprintf(job->err, sizeof(job->err), "download OOM");
+        goto out_close;
+    }
+    size_t total = 0;
+    while (total < cap) {
+        int want = (int)((cap - total) > PROXY_FETCH_CHUNK ? PROXY_FETCH_CHUNK : (cap - total));
+        int got = esp_http_client_read(client, (char *)body + total, want);
+        if (got < 0) {
+            free(body);
+            snprintf(job->err, sizeof(job->err), "http read error");
+            goto out_close;
+        }
+        if (got == 0) {
+            break;
+        }
+        total += (size_t)got;
+    }
+    if (total == 0) {
+        free(body);
+        snprintf(job->err, sizeof(job->err), "empty download");
+        goto out_close;
+    }
+    img_fmt_t fmt = img_sniff_format(body, total);
+    if (fmt == IMG_FMT_JPEG) {
+        snprintf(job->ctype, sizeof(job->ctype), "image/jpeg");
+    } else if (fmt == IMG_FMT_PNG) {
+        snprintf(job->ctype, sizeof(job->ctype), "image/png");
+    } else if (fmt == IMG_FMT_WEBP) {
+        snprintf(job->ctype, sizeof(job->ctype), "image/webp");
+    } else {
+        free(body);
+        snprintf(job->err, sizeof(job->err), "not JPEG/PNG/WebP");
+        goto out_close;
+    }
+    job->data = body;
+    job->len = total;
+    ESP_LOGI(TAG, "proxy fetch ok %u %s", (unsigned)total, job->ctype);
+
+out_close:
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    url_tls_release();
 }
 
 /* ---- raw frame upload streaming (http.c drives it chunk by chunk) ---- */
@@ -454,6 +737,8 @@ int epd_upload_start(void)
     s_uploadCount = 0;
     s_uploadCsx = 0;
     stream_begin(0);
+    /* Default source; caller may restart capture with another label. */
+    last_frame_capture_begin("upload");
     return 0;
 }
 
@@ -477,6 +762,9 @@ int epd_upload_write(const unsigned char *dmaChunk, int len)
             n = (int)room;
         }
         writeEpdData((unsigned char *)dmaChunk + off, n);
+        if (last_frame_capturing()) {
+            last_frame_capture_write(dmaChunk + off, (size_t)n);
+        }
         s_uploadCount += n;
         off += n;
         if (s_uploadCsx == 0 && s_uploadCount == EPD_HALF_BYTES) {
@@ -497,10 +785,13 @@ int epd_upload_finish(void)
     s_uploadCsx = -1;
     if (s_uploadCount != EPD_HALF_BYTES * 2) {
         ESP_LOGW(TAG, "upload size mismatch: %lu", s_uploadCount);
+        last_frame_capture_abort();
+    } else {
+        /* Refresh while still holding the panel lock so nothing else can
+         * interleave DTM/PON with this frame (avoids dirty corners). */
+        epdDisplay();
+        last_frame_capture_commit();
     }
-    /* Refresh while still holding the panel lock so nothing else can
-     * interleave DTM/PON with this frame (avoids dirty corners). */
-    epdDisplay();
     epd_unlock();
     app_epd_note_user_content();
     return 0;
@@ -513,6 +804,7 @@ void epd_upload_abort(void)
         s_uploadCsx = -1;
     }
     s_uploadCount = 0;
+    last_frame_capture_abort();
     epd_unlock();
 }
 
@@ -530,7 +822,8 @@ int app_epd_init(void)
     }
     if (!s_renderQueue) {
         s_renderQueue = xQueueCreate(2, sizeof(render_msg_t *));
-        /* display_url does HTTPS+decode on this task — TLS needs a large stack. */
+        /* display_url + SoftAP proxyImage share this TLS stack. A second
+         * large task starves httpd on C61 internal RAM (ESP_ERR_HTTPD_TASK). */
         xTaskCreate(render_task, "epd_render", 32768, NULL, 4, NULL);
     }
 
@@ -593,6 +886,13 @@ static void stream_end(unsigned char csx)
 void epd_fill_refresh(unsigned char color_code)
 {
     epd_lock();
+    bool do_cap = s_stream_cap_src[0] != '\0';
+    if (do_cap) {
+        if (last_frame_capture_begin(s_stream_cap_src) != 0) {
+            do_cap = false;
+        }
+        s_stream_cap_src[0] = '\0';
+    }
     memset(s_chunk, color_code, CHUNK_SIZE);
     for (int csx = 0; csx < 2; csx++) {
         stream_begin(csx);
@@ -602,10 +902,16 @@ void epd_fill_refresh(unsigned char color_code)
                 n = CHUNK_SIZE;
             }
             writeEpdData(s_chunk, (unsigned int)n);
+            if (do_cap) {
+                last_frame_capture_write(s_chunk, (size_t)n);
+            }
         }
         stream_end(csx);
     }
     epdDisplay();
+    if (do_cap) {
+        last_frame_capture_commit();
+    }
     epd_unlock();
 }
 
@@ -734,6 +1040,7 @@ static int stream_raw_native(const uint8_t *raw, size_t len)
     if (len != (size_t)EPD_HALF_BYTES * 2) {
         return -1;
     }
+    const bool cap = last_frame_capturing();
     size_t off = 0;
     for (int csx = 0; csx < 2; csx++) {
         stream_begin(csx);
@@ -742,6 +1049,9 @@ static int stream_raw_native(const uint8_t *raw, size_t len)
                                                                : (EPD_HALF_BYTES - sent));
             memcpy(s_chunk, raw + off, (size_t)n);
             writeEpdData(s_chunk, n);
+            if (cap) {
+                last_frame_capture_write(s_chunk, (size_t)n);
+            }
             off += (size_t)n;
             sent += n;
         }
@@ -777,6 +1087,7 @@ int epd_url_frame(const char *url)
      * stage is a full-panel refresh (tens of seconds). JPEG/PNG stages below. */
 
     const size_t raw_need = (size_t)EPD_HALF_BYTES * 2;
+    url_tls_prepare();
     esp_http_client_config_t cfg = {
         .url = url,
         .timeout_ms = 60000,
@@ -785,7 +1096,12 @@ int epd_url_frame(const char *url)
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
+        ESP_LOGE(TAG, "url http init fail — free %u int %u largest_int %u",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         url_fail("http init fail");
+        url_tls_release();
         return -1;
     }
 
@@ -856,13 +1172,16 @@ int epd_url_frame(const char *url)
     img_fmt_t fmt = img_sniff_format(body, total);
     if (fmt == IMG_FMT_RAW4BPP || (total == raw_need && fmt != IMG_FMT_JPEG && fmt != IMG_FMT_PNG)) {
         epd_lock();
+        last_frame_capture_begin("url");
         ret = stream_raw_native(body, total);
-        epd_unlock();
         if (ret == 0) {
+            last_frame_capture_commit();
             ESP_LOGI(TAG, "raw 4bpp frame OK");
         } else {
+            last_frame_capture_abort();
             url_fail("raw stream fail");
         }
+        epd_unlock();
     } else if (fmt == IMG_FMT_JPEG || fmt == IMG_FMT_PNG) {
         url_stage(quality, "Decoding...");
         ESP_LOGI(TAG, "decode %s... (free heap %u spiram %u)",
@@ -886,7 +1205,9 @@ int epd_url_frame(const char *url)
             } else {
                 ESP_LOGI(TAG, "decode OK — streaming to panel");
                 epd_lock();
+                last_frame_capture_begin("url");
                 stream_render_unlocked(logical_fb_pixel, fb);
+                last_frame_capture_commit();
                 epd_unlock();
                 ret = 0;
                 ESP_LOGI(TAG, "decoded image frame OK (%s)",
@@ -911,5 +1232,6 @@ out:
     }
     free(body);
     img_fb_release(fb);
+    url_tls_release();
     return ret;
 }
