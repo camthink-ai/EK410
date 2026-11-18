@@ -11,17 +11,22 @@ Companion: [开发说明（中文）](zh/development.md)
 ## Build & flash
 
 ```bash
-export IDF_PATH=~/esp/esp-idf-5.5
-export IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf5.5_py3.11_env
-export PATH="$HOME/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20260121/riscv32-esp-elf/bin:$IDF_PYTHON_ENV_PATH/bin:$PATH"
-
+. $HOME/esp/esp-idf-5.5/export.sh
 cd /path/to/EK410
-python3 "$IDF_PATH/tools/idf.py" set-target esp32c61   # first time
-python3 "$IDF_PATH/tools/idf.py" build
-python3 "$IDF_PATH/tools/idf.py" -p /dev/cu.wchusbserialXXXX flash monitor
+
+idf.py set-target esp32c61          # first time only
+idf.py build
+idf.py -p /dev/cu.wchusbserialXXXX flash monitor
 ```
 
-`sdkconfig` is gitignored; defaults live in `sdkconfig.defaults`.
+### Dual SKU (SoftAP + BLE CT-Prov)
+
+```bash
+bash tools/build_dual_sku.sh
+bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
+```
+
+`sdkconfig` is gitignored; SoftAP defaults in `sdkconfig.defaults`, BLE overlay in `sdkconfig.ble_prov`.
 
 ## SoftAP Web UI
 
@@ -54,7 +59,7 @@ Rules:
 - **MAJOR** — breaking MQTT/HTTP contracts or panel protocol
 - **MINOR** — new features, backward compatible
 - **PATCH** — fixes / polish
-- Git tags: `v` + SemVer (`v1.2.1`)
+- Git tags: `v` + SemVer (`v1.3.0`)
 - Do not change `deviceId` generation lightly — it is the NeoMind identity
 
 ## Tools

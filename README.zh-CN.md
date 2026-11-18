@@ -1,57 +1,113 @@
 # EK410
 
-**CamThink** 7.09″ Spectra 6 电子墨水屏固件（ESP32-C61）。
+[![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
+[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
+[![Version](https://img.shields.io/badge/version-1.3.0-blue)](VERSION)
+[![License](https://img.shields.io/badge/license-Dual--License-red)](LICENSE)
+
+**CamThink** 7.09″ Spectra 6 电子墨水屏固件。
 
 [English](README.md) · [变更记录](CHANGELOG.md) · [文档](docs/) · [许可](LICENSE)
 
 | | |
 |---|---|
 | **产品** | EK410 · CamThink 电子墨水屏 |
-| **主控** | ESP32-C61HR2（16MB Flash，2MB PSRAM） |
-| **面板** | 7.09″ Spectra 6 · 1600×1200 · 六色 |
-| **固件版本** | 见 [`VERSION`](VERSION) · 当前 **1.3.0** |
+| **主控** | ESP32-C61HR2 · 16MB Flash · 2MB PSRAM |
+| **面板** | Spectra 6 · 逻辑 1600×1200 · 六色 |
+| **固件** | [`VERSION`](VERSION) → **1.3.0** |
 | **平台** | [NeoMind](https://wiki.camthink.ai) · 设备类型 `ek410_Eink` |
 
 ---
 
-## 功能概览
+## 概览
 
-- **SoftAP 配网** — 长按 **MAIN** 约 2.5s → SoftAP `EK410-{deviceId}` / 密码 `12345678` → `http://192.168.4.1`
-- **BLE CT-Prov** — 长按 **PAGE** 约 2.5s → 青色；NeoLink BLE 使用独立 `ek410_ble` OTA 镜像（[docs/ct_prov.md](docs/ct_prov.md)）
-- **Web 控制台** — Wi‑Fi、MQTT、图片 / 画布 / Markdown、电源、OTA
-- **显示** — 文字、画布、整帧上传、HTTPS URL；上次画面写入 Flash
-- **NeoMind MQTT** — `device/ek410_Eink/{deviceId}/uplink|downlink`
-- **OTA** — 双 4MB 分区（SoftAP SKU + BLE SKU）+ bootloader 回滚
-- **电源** — 常开 / 定时刷新（`sleepMin` + `wakeSec`）/ 休眠（MAIN 唤醒）
+EK410 是偏电池场景的墨水屏终端：SoftAP / BLE 配网、内嵌 Web、NeoMind MQTT，以及双 OTA 镜像（SoftAP 网页 vs BLE CT-Prov）。断电后面板保持最后一帧；在线时 Wi‑Fi / MQTT 会自动重连。
 
-### SoftAP 推图流程
-
-1. 本地上传 **或** 填写 URL → 设备 `proxyImage`（走 STA）→ **内容预览**
-2. 调整适应方式 / 六色预览 → **显示到屏幕** → 浏览器量化 → `uploadFrame`
-
-MQTT / 唤醒 URL 仍使用设备侧 `displayUrl`。
-
-### 双 SKU 烧录
-
-```bash
-bash tools/build_dual_sku.sh
-bash tools/flash_dual_sku.sh PORT   # SoftAP → ota_0，BLE → ota_1
 ```
+┌────────────────────────────────────────────────────────────┐
+│  SoftAP 网页  ·  NeoLink CT-Prov  ·  NeoMind MQTT / HTTP   │
+├─────────────────────────────┬──────────────────────────────┤
+│  ota_0  ek410（SoftAP+httpd）│  ota_1  ek410_ble（NimBLE）  │
+│  MAIN 长按 → SoftAP（蓝）    │  PAGE 长按 → BLE（青）       │
+├─────────────────────────────┴──────────────────────────────┤
+│  Spectra 6 面板 · lastfrm · AW9523B RGB / 电源             │
+└────────────────────────────────────────────────────────────┘
+```
+
+ESP32-C61 无法在同一进程同时跑 SoftAP httpd 与 NimBLE，产品路径是 **两个 OTA 槽**。详见 [docs/ct_prov.md](docs/ct_prov.md)。
+
+---
+
+## 功能
+
+- **SoftAP + Web** — Wi‑Fi / MQTT / 图片 / 画布 / Markdown / 电源 / OTA
+- **NeoLink CT-Prov** — SoftAP HTTP + BLE GATT（独立 BLE 镜像）
+- **显示** — 整帧上传、URL 拉取、画布、Markdown；上次画面存 `lastfrm`
+- **NeoMind MQTT** — `device/ek410_Eink/{deviceId}/uplink|downlink`
+- **电源** — 常开 / 定时刷新（`sleepMin` + `wakeSec`）/ 休眠；深睡关灯与面板供电
+- **可靠性** — Wi‑Fi 指数退避重连；MQTT 自动重连；硬件 RESET 退出配网并恢复上次画面（无内容则 CamThink logo）
+
+### SoftAP 推图
+
+1. 本地上传 **或** URL → 设备 `proxyImage`（STA）→ 内容预览  
+2. 适应方式 / 六色预览 → **推屏** → 浏览器量化 → `uploadFrame`  
+
+MQTT / 唤醒 URL 仍走设备侧 `displayUrl`。
+
+---
+
+## 按键与指示灯
+
+| 操作 | 行为 |
+|------|------|
+| **MAIN** 长按约 2.5s | 开 SoftAP（`EK410-{id}` / `12345678` → `http://192.168.4.1`）· 蓝 |
+| **PAGE** 长按约 2.5s | 进入 / 退出 BLE CT-Prov · 青 |
+| **MAIN+PAGE** 长按约 6s | 恢复出厂（保留 device id） |
+| 硬件 **RESET** | 退出 SoftAP/BLE handoff · 恢复上次画面 |
+| 芯片 **BOOT**（IO9）复位时按住 | 恢复出厂 |
+
+| 灯色 | 含义 |
+|------|------|
+| 蓝闪 | SoftAP / 正在连 Wi‑Fi |
+| 青闪 | BLE 配网 |
+| 绿灯常亮 | 正常运行（STA 已连接） |
+| 深睡灭灯 | LED 与面板供电已关闭 |
+
+SoftAP / BLE 空闲自动关闭：**2 分钟**（有操作会续期）。
+
+---
+
+## 电源模式
+
+| 模式 | 行为 |
+|------|------|
+| `always` | 常醒；`sleepNow` → 深睡至 MAIN |
+| `cycle` | 醒来后在线 `wakeSec` 秒（30–600，默认 **120**），再睡 `sleepMin` 分钟 |
+| `hibernate` | 睡到 MAIN（保存参数时可能立刻睡） |
 
 ---
 
 ## 快速开始
 
-```bash
-export IDF_PATH=~/esp/esp-idf-5.5
-export IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf5.5_py3.11_env
-export PATH="$HOME/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20260121/riscv32-esp-elf/bin:$IDF_PYTHON_ENV_PATH/bin:$PATH"
+**环境：** ESP-IDF **5.5.x**，目标 `esp32c61`。
 
-python3 "$IDF_PATH/tools/idf.py" build
-python3 "$IDF_PATH/tools/idf.py" -p PORT flash monitor
+```bash
+. $HOME/esp/esp-idf-5.5/export.sh
+cd /path/to/EK410
+
+idf.py set-target esp32c61          # 仅首次
+idf.py build
+idf.py -p PORT flash monitor
 ```
 
-详见 [docs/zh/development.md](docs/zh/development.md)。
+### 双 SKU（SoftAP + BLE）
+
+```bash
+bash tools/build_dual_sku.sh
+bash tools/flash_dual_sku.sh PORT   # SoftAP → ota_0，BLE → ota_1，默认启 SoftAP
+```
+
+更多：[docs/zh/development.md](docs/zh/development.md) · [tools/README.md](tools/README.md)。
 
 ---
 
@@ -59,40 +115,32 @@ python3 "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 
 ```
 EK410/
-├── VERSION / LICENSE / CHANGELOG.md
-├── CMakeLists.txt
-├── partitions.csv          # NVS + 双 OTA + lastfrm
-├── sdkconfig.defaults
-├── sdkconfig.ble_prov      # BLE SKU 叠加配置
-├── main/                   # 固件源码
-│   ├── version.h
-│   ├── www/                # SoftAP 页面源文件
-│   └── …
-├── tools/                  # 双 SKU 构建 / CT-Prov 测试等
-├── assets/brand|splash/    # 品牌与开机资源
-└── docs/                   # 硬件 / API / CT-Prov / 开发
+├── VERSION · LICENSE · CHANGELOG.md
+├── CMakeLists.txt · partitions.csv · sdkconfig.defaults · sdkconfig.ble_prov
+├── main/                 # 固件（wifi / mqtt / http / ct_prov / app_epd / www/…）
+├── tools/                # gen_www、bump_version、双 SKU 构建/烧录/测试
+├── assets/               # 品牌与开机资源
+└── docs/                 # 硬件、API、CT-Prov、开发
 ```
+
+`build/`、`build_ble/`、`dist/`、`sdkconfig`、`managed_components/` 已加入 `.gitignore`。
 
 ---
 
 ## 版本管理
 
-遵循语义化版本（`MAJOR.MINOR.PATCH`）。
-
 | 文件 | 作用 |
 |------|------|
 | [`VERSION`](VERSION) | 权威版本号 |
-| [`main/version.h`](main/version.h) | 固件内嵌（设备信息 / MQTT） |
+| [`main/version.h`](main/version.h) | 固件内嵌 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 发布说明 |
 | Git tag | `v1.3.0` |
 
 ```bash
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.0
-git tag -a v1.3.0 -m "EK410 v1.3.0"
+python3 tools/bump_version.py 1.3.1
+git tag -a v1.3.1 -m "EK410 v1.3.1"
 ```
-
-完整约定见 [docs/zh/development.md](docs/zh/development.md#版本管理)。
 
 ---
 
@@ -105,18 +153,15 @@ git tag -a v1.3.0 -m "EK410 v1.3.0"
 | CT-Prov / NeoLink | — | [docs/ct_prov.md](docs/ct_prov.md) |
 | 开发 | [docs/zh/development.md](docs/zh/development.md) | [docs/development.md](docs/development.md) |
 | 工具 | [tools/README.md](tools/README.md) | — |
-| UI 设计预览 | [docs/design/ui-preview/DESIGN.md](docs/design/ui-preview/DESIGN.md) | — |
 
 ---
 
 ## NeoMind
 
-配置好 Wi‑Fi 与 MQTT 后，设备会出现在 NeoMind → 设备（待审批）。审批后即可用规则 / Agent 推送内容上屏。
-
-设备类型定义在 **NeoMind-DeviceTypes** 仓库（`ek410_Eink`）。
+配好 Wi‑Fi + MQTT 后，设备出现在 NeoMind → 设备（待审批）。设备类型：**NeoMind-DeviceTypes** / `ek410_Eink`。
 
 ---
 
 ## 许可
 
-双许可证（社区版 + 商业版），条款与 [camthink-ai/ne301](https://github.com/camthink-ai/ne301) 一致。详见 [`LICENSE`](LICENSE)。
+**双许可证**（社区版 + 商业版），与 [camthink-ai/ne301](https://github.com/camthink-ai/ne301) 同模式。见 [`LICENSE`](LICENSE)。

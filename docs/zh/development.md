@@ -11,16 +11,22 @@
 ## 编译烧录
 
 ```bash
-export IDF_PATH=~/esp/esp-idf-5.5
-export IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf5.5_py3.11_env
-export PATH="$HOME/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20260121/riscv32-esp-elf/bin:$IDF_PYTHON_ENV_PATH/bin:$PATH"
-
+. $HOME/esp/esp-idf-5.5/export.sh
 cd /path/to/EK410
-python3 "$IDF_PATH/tools/idf.py" build
-python3 "$IDF_PATH/tools/idf.py" -p /dev/cu.wchusbserialXXXX flash monitor
+
+idf.py set-target esp32c61          # 仅首次
+idf.py build
+idf.py -p /dev/cu.wchusbserialXXXX flash monitor
 ```
 
-`sdkconfig` 不入库，以 `sdkconfig.defaults` 为准。
+### 双 SKU（SoftAP + BLE CT-Prov）
+
+```bash
+bash tools/build_dual_sku.sh
+bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
+```
+
+`sdkconfig` 不入库；SoftAP 默认见 `sdkconfig.defaults`，BLE 叠加见 `sdkconfig.ble_prov`。
 
 ## 配置页
 
@@ -40,11 +46,16 @@ python3 tools/gen_www.py
 | `tools/bump_version.py` | 同步版本号 |
 
 ```bash
-python3 tools/bump_version.py 1.3.0
+python3 tools/bump_version.py --check
+python3 tools/bump_version.py 1.3.1
 # 填写 CHANGELOG → commit →
-git tag -a v1.3.0 -m "EK410 v1.3.0"
+git tag -a v1.3.1 -m "EK410 v1.3.1"
 ```
 
 - **MAJOR** 破坏协议；**MINOR** 兼容新功能；**PATCH** 修复
-- Tag 格式：`v1.2.1`
+- Tag 格式：`v1.3.0`
 - 勿轻易改 `deviceId` 生成逻辑（NeoMind 身份）
+
+## 工具
+
+见 [tools/README.md](../../tools/README.md)。
