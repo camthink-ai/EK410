@@ -1116,7 +1116,6 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
             <div class="actions">
               <button class="btn" type="button" id="btnImgUrl" data-i18n="disp.load_preview">加载预览</button>
               <button class="btn" type="button" id="btnLastFrame" data-i18n="disp.load_screen">读取当前屏</button>
-              <button class="btn solid" type="button" id="btnImgPush" data-i18n="disp.show_screen">显示到屏幕</button>
             </div>
           </aside>
         </div>
@@ -1171,6 +1170,19 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
               <button type="button" data-tool="rect" data-i18n="ed.rect">方框</button>
               <button type="button" data-tool="qr" data-i18n="ed.qr">二维码</button>
             </div>
+            <div class="insp-section" id="edPanelCanvas">
+              <h2 class="card-title" data-i18n="ed.canvas">画布</h2>
+              <div class="row" id="rowEdBg"><label data-i18n="ed.bg">背景</label>
+                <select class="ghost grow" id="edCanvasBg">
+                  <option value="white" data-i18n="color.white" selected>白</option>
+                  <option value="black" data-i18n="color.black">黑</option>
+                  <option value="red" data-i18n="color.red">红</option>
+                  <option value="yellow" data-i18n="color.yellow">黄</option>
+                  <option value="blue" data-i18n="color.blue">蓝</option>
+                  <option value="green" data-i18n="color.green">绿</option>
+                </select>
+              </div>
+            </div>
             <div class="insp-section grow" id="edPanelLayers">
               <h2 class="card-title" data-i18n="ed.layers">图层</h2>
               <div class="layers" id="layerList">
@@ -1180,9 +1192,9 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
                   <span class="meta"><b data-i18n="ed.text">文字</b><small>CamThink EK410</small></span>
                 </button>
                 <button class="layer" type="button" data-id="t2" data-type="text"
-                  data-content="你好，世界" data-x="120" data-y="280" data-scale="2" data-color="black">
+                  data-content="Hello, world" data-x="120" data-y="280" data-scale="2" data-color="black">
                   <i class="swatch" style="background:#090e17"></i>
-                  <span class="meta"><b data-i18n="ed.text">文字</b><small data-i18n="ed.hello">你好，世界</small></span>
+                  <span class="meta"><b data-i18n="ed.text">文字</b><small data-i18n="ed.hello">Hello, world</small></span>
                 </button>
                 <button class="layer" type="button" data-id="r1" data-type="rect"
                   data-content="" data-x="80" data-y="80" data-w="220" data-h="48" data-color="red">
@@ -1248,10 +1260,10 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
             <h2 class="card-title" style="padding:0 0 10px" data-i18n="md.write">编写 Markdown</h2>
             <textarea id="mdText"># CamThink EK410
 
-边缘墨水屏 · 1600×1200
+Edge e-paper · 1600×1200
 
-- Wi‑Fi / MQTT 配网
-- 六色显示
+- Wi‑Fi / MQTT setup
+- 6-color display
 </textarea>
             <p class="hint" style="padding:8px 0 0" data-i18n="md.emoji_note">墨水屏字库不含彩色表情，已自动替换为文字符号</p>
             <div class="actions" style="padding:12px 0 0">
@@ -1431,6 +1443,7 @@ zh:{
   "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"拖拽定位 · {0}","disp.stage_md":"Markdown → 画布 · {0}",
   "ed.add":"添加","ed.image":"图片","ed.width":"宽度","ed.replace_img":"更换图片","ed.text":"文字","ed.rect":"方框","ed.qr":"二维码","ed.layers":"图层","ed.props":"属性","ed.props_empty":"选中图层后在此编辑","ed.content":"内容","ed.qr_url":"链接","ed.size":"尺寸","ed.sheet_add":"添加元素","ed.sheet_layers":"图层","ed.sheet_props":"属性","ed.new_text":"新文字","ed.new_rect":"色块","ed.new_qr":"https://wiki.camthink.ai",
   "ed.hello":"你好，世界","ed.swatch":"色块","ed.swatch_sub":"品牌橙 → 红","ed.note":"墨水屏仅 6 色：黑白红黄蓝绿。原色模式下可见设计色，刷屏前请切到「墨水六色」核对。",
+  "ed.canvas":"画布","ed.bg":"背景",
   "ed.color":"颜色","ed.fontsize":"字号","ed.scale_val":"×{0}","ed.down":"下层","ed.up":"上层","ed.del":"删除",
   "ed.subtitle":"边缘 AI · 墨水屏","ed.brand":"品牌","ed.accent":"强调","ed.aux":"辅色",
   "color.black":"黑","color.white":"白","color.red":"红","color.yellow":"黄","color.blue":"蓝","color.green":"绿",
@@ -1493,6 +1506,7 @@ en:{
   "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"Drag to place · {0}","disp.stage_md":"Markdown → canvas · {0}",
   "ed.add":"Add","ed.image":"Image","ed.width":"Width","ed.replace_img":"Replace image","ed.text":"Text","ed.rect":"Box","ed.qr":"QR code","ed.layers":"Layers","ed.props":"Properties","ed.props_empty":"Select a layer to edit","ed.content":"Content","ed.qr_url":"URL","ed.size":"Size","ed.sheet_add":"Add element","ed.sheet_layers":"Layers","ed.sheet_props":"Properties","ed.new_text":"New text","ed.new_rect":"Swatch","ed.new_qr":"https://wiki.camthink.ai",
   "ed.hello":"Hello, world","ed.swatch":"Swatch","ed.swatch_sub":"Brand orange → red","ed.note":"E‑ink has 6 colors only. Use Original to see design colors; switch to E‑ink 6 before pushing.",
+  "ed.canvas":"Canvas","ed.bg":"Background",
   "ed.color":"Color","ed.fontsize":"Scale","ed.scale_val":"×{0}","ed.down":"Down","ed.up":"Up","ed.del":"Delete",
   "ed.subtitle":"Edge AI · e‑paper","ed.brand":"Brand","ed.accent":"Accent","ed.aux":"Accent 2",
   "color.black":"Black","color.white":"White","color.red":"Red","color.yellow":"Yellow","color.blue":"Blue","color.green":"Green",
@@ -1511,9 +1525,10 @@ en:{
   "toast.push":"Push to screen","toast.quant_push":"Quantize & push","img.demo_title":"Sample · replace by upload","img.demo_sub":"Switch to E‑ink 6 to see quantization"
 }
 };
+/* Default English; missing keys fall back en → zh so UI never flips to Chinese by accident. */
 let lang = localStorage.getItem('ek410_lang') || 'en';
 const t = (key, ...args) => {
-  let s = (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
+  let s = (I18N[lang] && I18N[lang][key]) || I18N.en[key] || I18N.zh[key] || key;
   args.forEach((a, i) => { s = s.split('{' + i + '}').join(a); });
   return s;
 };
@@ -1562,6 +1577,7 @@ function go(name){
   syncNav(name);
   if(name==='overview' && typeof loadOverviewPanel==='function'){
     loadOverviewPanel(true, false);
+    scheduleOverviewCanvasPaint();
   }
 }
 document.querySelectorAll('#dock button, #railNav button').forEach(b=>b.addEventListener('click',()=>go(b.dataset.page)));
@@ -2544,8 +2560,12 @@ function drawQrCode(ctx, x, y, s, ink, payload){
     }
   }
 }
+let edCanvasBg='white';
+function editorBgCss(){
+  return E6_SWATCH[edCanvasBg] || E6_SWATCH.white || '#fff';
+}
 function drawEditorScene(ctx,w,h,eink){
-  ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,w,h);
+  ctx.fillStyle=editorBgCss(); ctx.fillRect(0,0,w,h);
   const sx=w/1600, sy=h/1200;
   const list=$('layerList');
   if(!list) return;
@@ -2959,6 +2979,12 @@ function syncLayerFromFields(){
   }
   redrawEditor();
 }
+if($('edCanvasBg')){
+  $('edCanvasBg').addEventListener('change',()=>{
+    edCanvasBg=$('edCanvasBg').value||'white';
+    if(typeof redrawEditor==='function') redrawEditor();
+  });
+}
 ['layerContent','layerColor','layerX','layerY','layerSize'].forEach(id=>{
   const el=$(id); if(!el) return;
   el.addEventListener('input', syncLayerFromFields);
@@ -3227,13 +3253,13 @@ document.querySelectorAll('#fitPills button').forEach(b=>{
 });
 let _urlPreviewSrc='';
 function syncImgPushGate(){
-  const has=!!imgBitmap;
-  if($('btnImgPush')) $('btnImgPush').disabled=!has;
+  /* Header「刷到屏幕」stays enabled; image mode validates imgBitmap on click. */
 }
 function clearImgPreview(){
   if(imgBitmap){ try{ imgBitmap.close(); }catch(_){} }
   imgBitmap=null;
   _urlPreviewSrc='';
+  _urlProxyGen++; /* cancel in-flight URL preview that could overwrite */
   drawImagePreview();
   syncImgPushGate();
 }
@@ -3241,6 +3267,9 @@ async function adoptImgBitmap(bmp, urlSrc){
   if(imgBitmap){ try{ imgBitmap.close(); }catch(_){} }
   imgBitmap=bmp;
   _urlPreviewSrc=urlSrc||'';
+  if(!urlSrc){
+    _urlProxyGen++; /* local file/last-frame wins over a late proxyImage */
+  }
   drawImagePreview();
   syncImgPushGate();
 }
@@ -3298,7 +3327,7 @@ async function fetchLastFrameBytes(){
       try{
         const ctrl=new AbortController();
         const to=setTimeout(()=>ctrl.abort(), 45000);
-        const res=await fetch('/api/v1/display/lastFrame',{signal:ctrl.signal,cache:'no-store'});
+        const res=await fetch('/api/v1/display/lastFrame?_='+Date.now(),{signal:ctrl.signal,cache:'no-store'});
         clearTimeout(to);
         const ct=(res.headers.get('content-type')||'').toLowerCase();
         if(res.status===503 || (ct.includes('json') && res.status>=400)){
@@ -3325,12 +3354,37 @@ async function fetchLastFrameBytes(){
 /* Overview "current panel": poll meta cheaply; only re-download 960KB when seq/crc changes. */
 let _ovPanelKey='';
 let _ovPanelPollTimer=0;
+let _ovPanelGen=0;
+let _ovPanelBmp=null; /* ImageBitmap — redraw when overview is shown again */
+
+function paintOverviewCanvas(bmp){
+  const cv=$('ovPanelCanvas');
+  if(!cv || !bmp) return;
+  const ctx=cv.getContext('2d');
+  ctx.imageSmoothingEnabled=false;
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
+  const empty=$('ovPanelEmpty');
+  if(empty) empty.hidden=true;
+}
+function scheduleOverviewCanvasPaint(){
+  /* Layout may still be 0-height on first paint; redraw after flex settles. */
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+      if(_ovPanelBmp) paintOverviewCanvas(_ovPanelBmp);
+    });
+  });
+}
 /** Draw last panel frame into Overview (not Display editor preview). */
 async function loadOverviewPanel(quiet, force){
+  const gen=++_ovPanelGen;
   try{
-    const meta=await get('/api/v1/display/getLastFrameMeta');
+    /* Bust HTTP caches — meta without no-store was keeping a stale seq. */
+    const meta=await get('/api/v1/display/getLastFrameMeta?_=' + Date.now());
+    if(gen!==_ovPanelGen) return false;
     if(!meta||!meta.present){
       _ovPanelKey='';
+      if(_ovPanelBmp){ try{ _ovPanelBmp.close(); }catch(_){ } _ovPanelBmp=null; }
       setOverviewPanelEmpty();
       if(!quiet) toast(t('toast.last_frame_none'));
       return false;
@@ -3339,16 +3393,28 @@ async function loadOverviewPanel(quiet, force){
     if(!force && key===_ovPanelKey){
       const m=$('ovPanelMeta');
       if(m) m.textContent=t('ov.panel_meta', meta.source||'panel', String(meta.seq||1));
+      /* Same frame — still repaint so overview shows after refresh/layout. */
+      if(_ovPanelBmp){
+        paintOverviewCanvas(_ovPanelBmp);
+        scheduleOverviewCanvasPaint();
+      }
       return true;
     }
     const bytes=await fetchLastFrameBytes();
+    if(gen!==_ovPanelGen) return false;
     const id=nativeFrameToImageData(bytes);
-    const cv=$('ovPanelCanvas');
-    if(cv){
-      cv.getContext('2d').putImageData(id,0,0);
+    const off=document.createElement('canvas');
+    off.width=PANEL_W; off.height=PANEL_H;
+    off.getContext('2d').putImageData(id,0,0);
+    const bmp=await createImageBitmap(off);
+    if(gen!==_ovPanelGen){
+      try{ bmp.close(); }catch(_){}
+      return false;
     }
-    const empty=$('ovPanelEmpty');
-    if(empty) empty.hidden=true;
+    if(_ovPanelBmp){ try{ _ovPanelBmp.close(); }catch(_){} }
+    _ovPanelBmp=bmp;
+    paintOverviewCanvas(bmp);
+    scheduleOverviewCanvasPaint();
     const m=$('ovPanelMeta');
     if(m){
       const src=meta.source||'panel';
@@ -3357,6 +3423,7 @@ async function loadOverviewPanel(quiet, force){
     _ovPanelKey=key;
     return true;
   }catch(e){
+    if(gen!==_ovPanelGen) return false;
     if(!quiet){
       setOverviewPanelEmpty(e.message||t('ov.panel_empty'));
       toast(e.message||t('toast.last_frame_none'));
@@ -3470,13 +3537,19 @@ if($('btnLastFrame')) $('btnLastFrame').onclick=async()=>{
 };
 if($('btnOvRefreshPanel')) $('btnOvRefreshPanel').onclick=async()=>{
   busy($('btnOvRefreshPanel'),1);
-  try{ await loadOverviewPanel(false, true); }
+  try{
+    _ovPanelKey=''; /* force full re-fetch even if meta looks unchanged */
+    await loadOverviewPanel(false, true);
+    scheduleOverviewCanvasPaint();
+  }
   finally{ busy($('btnOvRefreshPanel'),0); }
 };
 function scheduleOverviewPanelRefresh(){
-  /* Panel refresh + lastfrm erase/write usually finishes within ~20s. */
-  setTimeout(()=>{ loadOverviewPanel(true, true); }, 8000);
-  setTimeout(()=>{ loadOverviewPanel(true, true); }, 22000);
+  /* uploadFrame commits lastfrm before HTTP returns; canvas/text need longer. */
+  const kick=()=>{ _ovPanelKey=''; loadOverviewPanel(true, true); };
+  setTimeout(kick, 1500);
+  setTimeout(kick, 8000);
+  setTimeout(kick, 22000);
 }
 if($('imgUrl')){
   $('imgUrl').addEventListener('input',()=>{
@@ -3503,7 +3576,7 @@ $('mdText').addEventListener('input',()=>{
 });
 if($('eyeWfPass')) $('eyeWfPass').onclick=function(){ togglePass('wfPass', this); };
 if($('eyeMqPass')) $('eyeMqPass').onclick=function(){ togglePass('mqPass', this); };
-/* dispPush / btnImgPush / btnScanWifi bound in device API section below */
+/* dispPush / btnScanWifi bound in device API section below */
 if($('btnMdOpen')) $('btnMdOpen').onclick=()=>{
   const inp=document.createElement('input'); inp.type='file'; inp.accept='.md,text/markdown,text/plain';
   inp.onchange=async()=>{
@@ -3642,7 +3715,7 @@ syncGuideUI();
 
 /* ===== Device API bridge (production) ===== */
 async function api(method,u,body){
-  const opt={method,headers:{}};
+  const opt={method,headers:{},cache:'no-store'};
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
   const r=await fetch(u,opt);
   let j=null; try{j=await r.json()}catch(e){}
@@ -4129,7 +4202,8 @@ async function pushEditorToDevice(){
   if(!items.length){
     throw new Error(lang==='zh'?'没有可推送的图层':'No layers to push');
   }
-  await post('/api/v1/display/renderCanvas',{bg:'white',items});
+  const bg=edCanvasBg||'white';
+  await post('/api/v1/display/renderCanvas',{bg,items});
   toast(lang==='zh'?'已提交刷屏':'Pushed to screen',4000);
   scheduleOverviewPanelRefresh();
 }
@@ -4154,11 +4228,6 @@ if($('dispPush')) $('dispPush').onclick=async()=>{
     else await pushImageToDevice();
   }catch(e){ toast(e.message||'Push failed'); }
   finally{ busy($('dispPush'),0); }
-};
-if($('btnImgPush')) $('btnImgPush').onclick=async()=>{
-  busy($('btnImgPush'),1);
-  try{ await pushImageToDevice(); }catch(e){ toast(e.message||'failed'); }
-  finally{ syncImgPushGate(); }
 };
 
 /* boot */

@@ -22,6 +22,9 @@ extern "C" {
 /** Start NimBLE host + advertise CT-Prov (idempotent). */
 esp_err_t ct_prov_ble_start(void);
 
+/** Create GATT worker after BLE-warm Wi-Fi (keeps internal RAM for wifi_init). */
+esp_err_t ct_prov_ble_start_worker(void);
+
 /** Stop advertising, disconnect, and fully deinit NimBLE (idempotent). */
 void ct_prov_ble_stop(void);
 
@@ -39,6 +42,11 @@ void ct_prov_ble_rf_restore(void);
 #else
 
 static inline esp_err_t ct_prov_ble_start(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+static inline esp_err_t ct_prov_ble_start_worker(void)
 {
     return ESP_ERR_NOT_SUPPORTED;
 }

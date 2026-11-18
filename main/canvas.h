@@ -66,10 +66,23 @@ int app_epd_canvas_async(const canvas_t *cv);
  * Returns 0 on success. */
 int canvas_fill_setup_screen(canvas_t *cv, const char *ssid);
 
-/* Centered multiline UTF-8 text screen (ASCII 8x16 + GB2312 16x16).
- * Used by render_text so remote CJK works the same as SoftAP/canvas. */
+/* Multiline UTF-8 text screen (ASCII 8x16 + GB2312 16x16).
+ * Short copy is centered; dense/long paragraphs use top-left fill. */
 int canvas_fill_text_screen(canvas_t *cv, const char *const *lines, int line_count,
                             unsigned char fg, unsigned char bg, int scale);
+
+/* Wrap UTF-8 to panel width at scale (honors \\n; CJK soft-wrap by glyph).
+ * Writes up to max_lines into lines[][CANVAS_TEXT_MAX]. Returns line count.
+ * If truncated != NULL, sets *truncated when input did not fully fit. */
+int canvas_wrap_text_lines(const char *text, int scale,
+                           char lines[][CANVAS_TEXT_MAX], int max_lines,
+                           bool *truncated);
+
+/* Pick scale (≤ requested) so wrapped text fits panel height; may shrink to 1.
+ * Returns line count; sets *out_scale. truncated if still not all text fits. */
+int canvas_wrap_text_fit(const char *text, int scale_req,
+                         char lines[][CANVAS_TEXT_MAX], int max_lines,
+                         int *out_scale, bool *truncated);
 
 /* Copy UTF-8 without splitting a multibyte sequence. */
 void canvas_utf8_strlcpy(char *dst, const char *src, size_t dstSz);

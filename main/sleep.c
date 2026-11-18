@@ -1,12 +1,17 @@
 /**
  * @file sleep.c
- * @brief Deep-sleep scheduler + MAIN GPIO wake (ESP32-C61 GPIO0–6).
+ * @brief Deep-sleep scheduler + MAIN/PAGE GPIO wake (ESP32-C61 GPIO0–6).
  *
- * POWER_MODE_ALWAYS:     no auto sleep; sleep_now → until MAIN
- * POWER_MODE_CYCLE:      after wakeSec online (default 120s), sleep sleepMin
- *                        (timer + MAIN can wake early)
- * POWER_MODE_HIBERNATE:  no auto cycle; sleep_now / save → until MAIN
- * SoftAP open always cancels an armed window.
+ * POWER_MODE_ALWAYS:     no auto sleep; sleep_now → until MAIN/PAGE
+ * POWER_MODE_CYCLE:      after wakeSec online, sleep sleepMin
+ *                        (timer + MAIN/PAGE can wake early)
+ * POWER_MODE_HIBERNATE:  sleep_now / save → until MAIN/PAGE
+ *
+ * Wake → provisioning (edge case from sleep):
+ *   MAIN  → SoftAP after boot
+ *   PAGE  → BLE CT-Prov after boot
+ *   TIMER → normal cycle (wake URL + online window)
+ * SoftAP/BLE open always cancels an armed window.
  */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,6 +24,7 @@
 #include "config.h"
 #include "mqtt.h"
 #include "wifi.h"
+#include "http.h"
 #include "app_epd.h"
 #include "led.h"
 #include "board_ioext.h"
@@ -30,6 +36,7 @@ static esp_timer_handle_t s_sleepTimer;
 static bool s_armed;
 static bool s_cycleStarted; /* wake+arm once per boot */
 static bool s_entering;
+static sleep_wake_src_t s_wakeSrc;
 
 static int wake_window_sec(void)
 {
@@ -42,16 +49,64 @@ static int wake_window_sec(void)
     if (sec > POWER_WAKE_SEC_MAX) {
         sec = POWER_WAKE_SEC_MAX;
     }
+    /* SoftAP/httpd failed → keep awake longer so MAIN/PAGE can still provision. */
+    if (!http_server_is_up() && sec < POWER_WAKE_SEC_MAX) {
+        sec = POWER_WAKE_SEC_MAX;
+    }
     return sec;
 }
 
-static void sleep_enable_main_wakeup(void)
+void sleep_capture_wake_cause(void)
 {
-    /* Active-low MAIN on GPIO2 — in C61 deep-sleep wake range (0–6). */
-    esp_err_t err = esp_deep_sleep_enable_gpio_wakeup(
-        1ULL << BTN_MAIN_GPIO, ESP_GPIO_WAKEUP_GPIO_LOW);
+    s_wakeSrc = SLEEP_WAKE_NONE;
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+        s_wakeSrc = SLEEP_WAKE_TIMER;
+        ESP_LOGI(TAG, "wake cause: timer");
+        return;
+    }
+    if (cause != ESP_SLEEP_WAKEUP_GPIO) {
+        ESP_LOGI(TAG, "wake cause: %d (not gpio/timer)", (int)cause);
+        return;
+    }
+    uint64_t st = esp_sleep_get_gpio_wakeup_status();
+    const bool main = (st & (1ULL << BTN_MAIN_GPIO)) != 0;
+    const bool page = (st & (1ULL << BTN_PAGE_GPIO)) != 0;
+    if (main && page) {
+        /* Both low: SoftAP wins (MAIN). Factory still requires awake hold. */
+        s_wakeSrc = SLEEP_WAKE_MAIN;
+        ESP_LOGW(TAG, "wake cause: MAIN+PAGE → SoftAP");
+    } else if (page) {
+        s_wakeSrc = SLEEP_WAKE_PAGE;
+        ESP_LOGI(TAG, "wake cause: PAGE → BLE");
+    } else if (main) {
+        s_wakeSrc = SLEEP_WAKE_MAIN;
+        ESP_LOGI(TAG, "wake cause: MAIN → SoftAP");
+    } else {
+        ESP_LOGW(TAG, "wake cause: GPIO but neither MAIN/PAGE (status=0x%llx)",
+                 (unsigned long long)st);
+    }
+}
+
+sleep_wake_src_t sleep_get_wake_src(void)
+{
+    return s_wakeSrc;
+}
+
+sleep_wake_src_t sleep_consume_wake_src(void)
+{
+    sleep_wake_src_t w = s_wakeSrc;
+    s_wakeSrc = SLEEP_WAKE_NONE;
+    return w;
+}
+
+static void sleep_enable_button_wakeup(void)
+{
+    /* Active-low MAIN/PAGE on GPIO2/3 — both in C61 deep-sleep wake range (0–6). */
+    const uint64_t mask = (1ULL << BTN_MAIN_GPIO) | (1ULL << BTN_PAGE_GPIO);
+    esp_err_t err = esp_deep_sleep_enable_gpio_wakeup(mask, ESP_GPIO_WAKEUP_GPIO_LOW);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "MAIN gpio wakeup enable failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "button gpio wakeup enable failed: %s", esp_err_to_name(err));
     }
 }
 
@@ -71,7 +126,7 @@ static void sleep_go_task(void *arg)
     bool timed = (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0);
     ESP_LOGW(TAG, "entering deep sleep (%s%s)",
              power_mode_str(p.mode),
-             timed ? "" : ", until MAIN");
+             timed ? "" : ", until MAIN/PAGE");
 
     if (mqtt_is_connected()) {
         mqtt_publish_telemetry();
@@ -89,13 +144,15 @@ static void sleep_go_task(void *arg)
     (void)board_ioext_vbat_dect_en(false);
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    sleep_enable_main_wakeup();
+    sleep_enable_button_wakeup();
     if (timed) {
         ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(
             (uint64_t)p.sleepMin * 60ULL * 1000000ULL));
-        ESP_LOGI(TAG, "timer wake in %d min + MAIN GPIO%d", p.sleepMin, BTN_MAIN_GPIO);
+        ESP_LOGI(TAG, "timer wake in %d min + MAIN/PAGE GPIO%d/%d",
+                 p.sleepMin, BTN_MAIN_GPIO, BTN_PAGE_GPIO);
     } else {
-        ESP_LOGI(TAG, "MAIN GPIO%d wake only", BTN_MAIN_GPIO);
+        ESP_LOGI(TAG, "MAIN/PAGE GPIO%d/%d wake only",
+                 BTN_MAIN_GPIO, BTN_PAGE_GPIO);
     }
     esp_deep_sleep_start();
     vTaskDelete(NULL); /* unreachable */
@@ -150,10 +207,11 @@ void sleep_on_sta_online(void)
     cfg_get_power_attr(&p);
     s_cycleStarted = true;
 
-    /* After button wake from hibernate/always sleep_now: stay awake (no re-arm). */
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    if (cause == ESP_SLEEP_WAKEUP_GPIO && p.mode != POWER_MODE_CYCLE) {
-        ESP_LOGI(TAG, "woke by MAIN — stay awake (mode=%s)", power_mode_str(p.mode));
+    /* Button wake into SoftAP/BLE: stay in provisioning; do not re-arm yet.
+     * SoftAP/BLE close paths re-arm CYCLE when STA is up. */
+    sleep_wake_src_t w = sleep_get_wake_src();
+    if (w == SLEEP_WAKE_MAIN || w == SLEEP_WAKE_PAGE) {
+        ESP_LOGI(TAG, "woke by button for provisioning — skip cycle arm");
         return;
     }
 
@@ -176,6 +234,22 @@ void sleep_cancel(void)
         esp_timer_stop(s_sleepTimer);
     }
     s_armed = false;
+}
+
+void sleep_kick(void)
+{
+    /* Keep device online while the platform is actively commanding it. */
+    if (wifi_softap_is_up() || wifi_ble_prov_is_up()) {
+        sleep_cancel();
+        return;
+    }
+    powerAttr_t p;
+    cfg_get_power_attr(&p);
+    if (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0) {
+        sleep_arm_from_config();
+    } else {
+        sleep_cancel();
+    }
 }
 
 void sleep_now(void)

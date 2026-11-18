@@ -19,14 +19,14 @@ idf.py build
 idf.py -p /dev/cu.wchusbserialXXXX flash monitor
 ```
 
-### Dual SKU (SoftAP + BLE CT-Prov)
+### Convenience scripts (single image)
 
 ```bash
 bash tools/build_dual_sku.sh
 bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
 ```
 
-`sdkconfig` is gitignored; SoftAP defaults in `sdkconfig.defaults`, BLE overlay in `sdkconfig.ble_prov`.
+`sdkconfig` is gitignored; defaults (including NimBLE) live in `sdkconfig.defaults`.
 
 ## SoftAP Web UI
 

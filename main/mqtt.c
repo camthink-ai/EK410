@@ -333,31 +333,28 @@ static void handle_command(const char *raw, int len)
         if (!cJSON_IsString(t)) {
             mqtt_publish_cmd_ack(cmd, "error", "missing text");
         } else {
-            espd_render_t render;
-            memset(&render, 0, sizeof(render));
-            /* Keep full UTF-8 payload — line buffers are 192 B each. */
-            size_t tlen = strlen(t->valuestring);
-            char *buf = malloc(tlen + 1);
-            if (!buf) {
+            /* Heap — wrap runs on epd_render task; only copy raw paragraph here. */
+            espd_render_t *render = calloc(1, sizeof(*render));
+            if (!render) {
                 mqtt_publish_cmd_ack(cmd, "error", "oom");
                 cJSON_Delete(root);
                 return;
             }
-            memcpy(buf, t->valuestring, tlen + 1);
-            char *save = NULL;
-            for (char *tok = strtok_r(buf, "\n", &save);
-                 tok && render.count < EPD_TEXT_MAX_LINES;
-                 tok = strtok_r(NULL, "\n", &save)) {
-                canvas_utf8_strlcpy(render.lines[render.count++], tok,
-                                    sizeof(render.lines[0]));
+            size_t tlen = strlen(t->valuestring);
+            canvas_utf8_strlcpy(render->text, t->valuestring, sizeof(render->text));
+            render->fg = cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x00;
+            render->bg = cJSON_IsString(bg) ? canvas_color(bg->valuestring) : 0x11;
+            render->scale = cJSON_IsNumber(sc) ? sc->valueint : 3;
+            ESP_LOGI(TAG, "render_text queue %u bytes (raw cap %u) scale=%d",
+                     (unsigned)tlen, (unsigned)sizeof(render->text) - 1, render->scale);
+            if (tlen >= sizeof(render->text)) {
+                ESP_LOGW(TAG, "render_text truncated to %u bytes",
+                         (unsigned)sizeof(render->text) - 1);
             }
-            free(buf);
-            render.fg = cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x00;
-            render.bg = cJSON_IsString(bg) ? canvas_color(bg->valuestring) : 0x11;
-            render.scale = cJSON_IsNumber(sc) ? sc->valueint : 3;
-            int rc = app_epd_render_async(&render);
+            int rc = app_epd_render_async(render);
+            free(render);
             mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error",
-                               rc == 0 ? "queued" : "render busy");
+                                 rc == 0 ? "queued" : "render busy");
         }
     } else if (!strcasecmp(cmd, "render_canvas")) {
         canvas_t *cv = malloc(sizeof(canvas_t));
@@ -543,7 +540,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         }
         g_MQ.isConnected = true;
         publish_status("online", 1);
-        mqtt_publish_telemetry();
+        /* Do NOT publish full telemetry (≈160KB preview) here — it races
+         * PAGE/BLE enter, fragments internal RAM, and causes NimBLE/Wi-Fi
+         * NO_MEM + red LED. Periodic timer sends telemetry shortly after. */
         break;
     }
     case MQTT_EVENT_DISCONNECTED:
@@ -554,6 +553,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     case MQTT_EVENT_DATA:
         ESP_LOGI(TAG, "downlink [%.*s] %d/%d", event->topic_len, event->topic,
                  event->current_data_offset + event->data_len, event->total_data_len);
+        sleep_kick(); /* stay awake while platform is sending commands */
         handle_data_event(event);
         break;
     case MQTT_EVENT_ERROR:
@@ -584,7 +584,8 @@ void mqtt_open(void)
     memset(&g_MQ, 0, sizeof(mdMqtt_t));
     g_MQ.mutex = xSemaphoreCreateMutex();
     g_MQ.cmdQueue = xQueueCreate(CMD_QUEUE_LEN, sizeof(char *));
-    /* cJSON + cmd status publish; EPD queue msgs are heap-backed in app_epd. */
+    /* Keep ≤8KB — larger stacks here starve wifi_start (lock_init abort loop).
+     * Long render_text uses heap-backed espd_render_t. */
     xTaskCreate(cmd_task, "mqtt_cmd", 8192, NULL, 5, NULL);
 
     const esp_timer_create_args_t timerArgs = {
@@ -756,22 +757,24 @@ void mqtt_start(void)
 void mqtt_stop(void)
 {
     if (!g_MQ.mutex) {
-        return; /* mqtt_open not called yet (BLE SKU early NimBLE bring-up) */
+        return; /* mqtt_open not called yet */
     }
-    xSemaphoreTake(g_MQ.mutex, portMAX_DELAY);
     if (s_telemetryTimer) {
         esp_timer_stop(s_telemetryTimer);
     }
-    if (g_MQ.client && g_MQ.isConnected) {
-        publish_status("offline", 1);
-        vTaskDelay(pdMS_TO_TICKS(50));
+    /* Bounded wait — SoftAP↔BLE XOR must not hang on a large telemetry outbox. */
+    if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(1500)) != pdTRUE) {
+        ESP_LOGW(TAG, "mqtt_stop: mutex busy — skipping clean stop");
+        return;
     }
+    g_MQ.isConnected = false; /* prevent further telemetry while tearing down */
+    /* Do not publish offline here — QoS1 + preview telemetry can block for seconds. */
     if (g_MQ.client) {
         esp_mqtt_client_stop(g_MQ.client);
         esp_mqtt_client_destroy(g_MQ.client);
         g_MQ.client = NULL;
-        g_MQ.isConnected = false;
         g_MQ.started = false;
+        ESP_LOGI(TAG, "mqtt stopped");
     }
     rx_reset();
     xSemaphoreGive(g_MQ.mutex);

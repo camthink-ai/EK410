@@ -55,13 +55,14 @@ bool wifi_softap_is_up(void);
 void wifi_softap_touch(void);
 
 /**
- * On-demand BLE CT-Prov window (PAGE hold). Mutually exclusive with SoftAP:
- * open closes SoftAP/httpd/mqtt first; SoftAP open closes BLE first.
- * Exit paths: PAGE hold again, idle timeout, session.close, SoftAP open.
+ * On-demand BLE CT-Prov window (PAGE hold). Mutually exclusive with SoftAP
+ * in one image: open stops SoftAP/httpd/mqtt then starts NimBLE; SoftAP open
+ * stops BLE then brings SoftAP up. No OTA SKU switch / reboot.
+ * Exit: PAGE hold again, idle timeout, session.close, SoftAP open.
  */
-void wifi_ble_prov_open(void);   /* arm NVS + reboot into BLE boot (or refresh) */
-void wifi_ble_prov_enter(void);  /* start NimBLE on BLE boot (no reboot) */
-void wifi_ble_prov_close(void);  /* full stop + clear NVS + reboot to SoftAP boot */
+void wifi_ble_prov_open(void);   /* start BLE CT-Prov in-process (or refresh idle) */
+void wifi_ble_prov_enter(void);  /* same as open; kept for call-site clarity */
+void wifi_ble_prov_close(void);  /* stop NimBLE; restore httpd/mqtt; SoftAP if pending */
 bool wifi_ble_prov_is_up(void);
 void wifi_ble_prov_touch(void);
 

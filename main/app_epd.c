@@ -40,6 +40,8 @@
 #include "config.h"
 #include "last_frame.h"
 
+static const char *TAG = "app_epd";
+
 /* Pause MQTT TLS before a second HTTPS client — C61 cannot hold both. */
 static void url_tls_prepare(void)
 {
@@ -67,6 +69,11 @@ static int panel_replay_last_frame(void)
     if (last_frame_get_meta(&m) != 0 || !m.present) {
         return -1;
     }
+    /* Solid clear/fill must not replace real art on boot (looks like a bug). */
+    if (strcmp(m.source, "fill") == 0) {
+        ESP_LOGW(TAG, "skip lastfrm src=fill — prefer splash");
+        return -1;
+    }
     if (epd_upload_start() != 0) {
         return -1;
     }
@@ -78,7 +85,16 @@ static int panel_replay_last_frame(void)
     return epd_upload_finish();
 }
 
-static const char *TAG = "app_epd";
+int app_epd_boot_paint_sync(void)
+{
+    ESP_LOGI(TAG, "boot paint sync (before Wi-Fi)");
+    if (panel_replay_last_frame() == 0) {
+        app_epd_note_user_content();
+        return 0;
+    }
+    splash_show_default();
+    return 0;
+}
 
 /* Max HTTP body for display_url decode path (JPEG/PNG). Raw 960000 also fits. */
 #define IMG_URL_MAX_BYTES (768 * 1024)
@@ -121,7 +137,31 @@ static QueueHandle_t s_renderQueue;
  * the SPI bus and the shared DMA chunk must never have two writers. */
 static SemaphoreHandle_t s_panelLock;
 static bool s_panelOk;
+/* Set when BUSY times out / upload aborts — next paint still draws content
+ * directly (no intermediate white wipe; that was blanking the panel). */
+static bool s_panelDirty = true;
 static bool s_userContent; /* true after customer push; SoftAP close must not wipe */
+
+#define EPD_COLOR_WHITE 0x11
+
+static void stream_begin(unsigned char csx);
+static void stream_end(unsigned char csx);
+static void epd_proxy_download(epd_proxy_job_t *job);
+
+static int epd_commit_display(void)
+{
+    if (s_panelDirty) {
+        ESP_LOGI(TAG, "panel dirty — content full refresh (no pre-wipe)");
+    }
+    int ok = epdDisplay();
+    if (!ok) {
+        s_panelDirty = true;
+        ESP_LOGW(TAG, "display incomplete — panel marked dirty");
+    } else {
+        s_panelDirty = false;
+    }
+    return ok;
+}
 
 static void epd_lock(void)
 {
@@ -136,10 +176,6 @@ static void epd_unlock(void)
         xSemaphoreGive(s_panelLock);
     }
 }
-
-static void stream_begin(unsigned char csx);
-static void stream_end(unsigned char csx);
-static void epd_proxy_download(epd_proxy_job_t *job);
 
 /* Native (nx,ny) -> logical landscape (lx,ly), inverse of 90° CCW (left). */
 static inline void native_to_logic(int nx, int ny, int *lx, int *ly)
@@ -184,7 +220,7 @@ static void stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void 
         }
         stream_end(csx);
     }
-    epdDisplay();
+    (void)epd_commit_display();
 }
 
 void epd_stream_render(unsigned char (*pixel_fn)(int x, int y, void *ctx), void *ctx)
@@ -229,8 +265,9 @@ static void render_task(void *arg)
             canvas_render(&msg->canvas);
             break;
         case 3:
+            /* Bare refresh of previous LUT — do not wipe to white first. */
             epd_lock();
-            epdDisplay();
+            (void)epd_commit_display();
             epd_unlock();
             break;
         case 4:
@@ -323,15 +360,21 @@ static void render_task(void *arg)
             break;
         }
         default: {
-            const char *linePtrs[EPD_TEXT_MAX_LINES] = { 0 };
-            for (int i = 0; i < msg->render.count && i < EPD_TEXT_MAX_LINES; i++) {
-                linePtrs[i] = msg->render.lines[i];
-            }
             if (msg->persist_frame) {
                 app_epd_mark_frame_capture("text");
             }
-            epd_text_screen(linePtrs, msg->render.count, msg->render.fg, msg->render.bg,
-                            msg->render.scale);
+            if (msg->render.text[0]) {
+                /* Wrap on this 32KB task — mqtt_cmd must not own wrap buffers. */
+                epd_text_paragraph(msg->render.text, msg->render.fg, msg->render.bg,
+                                   msg->render.scale);
+            } else {
+                const char *linePtrs[EPD_TEXT_MAX_LINES] = { 0 };
+                for (int i = 0; i < msg->render.count && i < EPD_TEXT_MAX_LINES; i++) {
+                    linePtrs[i] = msg->render.lines[i];
+                }
+                epd_text_screen(linePtrs, msg->render.count, msg->render.fg,
+                                msg->render.bg, msg->render.scale);
+            }
             break;
         }
         }
@@ -370,6 +413,38 @@ static int queue_render_owned(render_msg_t *msg, TickType_t wait)
     return 0;
 }
 
+/* Drop queued jobs so a fresh uploadFrame is not overwritten by an older
+ * MQTT/canvas/text job that arrived while the panel lock was held. */
+static void render_queue_drop_pending(const char *reason)
+{
+    if (!s_renderQueue) {
+        return;
+    }
+    int n = 0;
+    render_msg_t *msg = NULL;
+    while (xQueueReceive(s_renderQueue, &msg, 0) == pdTRUE) {
+        if (!msg) {
+            continue;
+        }
+        if (msg->kind == 9 && msg->proxy) {
+            msg->proxy->orphaned = true;
+            if (msg->proxy_done) {
+                xSemaphoreGive(msg->proxy_done);
+            }
+            /* proxy buffer freed by waiter or orphan path — do not free data here */
+        } else if (msg->proxy_done) {
+            xSemaphoreGive(msg->proxy_done);
+        }
+        free(msg);
+        msg = NULL;
+        n++;
+    }
+    if (n > 0) {
+        ESP_LOGW(TAG, "dropped %d pending render job(s) (%s)", n,
+                 reason ? reason : "superseded");
+    }
+}
+
 void app_epd_note_user_content(void)
 {
     s_userContent = true;
@@ -388,22 +463,33 @@ bool app_epd_has_user_content(void)
 int app_epd_render_async(const espd_render_t *render)
 {
     render_msg_t *msg = alloc_render_msg(0);
-    if (!msg) {
+    if (!msg || !render) {
+        free(msg);
         return -1;
     }
     msg->persist_frame = true;
-    msg->render = *render;
-    if (msg->render.count > EPD_TEXT_MAX_LINES) {
-        msg->render.count = EPD_TEXT_MAX_LINES;
-    }
-    for (int i = 0; i < msg->render.count; i++) {
-        strlcpy(msg->render.lines[i], render->lines[i], sizeof(msg->render.lines[i]));
-    }
+    memset(&msg->render, 0, sizeof(msg->render));
+    msg->render.fg = render->fg;
+    msg->render.bg = render->bg;
+    msg->render.scale = render->scale;
     if (msg->render.scale < 1) {
         msg->render.scale = 1;
     }
     if (msg->render.scale > CANVAS_TEXT_SCALE_MAX) {
         msg->render.scale = CANVAS_TEXT_SCALE_MAX;
+    }
+    if (render->text[0]) {
+        canvas_utf8_strlcpy(msg->render.text, render->text, sizeof(msg->render.text));
+    } else {
+        if (render->count > EPD_TEXT_MAX_LINES) {
+            msg->render.count = EPD_TEXT_MAX_LINES;
+        } else {
+            msg->render.count = render->count;
+        }
+        for (int i = 0; i < msg->render.count; i++) {
+            canvas_utf8_strlcpy(msg->render.lines[i], render->lines[i],
+                                sizeof(msg->render.lines[i]));
+        }
     }
     int rc = queue_render_owned(msg, 0);
     if (rc == 0) {
@@ -552,13 +638,11 @@ int app_epd_fill_async(unsigned char color_code)
     if (!msg) {
         return -1;
     }
-    msg->persist_frame = true;
+    /* Do not persist solid fills (esp. white clear) as lastfrm — boot would
+     * restore a blank panel and look like content was wiped. */
+    msg->persist_frame = false;
     msg->fillColor = color_code;
-    int rc = queue_render_owned(msg, 0);
-    if (rc == 0) {
-        app_epd_note_user_content();
-    }
-    return rc;
+    return queue_render_owned(msg, 0);
 }
 
 int app_epd_url_async(const char *url)
@@ -729,11 +813,14 @@ int app_epd_dma_buf_size(void)
 
 int epd_upload_start(void)
 {
-    /* Full refresh holds the lock 20–40s; allow waiting out one in-flight job. */
-    if (!s_panelLock || xSemaphoreTake(s_panelLock, pdMS_TO_TICKS(60000)) != pdTRUE) {
+    /* Full refresh holds the lock 20–40s; allow waiting out one in-flight job.
+     * GC alone can take ~60s when dirty — wait long enough. */
+    if (!s_panelLock || xSemaphoreTake(s_panelLock, pdMS_TO_TICKS(180000)) != pdTRUE) {
         ESP_LOGW(TAG, "panel busy, upload rejected");
         return -1;
     }
+    /* Anything still queued would run after we unlock and paint over this upload. */
+    render_queue_drop_pending("upload start");
     s_uploadCount = 0;
     s_uploadCsx = 0;
     stream_begin(0);
@@ -744,12 +831,16 @@ int epd_upload_start(void)
 
 int epd_upload_write(const unsigned char *dmaChunk, int len)
 {
-    if (s_uploadCsx < 0 || !dmaChunk || len <= 0) {
+    if (s_uploadCsx < 0 || !dmaChunk || len <= 0 || !s_chunk) {
         return -1;
     }
     /* CHUNK_SIZE (8192) does not divide EPD_HALF_BYTES (480000). A single
      * recv can straddle the CS0/CS1 boundary — must split or CS1 never starts
-     * and the panel only shows one half. */
+     * and the panel only shows one half.
+     *
+     * Always copy through s_chunk (MALLOC_CAP_DMA). lastfrm/stream buffers are
+     * often non-DMA; after Wi-Fi/NimBLE, spi_master cannot alloc priv TX and
+     * the panel gets a dirty/incomplete frame (no Display Done). */
     int off = 0;
     while (off < len) {
         unsigned long half_end = (unsigned long)(s_uploadCsx + 1) * EPD_HALF_BYTES;
@@ -761,9 +852,13 @@ int epd_upload_write(const unsigned char *dmaChunk, int len)
         if ((unsigned long)n > room) {
             n = (int)room;
         }
-        writeEpdData((unsigned char *)dmaChunk + off, n);
+        if (n > CHUNK_SIZE) {
+            n = CHUNK_SIZE;
+        }
+        memcpy(s_chunk, dmaChunk + off, (size_t)n);
+        writeEpdData(s_chunk, (unsigned int)n);
         if (last_frame_capturing()) {
-            last_frame_capture_write(dmaChunk + off, (size_t)n);
+            last_frame_capture_write(s_chunk, (size_t)n);
         }
         s_uploadCount += n;
         off += n;
@@ -784,14 +879,20 @@ int epd_upload_finish(void)
     stream_end(s_uploadCsx);
     s_uploadCsx = -1;
     if (s_uploadCount != EPD_HALF_BYTES * 2) {
-        ESP_LOGW(TAG, "upload size mismatch: %lu", s_uploadCount);
+        ESP_LOGW(TAG, "upload size mismatch: %lu", (unsigned long)s_uploadCount);
         last_frame_capture_abort();
+        s_panelDirty = true;
     } else {
         /* Refresh while still holding the panel lock so nothing else can
          * interleave DTM/PON with this frame (avoids dirty corners). */
-        epdDisplay();
-        last_frame_capture_commit();
+        if (epd_commit_display()) {
+            last_frame_capture_commit();
+        } else {
+            last_frame_capture_abort();
+        }
     }
+    /* Drop jobs queued during the long upload (MQTT render_text, etc.). */
+    render_queue_drop_pending("upload finish");
     epd_unlock();
     app_epd_note_user_content();
     return 0;
@@ -804,6 +905,7 @@ void epd_upload_abort(void)
         s_uploadCsx = -1;
     }
     s_uploadCount = 0;
+    s_panelDirty = true;
     last_frame_capture_abort();
     epd_unlock();
 }
@@ -856,10 +958,17 @@ int app_epd_init(void)
     setPinCsAll(GPIO_HIGH);
     initEPD();
     spiCtlSelectEpd(1); /* ensure mux still on EPD after init traffic */
+    s_panelDirty = true; /* power cycle — first paint is a full DRF of content */
     s_panelOk = (checkDriverICStatus() == DONE);
+    if (!s_panelOk) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        s_panelOk = (checkDriverICStatus() == DONE);
+    }
     if (!s_panelOk) {
         /* Keep streaming attempts (BUSY rose + SPI init), but report unhealthy. */
         ESP_LOGW(TAG, "driver IC status not ready — draws allowed, panel_ok=false");
+    } else {
+        ESP_LOGI(TAG, "panel ready");
     }
     return 0;
 }
@@ -908,9 +1017,12 @@ void epd_fill_refresh(unsigned char color_code)
         }
         stream_end(csx);
     }
-    epdDisplay();
-    if (do_cap) {
-        last_frame_capture_commit();
+    if (epd_commit_display()) {
+        if (do_cap) {
+            last_frame_capture_commit();
+        }
+    } else if (do_cap) {
+        last_frame_capture_abort();
     }
     epd_unlock();
 }
@@ -1004,6 +1116,31 @@ void epd_text_screen(const char *const *lines, int line_count,
     free(cv);
 }
 
+void epd_text_paragraph(const char *text, unsigned char fg_code,
+                        unsigned char bg_code, int scale_req)
+{
+    if (!text || !text[0]) {
+        return;
+    }
+    char (*lines)[CANVAS_TEXT_MAX] = calloc((size_t)EPD_TEXT_MAX_LINES, CANVAS_TEXT_MAX);
+    if (!lines) {
+        ESP_LOGE(TAG, "paragraph wrap OOM");
+        return;
+    }
+    int scale = scale_req;
+    bool trunc = false;
+    int n = canvas_wrap_text_fit(text, scale_req, lines, EPD_TEXT_MAX_LINES,
+                                 &scale, &trunc);
+    ESP_LOGI(TAG, "paragraph %u bytes -> %d lines scale %d→%d%s",
+             (unsigned)strlen(text), n, scale_req, scale, trunc ? " (truncated)" : "");
+    const char *ptrs[EPD_TEXT_MAX_LINES] = { 0 };
+    for (int i = 0; i < n && i < EPD_TEXT_MAX_LINES; i++) {
+        ptrs[i] = lines[i];
+    }
+    epd_text_screen(ptrs, n, fg_code, bg_code, scale);
+    free(lines);
+}
+
 void epd_boot_screen(const char *title, const char *const *lines, int line_count)
 {
     text_layout_t tl = {
@@ -1057,8 +1194,7 @@ static int stream_raw_native(const uint8_t *raw, size_t len)
         }
         stream_end(csx);
     }
-    epdDisplay();
-    return 0;
+    return epd_commit_display() ? 0 : -1;
 }
 
 /* Sparse stage text on panel (QUALITY URL path only — each call is a full refresh). */

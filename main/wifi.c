@@ -35,7 +35,6 @@
 #include "led.h"
 #include "sleep.h"
 #include "app_epd.h"
-#include "ota.h"
 
 #define TAG "-->WIFI"
 #define AP_PASS "12345678"
@@ -59,6 +58,7 @@ static bool s_softapOpening; /* STA→APSTA in progress — suppress reconnect t
 static bool s_softapClosing; /* suppress LED thrash while APSTA→STA tears down */
 static bool s_softapPaintedGuide; /* restore CamThink logo when SoftAP closes */
 static bool s_bleProvUp;
+static bool s_bleEntering; /* teardown→NimBLE in progress — lock LED to cyan */
 static bool s_bleProvClosing;
 static int s_apClients;
 static wifi_sta_state_t s_staState;
@@ -70,28 +70,33 @@ static bool s_userConnectInFlight; /* suppress auto-reconnect during try */
  * SoftAP/BLE/OTA failure paths must call this after a fault pulse — otherwise
  * red sticks when STA is already up (no second GOT_IP).
  *
- * Do NOT map panel_ok→red here: BLE idle exit reboots SoftAP SKU and a flaky
- * panel probe would leave a permanent red blink after a normal BLE timeout.
+ * Do NOT map panel_ok→red here: a flaky panel probe must not stick red after
+ * a normal BLE idle exit.
  */
 static void wifi_led_apply_idle_state(void)
 {
-    if (s_bleProvUp || cfg_ble_prov_boot_get()) {
+    if (s_bleProvUp || s_bleEntering) {
+        ESP_LOGI(TAG, "LED → cyan blink (BLE prov)");
         led_set(LEDC_BLE_R, LED_BLINK);
         return;
     }
     if (s_softapUp || s_softapOpening) {
+        ESP_LOGI(TAG, "LED → blue blink (SoftAP)");
         led_set(LEDC_NET_R, LED_BLINK);
         return;
     }
     if (wifi_sta_is_connected()) {
+        ESP_LOGI(TAG, "LED → green solid (STA up)");
         led_set(LEDC_OK_R, LED_ON);
         return;
     }
     /* Still have a home network to chase */
     if (s_staStarted || config_has_wifi()) {
+        ESP_LOGI(TAG, "LED → blue blink (joining/reconnect)");
         led_set(LEDC_NET_R, LED_BLINK);
         return;
     }
+    ESP_LOGI(TAG, "LED → green solid (unprovisioned idle)");
     led_set(LEDC_OK_R, LED_ON); /* unprovisioned resting */
 }
 
@@ -159,11 +164,10 @@ static void ble_idle_timer_cb(void *arg)
         ble_prov_arm_idle();
         return;
     }
-    ESP_LOGI(TAG, "BLE idle %u ms — no GATT client, exit to SoftAP (not a fault)",
+    ESP_LOGI(TAG, "BLE idle %u ms — stop NimBLE (not a fault)",
              (unsigned)ble_idle_ms());
-    /* Blue = switching SKU; never red — idle timeout is expected. */
-    led_set(LEDC_NET_R, LED_BLINK);
-    wifi_ble_prov_close(); /* clears NVS + SoftAP SKU boot + restarts */
+    /* LED comes from wifi_ble_prov_close → green / blue-joining — not sticky cyan. */
+    wifi_ble_prov_close();
 }
 
 static void reconnect_timer_cb(void *arg)
@@ -172,6 +176,12 @@ static void reconnect_timer_cb(void *arg)
     if (!s_staStarted || s_userConnectInFlight) {
         return;
     }
+#if CONFIG_BT_NIMBLE_ENABLED
+    /* BLE CT-Prov owns the radio — do not steal airtime for STA join. */
+    if (s_bleProvUp || s_bleEntering || ct_prov_ble_is_up()) {
+        return;
+    }
+#endif
     if (wifi_sta_is_connected()) {
         return;
     }
@@ -185,6 +195,11 @@ static void reconnect_arm(void)
     if (!s_reconnectTimer || !s_staStarted || s_userConnectInFlight) {
         return;
     }
+#if CONFIG_BT_NIMBLE_ENABLED
+    if (s_bleProvUp || s_bleEntering || ct_prov_ble_is_up()) {
+        return;
+    }
+#endif
     esp_timer_stop(s_reconnectTimer);
     esp_timer_start_once(s_reconnectTimer, (uint64_t)s_reconnectDelayMs * 1000ULL);
     int next = s_reconnectDelayMs * 2;
@@ -215,13 +230,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         if (!s_userConnectInFlight) {
             s_staState = WIFI_STA_RECONNECTING;
             /* SoftAP open/close itself owns LED + reconnect; ignore APSTA churn.
-             * Also skip when SoftAP SKU is arming BLE reboot (bleboot=1): STA
-             * teardown would otherwise flash blue over the cyan handoff LED. */
+             * BLE window owns cyan — do not flash blue over it. */
             if (!s_softapUp && !s_softapOpening && !s_softapClosing &&
-                !s_bleProvUp && !cfg_ble_prov_boot_get()) {
+                !s_bleProvUp && !s_bleEntering) {
                 led_set(LEDC_NET_R, LED_BLINK);
                 reconnect_arm();
-            } else if (cfg_ble_prov_boot_get() || s_bleProvUp) {
+            } else if (s_bleProvUp || s_bleEntering) {
                 led_set(LEDC_BLE_R, LED_BLINK);
             }
         }
@@ -253,19 +267,20 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         if (s_reconnectTimer) {
             esp_timer_stop(s_reconnectTimer);
         }
-        if (s_bleProvUp || cfg_ble_prov_boot_get()) {
+        if (s_bleProvUp) {
             led_set(LEDC_BLE_R, LED_BLINK);
-            /* MQTT/httpd stay down for the whole BLE boot window. */
+            /* MQTT/httpd stay down for the whole BLE provisioning window. */
         } else {
             wifi_led_apply_idle_state();
-            if (!s_softapUp) {
-                mqtt_start();
-                if (!http_server_is_up()) {
-                    http_server_start();
-                }
-            } else {
-                mqtt_start();
+            /*
+             * httpd BEFORE mqtt — both need a contiguous internal stack.
+             * mqtt_start first left largest_int ≈9KB and httpd failed with
+             * ESP_ERR_HTTPD_TASK (STA IP up, port 80 refused).
+             */
+            if (!s_softapUp && !http_server_is_up()) {
+                http_server_start();
             }
+            mqtt_start();
         }
         sleep_on_sta_online();
     }
@@ -277,26 +292,26 @@ static esp_err_t wifi_driver_ensure(void)
         return ESP_OK;
     }
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-#if CONFIG_BT_NIMBLE_ENABLED
-    /* Absolute minimum after NimBLE — C61 often has largest_int ~8–15KB.
-     * static_rx=3 previously failed: "Expected 3 rx buffer, actual is 1". */
-    cfg.static_rx_buf_num = 2;
-    cfg.dynamic_rx_buf_num = 4;
-    cfg.tx_buf_type = 1; /* dynamic TX */
-    cfg.static_tx_buf_num = 0;
-    cfg.dynamic_tx_buf_num = 4;
-    cfg.cache_tx_buf_num = 0;
-    cfg.rx_mgmt_buf_num = 3;
-    cfg.mgmt_sbuf_num = 6;
-    cfg.csi_enable = 0;
-    cfg.ampdu_rx_enable = 0;
-    cfg.ampdu_tx_enable = 0;
-    cfg.amsdu_tx_enable = 0;
-    cfg.rx_ba_win = 0;
-    cfg.nvs_enable = 0;
-    cfg.wifi_task_stack_size = 3072;
-#endif
-    ESP_LOGI(TAG, "esp_wifi_init trying — free %u int %u largest_int %u",
+    /* After NimBLE, use lean buffers so esp_wifi_init can succeed. */
+    if (s_bleProvUp || ct_prov_ble_is_up()) {
+        cfg.static_rx_buf_num = 2;
+        cfg.dynamic_rx_buf_num = 4;
+        cfg.tx_buf_type = 1;
+        cfg.static_tx_buf_num = 0;
+        cfg.dynamic_tx_buf_num = 4;
+        cfg.cache_tx_buf_num = 0;
+        cfg.rx_mgmt_buf_num = 3;
+        cfg.mgmt_sbuf_num = 6;
+        cfg.csi_enable = 0;
+        cfg.ampdu_rx_enable = 0;
+        cfg.ampdu_tx_enable = 0;
+        cfg.amsdu_tx_enable = 0;
+        cfg.rx_ba_win = 0;
+        cfg.nvs_enable = 0;
+        cfg.wifi_task_stack_size = 3072;
+    }
+    ESP_LOGI(TAG, "esp_wifi_init trying%s — free %u int %u largest_int %u",
+             (s_bleProvUp || ct_prov_ble_is_up()) ? " (ble-slim)" : "",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
@@ -315,6 +330,38 @@ static esp_err_t wifi_driver_ensure(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     return ESP_OK;
+}
+
+/** Full Wi-Fi teardown so NimBLE can claim contiguous internal RAM. */
+static void wifi_driver_teardown(void)
+{
+    if (s_reconnectTimer) {
+        esp_timer_stop(s_reconnectTimer);
+    }
+    if (!s_wifiDriverUp) {
+        return;
+    }
+    if (s_wifiStarted) {
+        esp_wifi_stop();
+        s_wifiStarted = false;
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+    esp_err_t err = esp_wifi_deinit();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_deinit: %s", esp_err_to_name(err));
+    }
+    s_wifiDriverUp = false;
+    s_staStarted = false;
+    s_staState = WIFI_STA_IDLE;
+    if (s_wifiEvent) {
+        xEventGroupClearBits(s_wifiEvent,
+                             WIFI_STA_CONNECTED_BIT | WIFI_STA_FAIL_BIT | WIFI_SCAN_DONE_BIT);
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_LOGI(TAG, "Wi-Fi torn down — free %u int %u largest_int %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }
 
 void wifi_open(void)
@@ -347,12 +394,8 @@ void wifi_open(void)
     };
     ESP_ERROR_CHECK(esp_timer_create(&recon_args, &s_reconnectTimer));
 
-#if CONFIG_BT_NIMBLE_ENABLED
-    /* BLE SKU: keep largest_int free for NimBLE controller; Wi-Fi on demand. */
-    ESP_LOGI(TAG, "Wi-Fi driver deferred (BLE SKU)");
-#else
+    /* Init Wi-Fi before httpd so STA buffers allocate while largest_int is high. */
     ESP_ERROR_CHECK(wifi_driver_ensure());
-#endif
 }
 
 static bool sta_apply_and_wait(const char *ssid, const char *password, int timeout_ms)
@@ -601,11 +644,11 @@ void wifi_softap_open(void)
     }
 
     sleep_cancel(); /* provisioning must not be killed by sleep window */
-    /* SoftAP XOR BLE: leave BLE boot via restart, then SoftAP opens (pending). */
-    if (s_bleProvUp || cfg_ble_prov_boot_get() || ct_prov_ble_is_up()) {
-        ESP_LOGI(TAG, "SoftAP open — exit BLE boot then SoftAP pending");
+    /* SoftAP XOR BLE: stop NimBLE in-process, then open SoftAP. */
+    if (s_bleProvUp || ct_prov_ble_is_up()) {
+        ESP_LOGI(TAG, "SoftAP open — stop BLE then SoftAP");
         cfg_softap_pending_set(true);
-        wifi_ble_prov_close(); /* restarts — does not return */
+        wifi_ble_prov_close(); /* may re-enter here to bring SoftAP up */
         return;
     }
     led_set(LEDC_NET_R, LED_BLINK);
@@ -776,8 +819,7 @@ bool wifi_softap_is_up(void)
 }
 
 /**
- * Enter BLE window on this boot (cfg_ble_prov_boot already set).
- * Called from main after Wi-Fi is up — does not reboot.
+ * Start BLE CT-Prov in-process. Stops SoftAP/httpd/mqtt first (XOR).
  */
 void wifi_ble_prov_enter(void)
 {
@@ -787,16 +829,31 @@ void wifi_ble_prov_enter(void)
         return;
     }
 
+    /* Lock cyan before teardown — STA_DISCONNECTED must not flash blue. */
+    s_bleEntering = true;
+    led_set(LEDC_BLE_R, LED_BLINK);
     sleep_cancel();
+    cfg_softap_pending_set(false);
+    cfg_ble_prov_boot_set(false);
     if (s_softapUp) {
         softap_close_internal();
     }
     if (s_reconnectTimer) {
         esp_timer_stop(s_reconnectTimer);
     }
+    ESP_LOGI(TAG, "BLE enter: stop mqtt/wifi/httpd");
     mqtt_stop();
-    http_server_stop();
-    vTaskDelay(pdMS_TO_TICKS(200));
+    /* Drop Wi-Fi before httpd_off task — otherwise httpd_off often NO_MEM. */
+    wifi_driver_teardown();
+    http_server_stop(); /* async — do not wait */
+    /* Wait for heap coalesce after Wi-Fi teardown (httpd stop is best-effort). */
+    for (int i = 0; i < 60; i++) {
+        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        if (largest >= 20480) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     led_set(LEDC_BLE_R, LED_BLINK);
 
     ESP_LOGI(TAG, "BLE enter — free heap %u int %u largest_int %u",
@@ -805,25 +862,42 @@ void wifi_ble_prov_enter(void)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
     if (ct_prov_ble_start() != ESP_OK) {
-        ESP_LOGE(TAG, "CT-Prov BLE start failed — return SoftAP SKU");
-        led_set(LEDC_ERR_R, LED_BLINK);
-        cfg_ble_prov_boot_set(false);
-        ota_boot_softap_sku();
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
+        ESP_LOGE(TAG, "CT-Prov BLE start failed");
+        s_bleEntering = false;
+        (void)wifi_driver_ensure();
+        if (!http_server_is_up()) {
+            http_server_start();
+        }
+        if (config_has_wifi()) {
+            wifi_sta_reconnect_saved(0);
+        }
+        wifi_led_apply_idle_state();
+        led_pulse(LEDC_ERR_R, 1200);
         return;
     }
 
     s_bleProvUp = true;
+    s_bleEntering = false;
     ble_prov_arm_idle();
     led_set(LEDC_BLE_R, LED_BLINK);
-    ESP_LOGI(TAG, "BLE CT-Prov up (idle %us) — cyan; PAGE/idle/session.close → SoftAP SKU",
+    ESP_LOGI(TAG, "BLE CT-Prov up (idle %us) — cyan; PAGE/idle/session.close/SoftAP to exit",
              (unsigned)(ble_idle_ms() / 1000u));
-#if CONFIG_BT_NIMBLE_ENABLED
-    /* Inline warm on caller stack (no extra task) — scan must not hit NO_MEM. */
-    vTaskDelay(pdMS_TO_TICKS(50));
-    if (wifi_driver_ensure() == ESP_OK &&
-        esp_wifi_set_mode(WIFI_MODE_STA) == ESP_OK) {
+
+    /* Warm Wi-Fi STA for scan while NimBLE advertises (coex).
+     * Do this BEFORE the CT-Prov worker so wifi_init gets the free block. */
+    for (int i = 0; i < 40; i++) {
+        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        if (largest >= 12288) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    size_t warm_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (warm_largest < 10240) {
+        ESP_LOGW(TAG, "BLE warm skip — largest_int %u < 10KB (manual SSID ok)",
+                 (unsigned)warm_largest);
+    } else if (wifi_driver_ensure() == ESP_OK &&
+               esp_wifi_set_mode(WIFI_MODE_STA) == ESP_OK) {
         if (!s_wifiStarted && esp_wifi_start() == ESP_OK) {
             s_wifiStarted = true;
             ESP_LOGI(TAG, "BLE warm: Wi-Fi STA idle ready for scan");
@@ -831,55 +905,24 @@ void wifi_ble_prov_enter(void)
     } else {
         ESP_LOGW(TAG, "BLE warm: Wi-Fi unavailable — NeoLink may need manual SSID");
     }
-#endif
+
+    if (ct_prov_ble_start_worker() != ESP_OK) {
+        ESP_LOGW(TAG, "CT-Prov worker deferred fail — GATT cmds unavailable");
+    }
 }
 
 void wifi_ble_prov_open(void)
 {
-    if (s_bleProvUp) {
-        ble_prov_arm_idle();
-        led_set(LEDC_BLE_R, LED_BLINK);
-        return;
-    }
-
-#if CONFIG_BT_NIMBLE_ENABLED
-    /* Already on BLE SKU — start NimBLE in-process. */
     wifi_ble_prov_enter();
-    return;
-#else
-    /* SoftAP SKU: switch OTA boot to ek410_ble image (other slot).
-     * If bleboot is already set (retry / race), still force set_boot + restart —
-     * never return as a silent no-op (button path used to pulse red on that). */
-    if (!ota_ble_sku_available()) {
-        ESP_LOGE(TAG, "BLE SKU image missing — flash ek410_ble to the other OTA slot");
-        cfg_ble_prov_boot_set(false);
-        wifi_led_apply_idle_state();
-        led_pulse(LEDC_ERR_R, 1500);
-        return;
-    }
-    ESP_LOGW(TAG, "switch boot → BLE SKU + restart");
-    led_set(LEDC_BLE_R, LED_BLINK);
-    if (s_softapUp) {
-        softap_close_internal();
-    }
-    cfg_softap_pending_set(false);
-    cfg_ble_prov_boot_set(true);
-    if (ota_boot_ble_sku() != ESP_OK) {
-        cfg_ble_prov_boot_set(false);
-        wifi_led_apply_idle_state();
-        led_pulse(LEDC_ERR_R, 1500);
-        return;
-    }
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
-#endif
 }
 
 void wifi_ble_prov_close(void)
 {
-    const bool was_ble = s_bleProvUp || ct_prov_ble_is_up() || cfg_ble_prov_boot_get();
+    const bool open_ap = cfg_softap_pending_get();
+    cfg_softap_pending_set(false);
     cfg_ble_prov_boot_set(false);
     cfg_ble_idle_sec_set(0); /* clear CI override */
+
     if (s_bleProvUp || ct_prov_ble_is_up()) {
         s_bleProvClosing = true;
         if (s_bleIdleTimer) {
@@ -887,28 +930,39 @@ void wifi_ble_prov_close(void)
         }
         s_bleProvUp = false;
         ct_prov_ble_stop();
+        /* Do NOT esp_bt_controller_mem_release — PAGE may re-open BLE later. */
+        /* NimBLE teardown often drops STA — wait before reading link state. */
+        vTaskDelay(pdMS_TO_TICKS(350));
         s_bleProvClosing = false;
+        ESP_LOGI(TAG, "BLE CT-Prov stopped — free heap %u int %u largest_int %u",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     }
-#if CONFIG_BT_NIMBLE_ENABLED
-    ESP_LOGW(TAG, "BLE exit — boot SoftAP SKU");
-    led_set(LEDC_NET_R, LED_BLINK);
-    if (ota_boot_softap_sku() != ESP_OK) {
-        ESP_LOGE(TAG, "SoftAP SKU missing — restart current slot anyway");
+
+    (void)wifi_driver_ensure();
+    if (!http_server_is_up()) {
+        http_server_start();
     }
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
-#else
-    /* SoftAP SKU: only reboot if we were mid BLE-boot handoff; else refresh LED. */
-    if (!was_ble) {
-        ESP_LOGW(TAG, "BLE close on SoftAP SKU — nothing to tear down");
-        wifi_led_apply_idle_state();
+    if (open_ap) {
+        ESP_LOGI(TAG, "BLE exit — opening SoftAP (pending)");
+        wifi_softap_open();
         return;
     }
-    ESP_LOGW(TAG, "BLE close on SoftAP SKU — restart");
-    led_set(LEDC_NET_R, LED_BLINK);
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
-#endif
+    if (config_has_wifi()) {
+        if (!wifi_sta_is_connected()) {
+            ESP_LOGI(TAG, "BLE exit — STA join with saved wifi (blue blink until IP)");
+            wifi_sta_reconnect_saved(0);
+        } else {
+            mqtt_start();
+            powerAttr_t p;
+            cfg_get_power_attr(&p);
+            if (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0) {
+                sleep_arm_from_config();
+            }
+        }
+    }
+    wifi_led_apply_idle_state();
 }
 
 bool wifi_ble_prov_is_up(void)
@@ -1037,13 +1091,17 @@ int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen)
     if (!ble_win) {
         sc.scan_time.active.min = 100;
         sc.scan_time.active.max = 300;
+    } else {
+        /* BLE GATT must survive Rescan: keep dwell short; prefer BT airtime. */
+        sc.scan_time.active.min = 30;
+        sc.scan_time.active.max = 60;
     }
-    /* BLE window: leave scan_time at 0 (IDF coex defaults) and use async + short wait
-     * so the CT-Prov GATT worker is not blocked long enough for CoreBluetooth to drop. */
 
 #if CONFIG_BT_NIMBLE_ENABLED
     if (ble_win) {
-        (void)esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+        /* Prefer BT so NeoLink's GATT link is not starved during Rescan. */
+        (void)esp_coex_preference_set(ESP_COEX_PREFER_BT);
+        wifi_ble_prov_touch();
     }
 #endif
 
@@ -1054,14 +1112,37 @@ int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen)
         if (errBuf && errLen > 0) {
             snprintf(errBuf, errLen, "scan: %s", esp_err_to_name(err));
         }
-        reconnect_arm();
+#if CONFIG_BT_NIMBLE_ENABLED
+        if (ble_win) {
+            (void)esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+            ct_prov_ble_rf_restore();
+        } else
+#endif
+        {
+            reconnect_arm();
+        }
         return -1;
     }
 
     {
-        const int wait_ms = ble_win ? 2500 : 12000;
-        EventBits_t sb = xEventGroupWaitBits(s_wifiEvent, WIFI_SCAN_DONE_BIT, pdTRUE, pdFALSE,
-                                             pdMS_TO_TICKS(wait_ms));
+        /* Slice the wait so idle timer / GATT keep alive during Rescan. */
+        const int wait_ms = ble_win ? 1800 : 12000;
+        const int slice_ms = ble_win ? 200 : wait_ms;
+        int waited = 0;
+        EventBits_t sb = 0;
+        while (waited < wait_ms) {
+            sb = xEventGroupWaitBits(s_wifiEvent, WIFI_SCAN_DONE_BIT, pdTRUE, pdFALSE,
+                                     pdMS_TO_TICKS(slice_ms));
+            if (sb & WIFI_SCAN_DONE_BIT) {
+                break;
+            }
+            waited += slice_ms;
+#if CONFIG_BT_NIMBLE_ENABLED
+            if (ble_win) {
+                wifi_ble_prov_touch();
+            }
+#endif
+        }
         if (!(sb & WIFI_SCAN_DONE_BIT)) {
             ESP_LOGW(TAG, "scan wait timeout (%d ms) — stop", wait_ms);
             esp_wifi_scan_stop();
@@ -1071,6 +1152,9 @@ int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen)
 #if CONFIG_BT_NIMBLE_ENABLED
     if (ble_win) {
         wifi_ble_prov_touch();
+        (void)esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+        /* Scan often drops the phone link; restart adv so NeoLink can rebind. */
+        ct_prov_ble_rf_restore();
     }
 #endif
 
@@ -1078,7 +1162,9 @@ int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen)
     esp_wifi_scan_get_ap_num(&ap_num);
     if (ap_num == 0) {
         s_userConnectInFlight = false;
-        reconnect_arm();
+        if (!ble_win) {
+            reconnect_arm();
+        }
         return 0;
     }
     if (ap_num > 48) {
@@ -1091,7 +1177,9 @@ int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen)
         if (errBuf && errLen > 0) {
             strlcpy(errBuf, "oom", errLen);
         }
-        reconnect_arm();
+        if (!ble_win) {
+            reconnect_arm();
+        }
         return -1;
     }
     err = esp_wifi_scan_get_ap_records(&ap_num, recs);
@@ -1101,7 +1189,9 @@ int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen)
         if (errBuf && errLen > 0) {
             snprintf(errBuf, errLen, "records: %s", esp_err_to_name(err));
         }
-        reconnect_arm();
+        if (!ble_win) {
+            reconnect_arm();
+        }
         return -1;
     }
 
@@ -1160,7 +1250,16 @@ int wifi_scan(wifi_scan_ap_t *out, int max, char *errBuf, int errLen)
     }
 
     s_userConnectInFlight = false;
-    reconnect_arm();
-    ESP_LOGI(TAG, "scan found %d unique AP(s)", n);
+    /* Never arm STA reconnect during BLE prov — it steals RF from GATT/adv. */
+    if (!ble_win) {
+        reconnect_arm();
+    }
+#if CONFIG_BT_NIMBLE_ENABLED
+    else {
+        wifi_ble_prov_touch();
+        ct_prov_ble_rf_restore();
+    }
+#endif
+    ESP_LOGI(TAG, "scan found %d unique AP(s)%s", n, ble_win ? " (ble-win)" : "");
     return n;
 }

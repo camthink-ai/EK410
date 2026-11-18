@@ -4,9 +4,9 @@
 |--------|---------|
 | `gen_www.py` | Embed `main/www/index.html` → `main/www_html.h` |
 | `bump_version.py` | Sync `VERSION` ↔ `main/version.h` (+ CHANGELOG stub) |
-| `build_dual_sku.sh` | Build SoftAP (`ek410`) + BLE (`ek410_ble`) into `dist/dual_sku/` |
-| `flash_dual_sku.sh` | Flash SoftAP → ota_0, BLE → ota_1 (boot SoftAP) |
-| `ct_prov_dual_test.py` | Automated SoftAP ↔ BLE SKU round-trip over serial |
+| `build_dual_sku.sh` | fullclean + build single `ek410` → `dist/` |
+| `flash_dual_sku.sh` | Flash bootloader + table + image to both OTA slots |
+| `ct_prov_dual_test.py` | SoftAP ↔ BLE XOR smoke over serial (legacy name) |
 | `ct_prov_softap_test.py` | SoftAP CT-Prov smoke helper |
 | `frame_convert.py` | Arbitrary image → 960000-byte 4bpp panel frame |
 | `gen_font.py` | 8×16 ASCII font header |
@@ -21,7 +21,7 @@
 python3 tools/gen_www.py
 python3 tools/bump_version.py --check
 
-# Dual SKU (needs IDF env)
+# Single image (needs IDF env)
 bash tools/build_dual_sku.sh
 bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
 

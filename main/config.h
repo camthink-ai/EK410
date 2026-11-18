@@ -72,7 +72,8 @@ typedef struct {
     int imageQuality;           /* img_quality_t — default QUALITY */
 } powerAttr_t;
 
-#define POWER_WAKE_SEC_DEFAULT 120
+/* Desk/MQTT use: 120s was too short — commands arrive after device slept. */
+#define POWER_WAKE_SEC_DEFAULT 600
 #define POWER_WAKE_SEC_MIN     30
 #define POWER_WAKE_SEC_MAX     600
 

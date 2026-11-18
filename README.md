@@ -21,27 +21,27 @@
 
 ## Overview
 
-EK410 is a battery-friendly e-ink endpoint: SoftAP / BLE provisioning, embedded web console, NeoMind MQTT, and dual OTA images (SoftAP UI vs BLE CT-Prov). The panel keeps the last image when powered down; Wi‑Fi and MQTT reconnect automatically while online.
+EK410 is a battery-friendly e-ink endpoint: SoftAP / BLE provisioning, embedded web console, NeoMind MQTT, and dual OTA slots for upgrade rollback. SoftAP and BLE CT-Prov share **one firmware** (mutually exclusive in-process). The panel keeps the last image when powered down; Wi‑Fi and MQTT reconnect automatically while online.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  SoftAP web  ·  NeoLinker CT-Prov  ·  NeoMind MQTT / HTTP  │
-├─────────────────────────────┬──────────────────────────────┤
-│  ota_0  ek410 (SoftAP+httpd)│  ota_1  ek410_ble (NimBLE)   │
-│  MAIN hold → SoftAP (blue)  │  PAGE hold → BLE (cyan)      │
-├─────────────────────────────┴──────────────────────────────┤
+├────────────────────────────────────────────────────────────┤
+│  One image ek410 — MAIN SoftAP (blue) XOR PAGE BLE (cyan)  │
+│  ota_0 / ota_1 = firmware upgrade rollback (same binary)   │
+├────────────────────────────────────────────────────────────┤
 │  Spectra 6 panel · lastfrm flash · AW9523B RGB + power     │
 └────────────────────────────────────────────────────────────┘
 ```
 
-ESP32-C61 cannot run SoftAP httpd and NimBLE in one process — product path is **two OTA slots**. Details: [docs/ct_prov.md](docs/ct_prov.md).
+Details: [docs/ct_prov.md](docs/ct_prov.md).
 
 ---
 
 ## Features
 
 - **SoftAP + web console** — Wi‑Fi / MQTT / image / canvas / Markdown / power / OTA
-- **[NeoLinker](https://github.com/camthink-ai/NeoLinker) CT-Prov** — SoftAP HTTP + BLE GATT (dedicated BLE image)
+- **[NeoLinker](https://github.com/camthink-ai/NeoLinker) CT-Prov** — SoftAP HTTP + BLE GATT (one image, SoftAP XOR BLE)
 - **Display** — upload frame, URL fetch, canvas, Markdown; last frame in `lastfrm`
 - **NeoMind MQTT** — `device/ek410_Eink/{deviceId}/uplink|downlink`
 - **Power** — always / cycle (`sleepMin` + `wakeSec`) / hibernate; deep sleep cuts LED & panel rail
@@ -61,8 +61,11 @@ MQTT / wake URL still use on-device `displayUrl`.
 | Control | Action |
 |---------|--------|
 | **MAIN** hold ~2.5s | SoftAP on (`EK410-{id}` / `12345678` → `http://192.168.4.1`) · blue |
-| **PAGE** hold ~2.5s | Enter / exit BLE CT-Prov SKU · cyan |
+| **PAGE** hold ~2.5s | Enter / exit BLE CT-Prov · cyan |
 | **MAIN+PAGE** hold ~6s | Factory reset (device id preserved) |
+| Deep sleep **MAIN** | Wake → SoftAP |
+| Deep sleep **PAGE** | Wake → BLE |
+| Deep sleep timer | Cycle wake (optional wake URL + online window) |
 | Hardware **RESET** | Exit SoftAP/BLE handoff · restore last frame |
 | Chip **BOOT** (IO9) held at reset | Factory reset |
 
@@ -100,11 +103,11 @@ idf.py build
 idf.py -p PORT flash monitor
 ```
 
-### Dual SKU (SoftAP + BLE)
+### Convenience scripts
 
 ```bash
-bash tools/build_dual_sku.sh
-bash tools/flash_dual_sku.sh PORT   # SoftAP → ota_0, BLE → ota_1, boot SoftAP
+bash tools/build_dual_sku.sh        # fullclean + build → dist/ek410.bin
+bash tools/flash_dual_sku.sh PORT   # flash bootloader + table + image (both OTA slots)
 ```
 
 More: [docs/development.md](docs/development.md) · [tools/README.md](tools/README.md).
@@ -116,14 +119,14 @@ More: [docs/development.md](docs/development.md) · [tools/README.md](tools/READ
 ```
 EK410/
 ├── VERSION · LICENSE · CHANGELOG.md
-├── CMakeLists.txt · partitions.csv · sdkconfig.defaults · sdkconfig.ble_prov
+├── CMakeLists.txt · partitions.csv · sdkconfig.defaults
 ├── main/                 # firmware (wifi, mqtt, http, ct_prov, app_epd, www/…)
-├── tools/                # gen_www, bump_version, dual-SKU build/flash/tests
+├── tools/                # gen_www, bump_version, build/flash helpers
 ├── assets/               # brand & splash sources
 └── docs/                 # hardware, API, CT-Prov, development
 ```
 
-`build/`, `build_ble/`, `dist/`, `sdkconfig`, `managed_components/` are gitignored.
+`build/`, `dist/`, `sdkconfig`, `managed_components/` are gitignored.
 
 ---
 

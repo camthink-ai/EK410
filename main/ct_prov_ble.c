@@ -92,6 +92,8 @@ static void build_identity(void)
 }
 
 static int gap_event(struct ble_gap_event *event, void *arg);
+/* Defined below; GATT RX may lazy-start the worker. */
+esp_err_t ct_prov_ble_start_worker(void);
 
 static void advertise(void)
 {
@@ -192,8 +194,20 @@ static void worker_task(void *arg)
         free(job.json);
         job.json = NULL;
 
+        /* Wi-Fi Rescan can drop the phone link; wait briefly for reconnect
+         * before discarding the scan/config response. */
         uint16_t conn = job.conn;
+        if (conn != BLE_HS_CONN_HANDLE_NONE && s_conn == BLE_HS_CONN_HANDLE_NONE) {
+            for (int i = 0; i < 25 && s_conn == BLE_HS_CONN_HANDLE_NONE; i++) {
+                vTaskDelay(pdMS_TO_TICKS(40));
+            }
+            if (s_conn != BLE_HS_CONN_HANDLE_NONE) {
+                conn = s_conn;
+                ESP_LOGI(TAG, "GATT rebind after radio op — deliver on handle=%u", conn);
+            }
+        }
         if (conn == BLE_HS_CONN_HANDLE_NONE || conn != s_conn) {
+            ESP_LOGW(TAG, "drop response — no GATT peer after radio op");
             free(resp);
             continue;
         }
@@ -278,6 +292,11 @@ static int gatt_access(uint16_t conn_handle, uint16_t attr_handle,
             return 0;
         }
         if (!s_job_q) {
+            free(s_rx.packet.bytes);
+            s_rx.packet.bytes = NULL;
+            return BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        if (!s_worker && ct_prov_ble_start_worker() != ESP_OK) {
             free(s_rx.packet.bytes);
             s_rx.packet.bytes = NULL;
             return BLE_ATT_ERR_INSUFFICIENT_RES;
@@ -498,21 +517,36 @@ esp_err_t ct_prov_ble_start(void)
 
     nimble_port_freertos_init(host_task);
 
-    /* 5K: enough for CT-Prov JSON; keep internal RAM for post-NimBLE wifi_init. */
-    if (!s_worker) {
-        if (xTaskCreate(worker_task, "ct_ble", 5120, NULL, 5, &s_worker) != pdPASS) {
-            ESP_LOGE(TAG, "ct_ble worker create failed (int=%u largest=%u)",
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-            nimble_port_stop();
-            nimble_port_deinit();
-            return ESP_ERR_NO_MEM;
-        }
-    }
+    /* Worker is started later via ct_prov_ble_start_worker() AFTER BLE-warm
+     * Wi-Fi init — C61 forbids PSRAM task stacks, so the 5KB worker must
+     * not compete with esp_wifi_init for contiguous internal RAM. */
 
     s_started = true;
     ESP_LOGI(TAG, "NimBLE CT-Prov started (%s) — free %u int %u largest_int %u",
              s_name,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    return ESP_OK;
+}
+
+esp_err_t ct_prov_ble_start_worker(void)
+{
+    if (!s_started) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_worker) {
+        return ESP_OK;
+    }
+    /* 4K is enough for CT-Prov JSON; keep lean for post-NimBLE heap. */
+    if (xTaskCreate(worker_task, "ct_ble", 4096, NULL, 5, &s_worker) != pdPASS) {
+        ESP_LOGE(TAG, "ct_ble worker create failed (int=%u largest=%u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        s_worker = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "ct_ble worker up — free %u int %u largest_int %u",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));

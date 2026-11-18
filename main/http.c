@@ -136,7 +136,8 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     cJSON_AddBoolToObject(obj, "mqttConnected", mqtt_is_connected());
     cJSON_AddBoolToObject(obj, "softapUp", wifi_softap_is_up());
     cJSON_AddBoolToObject(obj, "bleProvUp", wifi_ble_prov_is_up());
-    cJSON_AddBoolToObject(obj, "bleSkuAvailable", ota_ble_sku_available());
+    /* Single image always includes NimBLE CT-Prov (XOR with SoftAP). */
+    cJSON_AddBoolToObject(obj, "bleSkuAvailable", true);
     cJSON_AddStringToObject(obj, "projectName", ota_running_project_name());
     cJSON_AddBoolToObject(obj, "provisioned", config_is_provisioned());
     cJSON_AddBoolToObject(obj, "panelOk", app_epd_panel_ok());
@@ -467,6 +468,9 @@ static esp_err_t open_softap_handle(httpd_req_t *req)
 static void ble_open_deferred_task(void *arg)
 {
     (void)arg;
+    /* Let the openBleProv HTTP response finish and the TCP session close
+     * before httpd_stop — otherwise BLE enter can stall forever. */
+    vTaskDelay(pdMS_TO_TICKS(800));
     wifi_ble_prov_open();
     vTaskDelete(NULL);
 }
@@ -485,11 +489,7 @@ static esp_err_t open_ble_handle(httpd_req_t *req)
         wifi_ble_prov_touch();
         return send_json(req, "{\"code\":0,\"msg\":\"already on\",\"bleProvUp\":true}");
     }
-    if (!ota_ble_sku_available()) {
-        return send_json(req,
-            "{\"code\":1,\"msg\":\"BLE SKU image missing on other OTA slot\",\"bleSkuAvailable\":false}");
-    }
-    /* Optional {"idleSec":N} for CI auto-exit from BLE SKU. */
+    /* Optional {"idleSec":N} for CI auto-exit. */
     char *body = read_body(req);
     if (body) {
         cJSON *root = cJSON_Parse(body);
@@ -502,7 +502,7 @@ static esp_err_t open_ble_handle(httpd_req_t *req)
             cJSON_Delete(root);
         }
     }
-    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"BLE SKU boot armed\",\"bleProvUp\":true}");
+    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"BLE starting\",\"bleProvUp\":true}");
     if (xTaskCreate(ble_open_deferred_task, "ble_on", 8192, NULL, 5, NULL) != pdPASS) {
         wifi_ble_prov_open();
     }
@@ -555,27 +555,20 @@ static esp_err_t display_render_text_handle(httpd_req_t *req)
         cJSON_Delete(root);
         return send_err(req, "missing text");
     }
-    espd_render_t render;
-    memset(&render, 0, sizeof(render));
-    size_t tlen = strlen(t->valuestring);
-    char *buf = malloc(tlen + 1);
-    if (!buf) {
+    espd_render_t *render = calloc(1, sizeof(*render));
+    if (!render) {
         cJSON_Delete(root);
         return send_err(req, "oom");
     }
-    memcpy(buf, t->valuestring, tlen + 1);
-    char *save = NULL;
-    for (char *tok = strtok_r(buf, "\n", &save);
-         tok && render.count < EPD_TEXT_MAX_LINES;
-         tok = strtok_r(NULL, "\n", &save)) {
-        canvas_utf8_strlcpy(render.lines[render.count++], tok,
-                            sizeof(render.lines[0]));
-    }
-    free(buf);
-    render.fg = cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x00;
-    render.bg = cJSON_IsString(bg) ? canvas_color(bg->valuestring) : 0x11;
-    render.scale = cJSON_IsNumber(sc) ? sc->valueint : 3;
-    int rc = app_epd_render_async(&render);
+    size_t tlen = strlen(t->valuestring);
+    canvas_utf8_strlcpy(render->text, t->valuestring, sizeof(render->text));
+    render->fg = cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x00;
+    render->bg = cJSON_IsString(bg) ? canvas_color(bg->valuestring) : 0x11;
+    render->scale = cJSON_IsNumber(sc) ? sc->valueint : 3;
+    ESP_LOGI(TAG, "render_text queue %u bytes scale=%d",
+             (unsigned)tlen, render->scale);
+    int rc = app_epd_render_async(render);
+    free(render);
     cJSON_Delete(root);
     if (rc != 0) {
         return send_err(req, "render busy");
@@ -1035,14 +1028,38 @@ bool http_server_is_up(void)
     return s_httpd != NULL;
 }
 
+static void httpd_stop_task(void *arg)
+{
+    httpd_handle_t h = (httpd_handle_t)arg;
+    esp_err_t err = httpd_stop(h);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "httpd_stop: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "web server stopped");
+    }
+    vTaskDelete(NULL);
+}
+
 void http_server_stop(void)
 {
     if (!s_httpd) {
         return;
     }
-    httpd_stop(s_httpd);
+    httpd_handle_t h = s_httpd;
     s_httpd = NULL;
-    ESP_LOGI(TAG, "web server stopped");
+    /*
+     * httpd_stop() can block forever on lingering TCP sessions — never call it
+     * synchronously on the BLE/SoftAP toggle path. If the helper task cannot
+     * be created (NO_MEM), abandon the handle; Wi-Fi teardown + NimBLE still
+     * proceed (orphan httpd RAM returns on next reboot).
+     */
+    /* 2K stack: only calls httpd_stop; keep lean so BLE enter can arm it
+     * after Wi-Fi teardown when largest_int is tight. */
+    if (xTaskCreate(httpd_stop_task, "httpd_off", 2048, h, 6, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "httpd_off task NO_MEM — abandon handle (no sync stop)");
+    } else {
+        ESP_LOGI(TAG, "web server stop armed");
+    }
 }
 
 void http_server_start(void)
@@ -1053,11 +1070,14 @@ void http_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = sizeof(g_handlers) / sizeof(g_handlers[0]);
     /* Canvas/upload + ctprov Wi-Fi scan need headroom beyond 4KB default.
-     * Do NOT raise to 32KB — each httpd worker would exhaust C61 internal RAM. */
-    config.stack_size = 14336;
+     * Do NOT raise to 32KB — each httpd worker would exhaust C61 internal RAM.
+     * 5K + static prov 4K .bss leaves room for httpd_start after Wi-Fi. */
+    config.stack_size = 5120;
     /* setWifiParam may block up to ~20s while trying STA association */
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;
+    config.lru_purge_enable = true;
+    config.keep_alive_enable = false;
     esp_err_t err = httpd_start(&s_httpd, &config);
     if (err != ESP_OK || !s_httpd) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));

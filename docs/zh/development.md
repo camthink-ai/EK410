@@ -19,14 +19,14 @@ idf.py build
 idf.py -p /dev/cu.wchusbserialXXXX flash monitor
 ```
 
-### 双 SKU（SoftAP + BLE CT-Prov）
+### 便捷脚本（单镜像）
 
 ```bash
 bash tools/build_dual_sku.sh
 bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
 ```
 
-`sdkconfig` 不入库；SoftAP 默认见 `sdkconfig.defaults`，BLE 叠加见 `sdkconfig.ble_prov`。
+`sdkconfig` 不入库；默认（含 NimBLE）见 `sdkconfig.defaults`。
 
 ## 配置页
 

@@ -440,6 +440,217 @@ static int setup_add_text(canvas_t *cv, int x, int y, int scale, const char *tex
     return 0;
 }
 
+static bool wrap_break_after(uint32_t cp)
+{
+    if (cp == ' ' || cp == '\t') {
+        return true;
+    }
+    /* Common CJK / ASCII punctuation — prefer break after these. */
+    switch (cp) {
+    case ',': case '.': case ';': case ':': case '!': case '?':
+    case 0x3001: case 0x3002: /* 、。 */
+    case 0xFF0C: case 0xFF0E: /* ，． */
+    case 0xFF1B: case 0xFF1A: /* ；： */
+    case 0xFF01: case 0xFF1F: /* ！？ */
+    case 0x2014: case 0x2026: /* — … */
+        return true;
+    default:
+        return false;
+    }
+}
+
+int canvas_wrap_text_lines(const char *text, int scale,
+                           char lines[][CANVAS_TEXT_MAX], int max_lines,
+                           bool *truncated)
+{
+    if (truncated) {
+        *truncated = false;
+    }
+    if (!lines || max_lines <= 0) {
+        if (truncated && text && text[0]) {
+            *truncated = true;
+        }
+        return 0;
+    }
+    if (!text) {
+        text = "";
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+    if (scale > CANVAS_TEXT_SCALE_MAX) {
+        scale = CANVAS_TEXT_SCALE_MAX;
+    }
+
+    /* Match canvas_fill_text_screen side margin (48px each). */
+    const int max_px = EPD_PANEL_W - 96;
+    /* Budget in unscaled font cells: glyph takes cell_w, screen uses *scale. */
+    const int max_cells = max_px / scale;
+    if (max_cells < HZ16_W) {
+        /* scale too large for even one CJK — caller should shrink; still proceed. */
+    }
+    int count = 0;
+    int line_cells = 0;
+    int line_bytes = 0;
+    int last_break_bytes = -1; /* soft-break point inside current line */
+
+    lines[0][0] = '\0';
+
+    const char *p = text;
+    while (*p && count < max_lines) {
+        if (*p == '\r') {
+            p++;
+            continue;
+        }
+        if (*p == '\n') {
+            lines[count][line_bytes] = '\0';
+            count++;
+            p++;
+            if (count >= max_lines) {
+                break;
+            }
+            lines[count][0] = '\0';
+            line_cells = 0;
+            line_bytes = 0;
+            last_break_bytes = -1;
+            continue;
+        }
+
+        int adv = 1;
+        uint32_t cp = 0;
+        utf8_decode(p, &adv, &cp);
+        int cw = cell_w_for_cp(cp);
+
+        if (line_bytes + adv >= CANVAS_TEXT_MAX || line_cells + cw > max_cells) {
+            if (line_bytes == 0) {
+                /* Glyph alone exceeds width/buffer — force one cell. */
+                if (adv < CANVAS_TEXT_MAX) {
+                    memcpy(lines[count], p, (size_t)adv);
+                    lines[count][adv] = '\0';
+                    line_bytes = adv;
+                    line_cells = cw;
+                }
+                p += adv;
+                continue;
+            }
+            /* Flush at last punctuation/space if any; else hard break.
+             * Copy remainder BEFORE writing the NUL — lines[count]+cut is the
+             * source of rem; nulling first made every subsequent row empty. */
+            int cut = line_bytes;
+            if (last_break_bytes > 0) {
+                cut = last_break_bytes;
+                while (cut > 0 && lines[count][cut - 1] == ' ') {
+                    cut--;
+                }
+            }
+            int rem = line_bytes - cut;
+            char hold[CANVAS_TEXT_MAX];
+            if (rem > 0) {
+                if (rem >= CANVAS_TEXT_MAX) {
+                    rem = CANVAS_TEXT_MAX - 1;
+                }
+                memcpy(hold, lines[count] + cut, (size_t)rem);
+            }
+            lines[count][cut] = '\0';
+            count++;
+            if (count >= max_lines) {
+                break;
+            }
+            /* Drop one leading ASCII space carried from the soft-break. */
+            int off = 0;
+            if (rem > 0 && hold[0] == ' ') {
+                off = 1;
+            }
+            int kept = rem - off;
+            if (kept > 0) {
+                memcpy(lines[count], hold + off, (size_t)kept);
+            }
+            lines[count][kept] = '\0';
+            line_bytes = kept;
+            line_cells = 0;
+            for (int j = 0; j < line_bytes;) {
+                int step = 1;
+                uint32_t rcp = 0;
+                utf8_decode(lines[count] + j, &step, &rcp);
+                line_cells += cell_w_for_cp(rcp);
+                j += step;
+            }
+            last_break_bytes = -1;
+            /* Current glyph not consumed yet — loop again without advancing p. */
+            continue;
+        }
+
+        memcpy(lines[count] + line_bytes, p, (size_t)adv);
+        line_bytes += adv;
+        line_cells += cw;
+        lines[count][line_bytes] = '\0';
+        if (wrap_break_after(cp)) {
+            last_break_bytes = line_bytes;
+        }
+        p += adv;
+    }
+
+    if (count < max_lines && line_bytes > 0) {
+        lines[count][line_bytes] = '\0';
+        count++;
+    }
+    if (truncated && *p) {
+        *truncated = true;
+    }
+    return count;
+}
+
+int canvas_wrap_text_fit(const char *text, int scale_req,
+                         char lines[][CANVAS_TEXT_MAX], int max_lines,
+                         int *out_scale, bool *truncated)
+{
+    int scale = scale_req;
+    if (scale < 1) {
+        scale = 1;
+    }
+    if (scale > CANVAS_TEXT_SCALE_MAX) {
+        scale = CANVAS_TEXT_SCALE_MAX;
+    }
+
+    int count = 0;
+    bool trunc = false;
+    for (;;) {
+        trunc = false;
+        count = canvas_wrap_text_lines(text, scale, lines, max_lines, &trunc);
+        int line_h = HZ16_H * scale + scale;
+        if (line_h < 1) {
+            line_h = 1;
+        }
+        int fit = (EPD_PANEL_H - 80) / line_h;
+        if (fit < 1) {
+            fit = 1;
+        }
+        if (fit > max_lines) {
+            fit = max_lines;
+        }
+        if (!trunc && count <= fit) {
+            break;
+        }
+        if (scale <= 1) {
+            /* Cap to lines that fit on panel at scale 1. */
+            if (count > fit) {
+                count = canvas_wrap_text_lines(text, 1, lines, fit, &trunc);
+            }
+            scale = 1;
+            break;
+        }
+        scale--;
+    }
+
+    if (out_scale) {
+        *out_scale = scale;
+    }
+    if (truncated) {
+        *truncated = trunc;
+    }
+    return count;
+}
+
 int canvas_fill_text_screen(canvas_t *cv, const char *const *lines, int line_count,
                             unsigned char fg, unsigned char bg, int scale)
 {
@@ -461,11 +672,30 @@ int canvas_fill_text_screen(canvas_t *cv, const char *const *lines, int line_cou
         line_count = CANVAS_MAX_ITEMS;
     }
 
+    /* Short copy → centered (legacy). Dense/long → top-left so the panel fills. */
+    const int margin = 48;
     int line_h = HZ16_H * scale + scale;
-    int total_h = line_h * line_count;
-    int top = (EPD_PANEL_H - total_h) / 2;
-    if (top < 40) {
-        top = 40;
+    if (line_h < 1) {
+        line_h = 1;
+    }
+
+    int nonempty = 0;
+    for (int i = 0; i < line_count; i++) {
+        if (lines[i] && lines[i][0]) {
+            nonempty++;
+        }
+    }
+    int total_h = nonempty * line_h;
+    /* ≥5 lines or taller than ~1/3 panel → treat as dense paragraph. */
+    bool dense = (nonempty >= 5) || (total_h > EPD_PANEL_H / 3);
+    int top;
+    if (dense) {
+        top = margin;
+    } else {
+        top = (EPD_PANEL_H - total_h) / 2;
+        if (top < margin) {
+            top = margin;
+        }
     }
 
     for (int i = 0; i < line_count; i++) {
@@ -474,6 +704,10 @@ int canvas_fill_text_screen(canvas_t *cv, const char *const *lines, int line_cou
         }
         if (cv->count >= CANVAS_MAX_ITEMS) {
             break;
+        }
+        int y = top + cv->count * line_h;
+        if (y + HZ16_H * scale > EPD_PANEL_H - margin) {
+            break; /* clip remaining lines rather than draw off-panel */
         }
         canvas_item_t *it = &cv->items[cv->count++];
         memset(it, 0, sizeof(*it));
@@ -492,12 +726,18 @@ int canvas_fill_text_screen(canvas_t *cv, const char *const *lines, int line_cou
         }
         it->w = adv * scale;
         it->h = HZ16_H * scale;
-        it->x = (EPD_PANEL_W - it->w) / 2;
-        if (it->x < 0) {
-            it->x = 0;
+        if (dense) {
+            it->x = margin;
+        } else {
+            it->x = (EPD_PANEL_W - it->w) / 2;
+            if (it->x < margin) {
+                it->x = margin;
+            }
         }
-        it->y = top + i * line_h;
+        it->y = y;
     }
+    ESP_LOGI(TAG, "text screen: %d items scale=%d line_h=%d %s top=%d",
+             cv->count, scale, line_h, dense ? "dense/top" : "short/center", top);
     return 0;
 }
 

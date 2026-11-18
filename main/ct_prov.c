@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -26,6 +27,9 @@
 #define SCAN_PAGE_SIZE 8
 
 static SemaphoreHandle_t s_busy;
+
+static void ct_ble_close_task(void *arg);
+static bool schedule_ble_close(int delay_ms);
 
 static void softap_touch_safe(void)
 {
@@ -181,10 +185,15 @@ static char *op_scan(int id, cJSON *req_data)
                         "only wifi scan is supported");
     }
 
-    wifi_scan_ap_t aps[WIFI_SCAN_MAX];
+    /* Heap — BLE worker stack is only 4KB; stack APs + cJSON overflowed Rescan. */
+    wifi_scan_ap_t *aps = calloc(WIFI_SCAN_MAX, sizeof(*aps));
+    if (!aps) {
+        return make_err(id, "communication.scan.result", "INTERNAL_ERROR", "oom");
+    }
     char err[64] = "";
     int n = wifi_scan(aps, WIFI_SCAN_MAX, err, sizeof(err));
     if (n < 0) {
+        free(aps);
         return make_err(id, "communication.scan.result", "INTERNAL_ERROR",
                         err[0] ? err : "scan failed");
     }
@@ -215,6 +224,7 @@ static char *op_scan(int id, cJSON *req_data)
         cJSON_AddNumberToObject(it, "signal", aps[i].rssi);
         cJSON_AddItemToArray(items, it);
     }
+    free(aps);
     cJSON_AddStringToObject(data, "section", "wifi");
     cJSON_AddItemToObject(data, "items", items);
     cJSON_AddBoolToObject(data, "more", more);
@@ -256,21 +266,19 @@ static int apply_wifi_section(cJSON *wifi, char *err, size_t errlen)
 
 #if CONFIG_BT_NIMBLE_ENABLED
     /*
-     * Dual-SKU logic: BLE image cannot reliably WPA-associate while NimBLE
-     * holds the RF (C61 coexistence). SoftAP/STA join belongs on the SoftAP
-     * SKU after session.close / PAGE / idle exit.
-     * Persist credentials here and return success with apply=reconnect.
+     * During BLE window, WPA associate is best-effort (C61 coex with NimBLE).
+     * Always persist credentials; STA reconnects after BLE exit if needed.
+     * Return 1 → caller schedules BLE teardown (NeoLink often skips session.close).
      */
     if (wifi_ble_prov_is_up() || ct_prov_ble_is_up()) {
         cfg_set_wifi_attr(&w);
-        ESP_LOGI(TAG, "BLE window: saved wifi ssid=%s — SoftAP SKU will join", w.ssid);
-        /* Best-effort short try; failure must not fail provisioning. */
+        ESP_LOGI(TAG, "BLE window: saved wifi ssid=%s", w.ssid);
         if (wifi_sta_try_connect(w.ssid, w.password, 6000)) {
             ESP_LOGI(TAG, "BLE window: early associate ok");
         } else {
-            ESP_LOGW(TAG, "BLE window: associate deferred to SoftAP SKU");
+            ESP_LOGW(TAG, "BLE window: associate deferred until BLE exit");
         }
-        return 0;
+        return 1;
     }
 #endif
 
@@ -359,6 +367,7 @@ static char *op_config_set(int id, cJSON *req_data)
     cJSON *stored = cJSON_CreateArray();
     char err[64] = "";
     const char *apply = "immediate";
+    bool ble_wifi_saved = false;
 
     cJSON *wifi = cJSON_GetObjectItem(req_data, "wifi");
     if (wifi) {
@@ -367,10 +376,13 @@ static char *op_config_set(int id, cJSON *req_data)
             cJSON_Delete(stored);
             return make_err(id, "config.set.result", "FIELD_NOT_SUPPORTED", err);
         }
-        if (rc != 0) {
+        if (rc < 0) {
             cJSON_Delete(stored);
             return make_err(id, "config.set.result",
                             rc == -3 ? "STORAGE_FAILED" : "INVALID_ARGUMENT", err);
+        }
+        if (rc == 1) {
+            ble_wifi_saved = true;
         }
         cJSON_AddItemToArray(stored, cJSON_CreateString("wifi"));
         apply = "reconnect";
@@ -408,6 +420,17 @@ static char *op_config_set(int id, cJSON *req_data)
     cJSON *data = cJSON_CreateObject();
     cJSON_AddItemToObject(data, "stored", stored);
     cJSON_AddStringToObject(data, "apply", apply);
+
+    /* BLE: leave the cyan window after Wi-Fi is saved — otherwise the LED
+     * keeps blinking until idle (2 min) / session.close, looking "stuck blue".
+     * Delay long enough for the GATT indicate of this result to finish. */
+    if (ble_wifi_saved && wifi_ble_prov_is_up()) {
+        ESP_LOGI(TAG, "BLE wifi saved — schedule CT-Prov exit → STA join");
+        if (!schedule_ble_close(1200)) {
+            ESP_LOGW(TAG, "BLE exit task create failed — idle will close");
+        }
+    }
+
     return make_ok(id, "config.set.result", data);
 }
 
@@ -451,17 +474,32 @@ static void ct_softap_close_task(void *arg)
 
 static void ct_ble_close_task(void *arg)
 {
-    (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(600));
+    int delay_ms = arg ? (int)(intptr_t)arg : 600;
+    if (delay_ms < 200) {
+        delay_ms = 200;
+    }
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
     wifi_ble_prov_close();
     vTaskDelete(NULL);
+}
+
+static bool schedule_ble_close(int delay_ms)
+{
+    if (!wifi_ble_prov_is_up()) {
+        return false;
+    }
+    void *arg = (void *)(intptr_t)delay_ms;
+    if (xTaskCreate(ct_ble_close_task, "ct_ble_off", 4096, arg, 5, NULL) != pdPASS) {
+        return false;
+    }
+    return true;
 }
 
 static char *op_session_close(int id)
 {
     /* Ack first; tear down SoftAP or BLE window after the response is out. */
     if (wifi_ble_prov_is_up()) {
-        if (xTaskCreate(ct_ble_close_task, "ct_ble_off", 4096, NULL, 5, NULL) != pdPASS) {
+        if (!schedule_ble_close(600)) {
             wifi_ble_prov_close();
         }
     } else if (wifi_softap_is_up()) {

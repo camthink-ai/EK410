@@ -70,7 +70,7 @@ void setPinCs(unsigned char csNumber, unsigned int setLevel)
     setGpioLevel(spiCsPin[csNumber], setLevel);
 }
 
-static void waitBusyHigh(unsigned int timeout_ms)
+static int waitBusyHigh(unsigned int timeout_ms)
 {
     unsigned int waited = 0;
     while (!getGpioLevel(EPD_BUSY)) {
@@ -78,14 +78,20 @@ static void waitBusyHigh(unsigned int timeout_ms)
         waited += 10;
         if (waited >= timeout_ms) {
             ESP_LOGE(TAG, "busy-high timeout (%u ms)", waited);
-            return;
+            return 0;
         }
     }
+    return 1;
 }
 
 void checkBusyHigh(void) /* If BUSYN=0 then waiting */
 {
-    waitBusyHigh(BUSY_TIMEOUT_MS);
+    (void)waitBusyHigh(BUSY_TIMEOUT_MS);
+}
+
+int checkBusyHighOk(unsigned int timeout_ms)
+{
+    return waitBusyHigh(timeout_ms ? timeout_ms : BUSY_TIMEOUT_MS);
 }
 
 void checkBusyLow(void) /* If BUSYN=1 then waiting */
@@ -251,29 +257,44 @@ unsigned char checkDriverICStatus(void)
     return status;
 }
 
-void epdDisplay(void)
+int epdDisplay(void)
 {
+    int ok = 1;
+
     setPinCsAll(GPIO_LOW);
     writeEpdCommand(PON);
-    waitBusyHigh(BUSY_TIMEOUT_MS);
+    if (!waitBusyHigh(BUSY_TIMEOUT_MS)) {
+        ok = 0;
+    }
     setPinCsAll(GPIO_HIGH);
 
     setPinCsAll(GPIO_LOW);
     delayms(30);
     writeEpd(DRF, DRF_V, sizeof(DRF_V));
-    waitBusyHigh(BUSY_REFRESH_TIMEOUT_MS);
+    if (!waitBusyHigh(BUSY_REFRESH_TIMEOUT_MS)) {
+        ok = 0;
+    }
     setPinCsAll(GPIO_HIGH);
 
     setPinCsAll(GPIO_LOW);
     writeEpd(POF, POF_V, sizeof(POF_V));
-    waitBusyHigh(15000); /* POF can lag after a long refresh */
+    if (!waitBusyHigh(15000)) { /* POF can lag after a long refresh */
+        ok = 0;
+    }
     setPinCsAll(GPIO_HIGH);
     /* Ensure BUSY is idle before the next frame writer starts. */
-    waitBusyHigh(BUSY_TIMEOUT_MS);
-    delayms(50);
+    if (!waitBusyHigh(BUSY_TIMEOUT_MS)) {
+        ok = 0;
+    }
+    delayms(80);
 #if SHOW_LOG
-    printf("Display Done!! \r\n");
+    if (ok) {
+        printf("Display Done!! \r\n");
+    } else {
+        printf("Display incomplete (BUSY timeout)!! \r\n");
+    }
 #endif
+    return ok;
 }
 
 void executeTscCommand(void)

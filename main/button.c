@@ -2,18 +2,21 @@
  * @file button.c
  * @brief Front-panel keys: MAIN=GPIO2, PAGE=GPIO3 (shared rocker).
  *
- * RESET is hardware EN/RST. SoftAP / BLE work runs on dedicated tasks — the
- * button poller stack is too small for wifi_softap_open / wifi_ble_prov_open.
+ * RESET is hardware EN/RST. SoftAP / BLE run on a statically-allocated
+ * prov worker — on-demand xTaskCreate under Wi-Fi/httpd fails (red LED),
+ * and a heap-backed worker fragments internal RAM until wifi aborts.
  *
  * MAIN hold ~2.5 s: open SoftAP (blue blink); closes BLE first if up.
  * PAGE hold ~2.5 s: open BLE CT-Prov (cyan blink); if already up → close BLE.
  * MAIN+PAGE hold 6 s: factory reset
+ * PAGE/MAIN short press: no LED change (long-press only owns cyan/blue).
  * PAGE click: log only (paging later)
  */
 #include <stdint.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "driver/gpio.h"
@@ -23,117 +26,104 @@
 #include "config.h"
 #include "wifi.h"
 #include "led.h"
+#include "sleep.h"
 
 #define TAG "-->BTN"
 #define HOLD_AP_MS 2500
 #define HOLD_BLE_MS 2500
 #define HOLD_FACTORY_MS 6000
 #define POLL_MS 20
+/* Static DRAM — does not fragment the heap wifi/httpd need. */
+#define PROV_WORKER_STACK 4096
 
+enum {
+    PROV_CMD_SOFTAP = 1,
+    PROV_CMD_BLE_OPEN = 2,
+    PROV_CMD_BLE_CLOSE = 3,
+};
+
+static QueueHandle_t s_provQ;
+static StaticQueue_t s_provQmem;
+static uint8_t s_provQstorage[2 * sizeof(int)];
+static StackType_t s_provStack[PROV_WORKER_STACK / sizeof(StackType_t)];
+static StaticTask_t s_provTcb;
+static TaskHandle_t s_provTask;
 static volatile bool s_provBusy;
 
-static void softap_task(void *arg)
+static void prov_worker(void *arg)
 {
     (void)arg;
-    led_set(LEDC_NET_R, LED_BLINK);
-    wifi_softap_open();
-
-    if (wifi_softap_is_up()) {
-        led_set(LEDC_NET_R, LED_BLINK);
-        ESP_LOGW(TAG, "SoftAP open (idle auto-close), http://192.168.4.1/");
-    } else if (cfg_softap_pending_get()) {
-        /*
-         * BLE SKU: MAIN → SoftAP means "exit BLE, open SoftAP on SoftAP image".
-         * wifi_softap_open() arms NVS pending + SoftAP SKU reboot; SoftAP is
-         * not up on this boot. That is success — never flash red (looked like
-         * MAIN broken after BLE provisioning).
-         */
-        ESP_LOGW(TAG, "SoftAP pending after BLE exit — waiting for SoftAP SKU");
-    } else {
-        ESP_LOGE(TAG, "SoftAP open failed");
-        wifi_led_refresh();
-        led_pulse(LEDC_ERR_R, 800);
+    int cmd;
+    while (1) {
+        if (xQueueReceive(s_provQ, &cmd, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        s_provBusy = true;
+        if (cmd == PROV_CMD_SOFTAP) {
+            led_set(LEDC_NET_R, LED_BLINK);
+            wifi_softap_open();
+            if (wifi_softap_is_up()) {
+                led_set(LEDC_NET_R, LED_BLINK);
+                ESP_LOGW(TAG, "SoftAP open (idle auto-close), http://192.168.4.1/");
+            } else {
+                ESP_LOGE(TAG, "SoftAP open failed");
+                wifi_led_refresh();
+                led_pulse(LEDC_ERR_R, 800);
+            }
+        } else if (cmd == PROV_CMD_BLE_CLOSE) {
+            ESP_LOGI(TAG, "PAGE hold: close BLE");
+            wifi_ble_prov_close();
+        } else if (cmd == PROV_CMD_BLE_OPEN) {
+            led_set(LEDC_BLE_R, LED_BLINK);
+            wifi_ble_prov_open();
+            if (!wifi_ble_prov_is_up()) {
+                ESP_LOGE(TAG, "BLE open failed");
+                wifi_led_refresh();
+                led_pulse(LEDC_ERR_R, 800);
+            } else {
+                led_set(LEDC_BLE_R, LED_BLINK);
+                ESP_LOGW(TAG, "BLE CT-Prov open (cyan; PAGE hold again to close)");
+            }
+        }
+        s_provBusy = false;
     }
-    s_provBusy = false;
-    vTaskDelete(NULL);
 }
 
-static void ble_task(void *arg)
+static bool post_prov(int cmd)
 {
-    int mode = (int)(intptr_t)arg; /* 1=open, 0=close */
-    if (mode == 0) {
-        ESP_LOGI(TAG, "PAGE hold: close BLE");
-        wifi_ble_prov_close();
-        s_provBusy = false;
-        vTaskDelete(NULL);
-        return;
+    if (!s_provQ || !s_provTask) {
+        ESP_LOGE(TAG, "prov worker not ready");
+        return false;
     }
-
-    led_set(LEDC_BLE_R, LED_BLINK);
-    wifi_ble_prov_open();
-#if !CONFIG_BT_NIMBLE_ENABLED
-    /*
-     * SoftAP SKU: success = NVS bleboot + OTA slot switch + esp_restart().
-     * is_up() stays false on this image — never treat that as failure (was
-     * flashing red then STA green, looking like "PAGE = broken BLE").
-     */
-    if (cfg_ble_prov_boot_get()) {
-        ESP_LOGW(TAG, "BLE SKU boot armed — waiting for restart");
-    } else {
-        ESP_LOGE(TAG, "BLE open failed (SKU missing or set_boot error)");
-        wifi_led_refresh(); /* back to green/blue — brief notice only */
-        led_pulse(LEDC_ERR_R, 800);
+    if (s_provBusy) {
+        ESP_LOGW(TAG, "prov busy — ignore cmd %d", cmd);
+        return false;
     }
-    s_provBusy = false;
-    vTaskDelete(NULL);
-    return;
-#else
-    if (!wifi_ble_prov_is_up()) {
-        ESP_LOGE(TAG, "BLE open failed");
-        wifi_led_refresh();
-        led_pulse(LEDC_ERR_R, 800);
-    } else {
-        led_set(LEDC_BLE_R, LED_BLINK);
-        ESP_LOGW(TAG, "BLE CT-Prov open (cyan; PAGE hold again to close)");
+    if (xQueueSend(s_provQ, &cmd, 0) != pdTRUE) {
+        ESP_LOGE(TAG, "prov queue full (cmd %d)", cmd);
+        return false;
     }
-    s_provBusy = false;
-    vTaskDelete(NULL);
-#endif
+    return true;
 }
 
 static void start_softap(void)
 {
-    if (s_provBusy) {
-        return;
-    }
-    s_provBusy = true;
     led_set(LEDC_NET_R, LED_BLINK);
-    BaseType_t ok = xTaskCreate(softap_task, "prov_ap", 8192, NULL, 5, NULL);
-    if (ok != pdPASS) {
-        ESP_LOGE(TAG, "SoftAP task create failed");
-        s_provBusy = false;
+    if (!post_prov(PROV_CMD_SOFTAP)) {
         wifi_led_refresh();
-        led_pulse(LEDC_ERR_R, 1500);
+        led_pulse(LEDC_ERR_R, 800);
     }
 }
 
 static void start_ble_toggle(void)
 {
-    if (s_provBusy) {
-        return;
-    }
-    /* SoftAP SKU: OTA-switch to ek410_ble. BLE SKU: close → SoftAP SKU. */
-    s_provBusy = true;
-    int mode = wifi_ble_prov_is_up() ? 0 : 1;
-    if (mode == 1) {
+    int cmd = wifi_ble_prov_is_up() ? PROV_CMD_BLE_CLOSE : PROV_CMD_BLE_OPEN;
+    if (cmd == PROV_CMD_BLE_OPEN) {
         led_set(LEDC_BLE_R, LED_BLINK);
     }
-    BaseType_t ok = xTaskCreate(ble_task, "prov_ble", 8192, (void *)(intptr_t)mode, 5, NULL);
-    if (ok != pdPASS) {
-        ESP_LOGE(TAG, "BLE task create failed");
-        s_provBusy = false;
+    if (!post_prov(cmd)) {
         wifi_led_refresh();
-        led_pulse(LEDC_ERR_R, 1500);
+        led_pulse(LEDC_ERR_R, 800);
     }
 }
 
@@ -159,7 +149,9 @@ static void button_task(void *arg)
     };
     gpio_config(&io);
 
-    ESP_LOGI(TAG, "MAIN=IO%d PAGE=IO%d (RESET=hw)", BTN_MAIN_GPIO, BTN_PAGE_GPIO);
+    ESP_LOGI(TAG, "MAIN=IO%d PAGE=IO%d (RESET=hw) levels MAIN=%d PAGE=%d",
+             BTN_MAIN_GPIO, BTN_PAGE_GPIO,
+             main_down() ? 1 : 0, page_down() ? 1 : 0);
 
     /* First-key-wins: rocker crosstalk often pulls the other line low briefly.
      * Old logic zeroed PAGE/MAIN timers whenever both read low → BLE never
@@ -169,19 +161,58 @@ static void button_task(void *arg)
     int mainHeldMs = 0;
     int pageHeldMs = 0;
     int bothHeldMs = 0;
-    int secondKeyMs = 0; /* how long the other key has been down while locked */
+    int secondKeyMs = 0;
     bool apFired = false, bleFired = false, factoryFired = false;
     bool pageWasDown = false;
     bool prevMain = false, prevPage = false;
-    const int BOTH_PROMOTE_MS = 400; /* ignore <400ms crosstalk on 2nd key */
+    bool mainStable = false, pageStable = false;
+    bool mainCand = false, pageCand = false;
+    int mainStabMs = 0, pageStabMs = 0;
+    const int DEBOUNCE_MS = 60;
+    const int BOTH_PROMOTE_MS = 400;
+    int sampleMs = 0;
+    int prevLock = LOCK_NONE;
 
     while (1) {
-        bool main = main_down();
-        bool page = page_down();
+        bool mainRaw = main_down();
+        bool pageRaw = page_down();
+
+        /* 60ms debounce — rocker bounce was flashing cyan↔green↔blue. */
+        if (mainRaw != mainCand) {
+            mainCand = mainRaw;
+            mainStabMs = 0;
+        } else if (mainStabMs < DEBOUNCE_MS) {
+            mainStabMs += POLL_MS;
+            if (mainStabMs >= DEBOUNCE_MS) {
+                mainStable = mainCand;
+            }
+        }
+        if (pageRaw != pageCand) {
+            pageCand = pageRaw;
+            pageStabMs = 0;
+        } else if (pageStabMs < DEBOUNCE_MS) {
+            pageStabMs += POLL_MS;
+            if (pageStabMs >= DEBOUNCE_MS) {
+                pageStable = pageCand;
+            }
+        }
+        bool main = mainStable;
+        bool page = pageStable;
+
+        /* 1 Hz raw sample for first 90s — proves GPIO wiring while debugging.
+         * MAIN/PAGE here are pressed=1; t= is elapsed sample time, not hold. */
+        sampleMs += POLL_MS;
+        if (sampleMs <= 90000 && (sampleMs % 1000) == 0) {
+            ESP_LOGI(TAG, "sample MAIN=%d PAGE=%d (t=%ds)",
+                     main ? 1 : 0, page ? 1 : 0, sampleMs / 1000);
+        }
 
         if (main != prevMain || page != prevPage) {
             ESP_LOGI(TAG, "keys MAIN=%d PAGE=%d lock=%d",
                      main ? 1 : 0, page ? 1 : 0, lock);
+            if (main || page) {
+                sleep_cancel();
+            }
             prevMain = main;
             prevPage = page;
         }
@@ -191,7 +222,12 @@ static void button_task(void *arg)
                 !bleFired && lock == LOCK_PAGE) {
                 ESP_LOGI(TAG, "PAGE click");
             }
+            /* Only restore idle LED on short press; long-press owns cyan/blue. */
+            if (lock != LOCK_NONE && !apFired && !bleFired && !factoryFired) {
+                wifi_led_refresh();
+            }
             lock = LOCK_NONE;
+            prevLock = LOCK_NONE;
             mainHeldMs = pageHeldMs = bothHeldMs = secondKeyMs = 0;
             apFired = bleFired = factoryFired = false;
             pageWasDown = false;
@@ -221,6 +257,9 @@ static void button_task(void *arg)
                 secondKeyMs = 0;
             }
         }
+
+        /* LED only on long-press action — short PAGE/MAIN must not flash cyan/blue. */
+        prevLock = lock;
 
         if (lock == LOCK_BOTH) {
             bothHeldMs += POLL_MS;
@@ -257,6 +296,15 @@ static void button_task(void *arg)
 
 void button_open(void)
 {
+    s_provQ = xQueueCreateStatic(2, sizeof(int), s_provQstorage, &s_provQmem);
+    s_provTask = xTaskCreateStatic(prov_worker, "prov_w", PROV_WORKER_STACK,
+                                   NULL, 5, s_provStack, &s_provTcb);
+    if (!s_provQ || !s_provTask) {
+        ESP_LOGE(TAG, "static prov worker/queue failed");
+    } else {
+        ESP_LOGI(TAG, "prov worker ready (static stack=%u)",
+                 (unsigned)PROV_WORKER_STACK);
+    }
     xTaskCreate(button_task, "button", 3072, NULL, 4, NULL);
     ESP_LOGI(TAG, "button ready: MAIN 2.5s=SoftAP, PAGE 2.5s=BLE toggle, MAIN+PAGE 6s=factory");
 }

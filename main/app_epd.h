@@ -11,12 +11,18 @@ int app_epd_init(void);
 /* Fill the whole panel with one color code (e.g. WHITE 0x11) and refresh. */
 void epd_fill_refresh(unsigned char color_code);
 
-#define EPD_TEXT_MAX_LINES 10
+/* scale=3 ≈ 21 lines fit; keep headroom for scale=2 long MQTT text. */
+#define EPD_TEXT_MAX_LINES 24
+/* Raw MQTT/HTTP paragraph before wrap (keep under CMD_BUF). */
+#define EPD_TEXT_RAW_MAX   2048
 
-/* Render up to EPD_TEXT_MAX_LINES of UTF-8 text centered (ASCII + GB2312),
+/* Render up to EPD_TEXT_MAX_LINES of UTF-8 text (ASCII + GB2312),
  * then refresh. Logical landscape 1600x1200. scale >= 1. */
 void epd_text_screen(const char *const *lines, int line_count,
                      unsigned char fg_code, unsigned char bg_code, int scale);
+/* Wrap a raw paragraph on the render task, then paint (top-left layout). */
+void epd_text_paragraph(const char *text, unsigned char fg_code,
+                        unsigned char bg_code, int scale_req);
 
 /* HTTP-GET a frame URL and refresh. Accepts:
  *  - raw 960000-byte native 4bpp
@@ -39,15 +45,23 @@ int app_epd_splash_async(void);
 /* Queue replay of flash lastfrm; -1 if none stored. */
 int app_epd_last_frame_async(void);
 
+/**
+ * Sync boot paint BEFORE Wi-Fi init (DMA RAM still free).
+ * lastfrm if present, else CamThink splash.
+ */
+int app_epd_boot_paint_sync(void);
+
 /* ---- async render API (for HTTP/MQTT callers; a full refresh blocks
  * the display task for 20-40 s and must not stall a request handler) ---- */
 
 typedef struct {
-    /* UTF-8; ~60 CJK or ~190 ASCII per line (matches canvas text cells). */
+    /* Raw paragraph for render_text (preferred). Empty → use lines[]. */
+    char text[EPD_TEXT_RAW_MAX];
+    /* Pre-split lines (boot/setup). UTF-8; ~60 CJK / ~190 ASCII each. */
     char lines[EPD_TEXT_MAX_LINES][192];
     int count;
     unsigned char fg, bg;
-    int scale;
+    int scale; /* requested; paragraph path may shrink to fit */
 } espd_render_t;
 
 /* Queue a text render; returns 0 if queued, -1 if a render is in flight. */

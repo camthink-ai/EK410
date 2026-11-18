@@ -478,7 +478,11 @@ int last_frame_stream(last_frame_write_fn write_fn, void *ctx)
         goto out;
     }
 
-    uint8_t *buf = heap_caps_malloc(STREAM_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    /* DMA-capable: panel SPI must not fall back to priv TX alloc under Wi-Fi. */
+    uint8_t *buf = heap_caps_malloc(STREAM_CHUNK, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!buf) {
+        buf = heap_caps_malloc(STREAM_CHUNK, MALLOC_CAP_DMA);
+    }
     if (!buf) {
         buf = malloc(STREAM_CHUNK);
     }
