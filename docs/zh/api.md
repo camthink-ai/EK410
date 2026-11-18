@@ -18,7 +18,7 @@
 - **平台 / 唤醒推图**：`displayUrl`（设备自拉自刷）
 - **OTA**：仅 `https://`
 - **MQTTS**：`tlsVerify`（默认 true）+ 可选 `caPem`（自定义 CA PEM；留空用系统 CA 包；关闭校验仅用于自签/内网）
-- **NeoLink CT-Prov**：`POST /api/v1/ctprov`（SoftAP 绑定；SSID `EK410_<MAC6>`；详见 `docs/ct_prov.md`）
+- **[NeoLinker](https://github.com/camthink-ai/NeoLinker) CT-Prov**：`POST /api/v1/ctprov`（SoftAP 绑定；SSID `EK410_<MAC6>`；详见 `docs/ct_prov.md`）
 - **电源**：`always` / `cycle` / `hibernate`；`sleepMin`；`wakeSec`（cycle 在线窗，30–600，默认 120）；`imageQuality`: `quality` | `speed`
 
 ## NeoMind

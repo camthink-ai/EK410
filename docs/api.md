@@ -27,7 +27,7 @@ Companion: [API（中文）](zh/api.md)
 | GET/POST | `/api/v1/network/getMqttParam` / `setMqttParam` | host, port, transport (`mqtt`\|`mqtts`), credentials; MQTTS: `tlsVerify` (default true), optional `caPem` (custom CA; empty = system CRT bundle) |
 | POST | `/api/v1/network/testMqtt` | probe |
 | POST | `/api/v1/network/openSoftAp` / `closeSoftAp` | SoftAP control |
-| POST | `/api/v1/ctprov` | NeoLink **CT-Prov/1** SoftAP binding (whole JSON envelope; see `docs/ct_prov.md`) |
+| POST | `/api/v1/ctprov` | [NeoLinker](https://github.com/camthink-ai/NeoLinker) **CT-Prov/1** SoftAP binding (whole JSON envelope; see `docs/ct_prov.md`) |
 
 ## Display
 

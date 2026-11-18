@@ -1,7 +1,7 @@
-# CT-Prov / NeoLink compatibility (EK410)
+# CT-Prov / NeoLinker compatibility (EK410)
 
 EK410 implements the CamThink **CT-Prov/1** SoftAP HTTP binding used by
-[NeoLink](https://github.com/Oreofilling/neolink). On ESP32-C61, NimBLE cannot
+[NeoLinker](https://github.com/camthink-ai/NeoLinker). On ESP32-C61, NimBLE cannot
 share a process with SoftAP httpd — BLE CT-Prov is a **separate OTA image**
 (`ek410_ble`, see dual-SKU section below).
 

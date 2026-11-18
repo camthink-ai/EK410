@@ -25,7 +25,7 @@ EK410 是偏电池场景的墨水屏终端：SoftAP / BLE 配网、内嵌 Web、
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  SoftAP 网页  ·  NeoLink CT-Prov  ·  NeoMind MQTT / HTTP   │
+│  SoftAP 网页  ·  NeoLinker CT-Prov  ·  NeoMind MQTT / HTTP │
 ├─────────────────────────────┬──────────────────────────────┤
 │  ota_0  ek410（SoftAP+httpd）│  ota_1  ek410_ble（NimBLE）  │
 │  MAIN 长按 → SoftAP（蓝）    │  PAGE 长按 → BLE（青）       │
@@ -41,7 +41,7 @@ ESP32-C61 无法在同一进程同时跑 SoftAP httpd 与 NimBLE，产品路径�
 ## 功能
 
 - **SoftAP + Web** — Wi‑Fi / MQTT / 图片 / 画布 / Markdown / 电源 / OTA
-- **NeoLink CT-Prov** — SoftAP HTTP + BLE GATT（独立 BLE 镜像）
+- **[NeoLinker](https://github.com/camthink-ai/NeoLinker) CT-Prov** — SoftAP HTTP + BLE GATT（独立 BLE 镜像）
 - **显示** — 整帧上传、URL 拉取、画布、Markdown；上次画面存 `lastfrm`
 - **NeoMind MQTT** — `device/ek410_Eink/{deviceId}/uplink|downlink`
 - **电源** — 常开 / 定时刷新（`sleepMin` + `wakeSec`）/ 休眠；深睡关灯与面板供电
@@ -150,7 +150,7 @@ git tag -a v1.3.1 -m "EK410 v1.3.1"
 |------|------|---------|
 | 硬件 | [docs/zh/hardware.md](docs/zh/hardware.md) | [docs/hardware.md](docs/hardware.md) |
 | HTTP API | [docs/zh/api.md](docs/zh/api.md) | [docs/api.md](docs/api.md) |
-| CT-Prov / NeoLink | — | [docs/ct_prov.md](docs/ct_prov.md) |
+| CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | — | [docs/ct_prov.md](docs/ct_prov.md) |
 | 开发 | [docs/zh/development.md](docs/zh/development.md) | [docs/development.md](docs/development.md) |
 | 工具 | [tools/README.md](tools/README.md) | — |
 

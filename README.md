@@ -25,7 +25,7 @@ EK410 is a battery-friendly e-ink endpoint: SoftAP / BLE provisioning, embedded 
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  SoftAP web  ·  NeoLink CT-Prov  ·  NeoMind MQTT / HTTP    │
+│  SoftAP web  ·  NeoLinker CT-Prov  ·  NeoMind MQTT / HTTP  │
 ├─────────────────────────────┬──────────────────────────────┤
 │  ota_0  ek410 (SoftAP+httpd)│  ota_1  ek410_ble (NimBLE)   │
 │  MAIN hold → SoftAP (blue)  │  PAGE hold → BLE (cyan)      │
@@ -41,7 +41,7 @@ ESP32-C61 cannot run SoftAP httpd and NimBLE in one process — product path is 
 ## Features
 
 - **SoftAP + web console** — Wi‑Fi / MQTT / image / canvas / Markdown / power / OTA
-- **NeoLink CT-Prov** — SoftAP HTTP + BLE GATT (dedicated BLE image)
+- **[NeoLinker](https://github.com/camthink-ai/NeoLinker) CT-Prov** — SoftAP HTTP + BLE GATT (dedicated BLE image)
 - **Display** — upload frame, URL fetch, canvas, Markdown; last frame in `lastfrm`
 - **NeoMind MQTT** — `device/ek410_Eink/{deviceId}/uplink|downlink`
 - **Power** — always / cycle (`sleepMin` + `wakeSec`) / hibernate; deep sleep cuts LED & panel rail
@@ -150,7 +150,7 @@ git tag -a v1.3.1 -m "EK410 v1.3.1"
 |-------|----|------|
 | Hardware | [docs/hardware.md](docs/hardware.md) | [docs/zh/hardware.md](docs/zh/hardware.md) |
 | HTTP API | [docs/api.md](docs/api.md) | [docs/zh/api.md](docs/zh/api.md) |
-| CT-Prov / NeoLink | [docs/ct_prov.md](docs/ct_prov.md) | — |
+| CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | [docs/ct_prov.md](docs/ct_prov.md) | — |
 | Development | [docs/development.md](docs/development.md) | [docs/zh/development.md](docs/zh/development.md) |
 | Tools | [tools/README.md](tools/README.md) | — |
 
