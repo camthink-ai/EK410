@@ -30,6 +30,7 @@
 #include "led.h"
 #include "button.h"
 #include "app_epd.h"
+#include "evtlog.h"
 #include "battery.h"
 #include "last_frame.h"
 #include "pindefine.h"
@@ -99,12 +100,16 @@ void app_main(void)
     cfg_ble_idle_sec_set(0);
 
     last_frame_init();
+    evtlog_init();
+    evtlog_event("BOOT", "reset=%d wake=%d", (int)esp_reset_reason(),
+                 (int)sleep_get_wake_src());
     /* Keep LED off during long panel paint (~40s). Blue blink only means
      * SoftAP / STA joining — do not hold NET blue for the whole boot paint. */
     led_set(0, 0, 0, LED_OFF);
 
     if (boot_button_held()) {
         ESP_LOGW(TAG, "BOOT held, factory reset");
+        evtlog_event("BOOT", "factory via BOOT pin");
         cfg_factory_reset();
         cfg_ble_prov_boot_set(false);
         cfg_softap_pending_set(false);
@@ -128,16 +133,26 @@ void app_main(void)
     bool online = false;
     bool hasWifi = config_has_wifi();
     if (hasWifi) {
-        led_set(LEDC_NET_R, LED_BLINK);
+        led_set(LEDC_JOIN_R, LED_BLINK);
         /* Start STA before httpd so esp_wifi_start can create PHY locks.
-         * GOT_IP starts httpd then mqtt (httpd first — see wifi.c). */
+         * GOT_IP brings httpd then mqtt; we reinforce the same order here. */
         online = wifi_sta_start();
     }
-    /* Idempotent if GOT_IP already brought httpd up; retry once if OOM race. */
-    http_server_start();
-    if (!http_server_is_up()) {
-        vTaskDelay(pdMS_TO_TICKS(300));
+    /* After a failed STA join, Wi-Fi already holds most internal RAM —
+     * forcing httpd here yields ESP_ERR_HTTPD_TASK and leaves largest_int
+     * too small for the later GOT_IP mqtt start (phy NO_MEM abort). Defer
+     * to GOT_IP / httpd watchdog when STA is still joining. */
+    if (online || !hasWifi) {
         http_server_start();
+        if (!http_server_is_up()) {
+            vTaskDelay(pdMS_TO_TICKS(300));
+            http_server_start();
+        }
+    } else {
+        ESP_LOGW(TAG, "STA not online yet — httpd deferred to GOT_IP/watchdog");
+    }
+    if (online) {
+        mqtt_start();
     }
 
     wifi_led_refresh();
@@ -173,5 +188,7 @@ void app_main(void)
             ESP_LOGW(TAG, "battery sense unavailable");
         }
     }
+    evtlog_event("BOOT", "running wifi=%d online=%d panel=%d",
+                 hasWifi ? 1 : 0, online ? 1 : 0, app_epd_panel_ok() ? 1 : 0);
     ESP_LOGI(TAG, "running");
 }

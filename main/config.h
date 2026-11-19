@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -100,11 +101,16 @@ void cfg_get_wifi_attr(wifiAttr_t *wifi);
 void cfg_set_wifi_attr(const wifiAttr_t *wifi);
 
 void cfg_get_mqtt_attr(mqttAttr_t *mqtt);
-void cfg_set_mqtt_attr(const mqttAttr_t *mqtt);
+/** Persist MQTT broker attrs. Returns ESP_OK or NVS error (RAM unchanged on fail). */
+esp_err_t cfg_set_mqtt_attr(const mqttAttr_t *mqtt);
 
 /** MQTTS custom CA (static BSS). "" if unset. Valid until next set. */
 const char *cfg_mqtt_ca_pem(void);
-void cfg_set_mqtt_ca_pem(const char *pem);
+/**
+ * Persist custom CA PEM. On NVS failure restores the previous in-RAM value
+ * and returns the esp_err_t so callers can surface "save failed".
+ */
+esp_err_t cfg_set_mqtt_ca_pem(const char *pem);
 
 void cfg_get_dev_info(devInfo_t *info);
 void cfg_set_dev_name(const char *name);
@@ -115,20 +121,22 @@ void cfg_set_power_attr(const powerAttr_t *p);
 void cfg_factory_reset(void);
 
 /**
- * BLE provisioning boot flag. C61 cannot keep NimBLE linked and still start
- * httpd — normal boots call esp_bt_controller_mem_release(BLE). PAGE hold sets
- * this flag and reboots into a BLE-only window; exit clears it and reboots.
+ * Legacy NVS flag from the dual-SKU era (reboot into BLE-only image).
+ * Single image never boots from this flag; kept only to clear stale NVS.
  */
 bool cfg_ble_prov_boot_get(void);
 void cfg_ble_prov_boot_set(bool on);
 
-/** After leaving BLE via MAIN, reopen SoftAP once on the next normal boot. */
+/**
+ * SoftAP requested while BLE is up: stop NimBLE, then open SoftAP in-process
+ * (no reboot). Cleared when SoftAP starts or on non-SW reset.
+ */
 bool cfg_softap_pending_get(void);
 void cfg_softap_pending_set(bool on);
 
 /**
  * BLE window idle override (seconds). 0 = firmware default (2 min).
- * SoftAP test harness sets a short value before switching to the BLE SKU.
+ * Test harness / openBleProv may set a short value for CI XOR exit.
  */
 int cfg_ble_idle_sec_get(void);
 void cfg_ble_idle_sec_set(int sec);

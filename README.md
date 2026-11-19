@@ -106,8 +106,8 @@ idf.py -p PORT flash monitor
 ### Convenience scripts
 
 ```bash
-bash tools/build_dual_sku.sh        # fullclean + build → dist/ek410.bin
-bash tools/flash_dual_sku.sh PORT   # flash bootloader + table + image (both OTA slots)
+bash tools/build_release.sh        # fullclean + build → dist/ek410.bin
+bash tools/flash_release.sh PORT    # flash bootloader + table + image (both OTA slots)
 ```
 
 More: [docs/development.md](docs/development.md) · [tools/README.md](tools/README.md).

@@ -26,6 +26,7 @@
 #include "wifi.h"
 #include "http.h"
 #include "app_epd.h"
+#include "evtlog.h"
 #include "led.h"
 #include "board_ioext.h"
 #include "pindefine.h"
@@ -128,9 +129,25 @@ static void sleep_go_task(void *arg)
              power_mode_str(p.mode),
              timed ? "" : ", until MAIN/PAGE");
 
+    /* Full E6 refresh is 20–40s. Cutting EPAD mid-DRF freezes a striped /
+     * gapped frame on glass. Pause new jobs + HOLD panel lock through power-off. */
+    if (!app_epd_sleep_prepare(180000)) {
+        ESP_LOGW(TAG, "panel still busy — defer deep sleep");
+        evtlog_event("SLP", "defer — panel busy");
+        s_entering = false;
+        sleep_arm_from_config();
+        vTaskDelete(NULL);
+        return;
+    }
+
+    evtlog_event("SLP", "deep sleep mode=%s timed=%d",
+                 power_mode_str(p.mode), timed ? 1 : 0);
+
     if (mqtt_is_connected()) {
         mqtt_publish_telemetry();
-        mqtt_stop();
+        if (mqtt_stop_wait(4000) != 0) {
+            ESP_LOGW(TAG, "mqtt_stop busy before sleep — continuing power-down");
+        }
         vTaskDelay(pdMS_TO_TICKS(200));
     }
     esp_wifi_stop();
@@ -155,7 +172,10 @@ static void sleep_go_task(void *arg)
                  BTN_MAIN_GPIO, BTN_PAGE_GPIO);
     }
     esp_deep_sleep_start();
-    vTaskDelete(NULL); /* unreachable */
+    /* Unreachable — if deep sleep fails, release the gate. */
+    app_epd_sleep_abort();
+    s_entering = false;
+    vTaskDelete(NULL);
 }
 
 static void sleep_timer_cb(void *arg)

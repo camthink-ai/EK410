@@ -37,13 +37,33 @@ static const struct {
     {42, 122, 68, 0x6},    /* green  */
 };
 
-/* Source RGB budgets beside Wi-Fi/MQTT on 2MB PSRAM (body still held at decode). */
+/* Source RGB budgets beside Wi-Fi/MQTT on 2MB PSRAM (body still held at decode).
+ * Clamped to the largest free SPIRAM block so a big PNG body does not OOM. */
 #define RGB_BUDGET_SPEED   (360 * 1024)
 #define RGB_BUDGET_QUALITY (720 * 1024)
+#define RGB_BUDGET_FLOOR   (48 * 1024)
+#define RGB_BUDGET_RESERVE (48 * 1024) /* one PNG row + libpng + slack */
 
 static size_t rgb_budget_for(img_proc_mode_t mode)
 {
-    return (mode == IMG_PROC_QUALITY) ? RGB_BUDGET_QUALITY : RGB_BUDGET_SPEED;
+    size_t want = (mode == IMG_PROC_QUALITY) ? RGB_BUDGET_QUALITY : RGB_BUDGET_SPEED;
+    size_t free_s = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    size_t room = (largest > RGB_BUDGET_RESERVE) ? (largest - RGB_BUDGET_RESERVE) : 0;
+    if (room == 0 && free_s > RGB_BUDGET_RESERVE) {
+        room = free_s - RGB_BUDGET_RESERVE;
+    }
+    if (room < want) {
+        want = room;
+    }
+    if (want < RGB_BUDGET_FLOOR) {
+        want = RGB_BUDGET_FLOOR;
+    }
+    ESP_LOGI(TAG, "rgb budget %uKB (mode=%s free_s=%u largest=%u)",
+             (unsigned)(want / 1024),
+             mode == IMG_PROC_QUALITY ? "quality" : "speed",
+             (unsigned)free_s, (unsigned)largest);
+    return want;
 }
 
 static uint8_t s_prep_lut[256];
@@ -189,6 +209,25 @@ void img_fb_release(uint8_t *fb)
     free(fb);
 }
 
+static int panel_fb_ensure(void)
+{
+    if (s_panel_fb) {
+        return 0;
+    }
+    s_panel_fb = heap_caps_malloc(IMG_FB_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_panel_fb) {
+        s_panel_fb = malloc(IMG_FB_BYTES);
+    }
+    if (!s_panel_fb) {
+        ESP_LOGE(TAG, "panel FB OOM (need %u, free %u largest %u)",
+                 (unsigned)IMG_FB_BYTES,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        return -1;
+    }
+    return 0;
+}
+
 /**
  * Serpentine FS at source res → codes packed into rgb[0..w*h).
  * softCap 210 matches SoftAP; pack+realloc frees ~2/3 before panel FB alloc.
@@ -276,8 +315,7 @@ static int dither_rgb_inplace_codes(uint8_t *rgb, int w, int h)
     return 0;
 }
 
-/** Cover-fit ink codes onto logical 1600×1200 FB (SoftAP imgFit='cover'). */
-static void codes_cover_to_fb(const uint8_t *codes, int sw, int sh, uint8_t *fb)
+static void cover_params(int sw, int sh, float *ox, float *oy, float *x_scale, float *y_scale)
 {
     if (sw < 1) {
         sw = 1;
@@ -292,10 +330,38 @@ static void codes_cover_to_fb(const uint8_t *codes, int sw, int sh, uint8_t *fb)
     }
     float dw = (float)sw * s;
     float dh = (float)sh * s;
-    float ox = ((float)IMG_PANEL_W - dw) * 0.5f;
-    float oy = ((float)IMG_PANEL_H - dh) * 0.5f;
-    const float x_scale = (float)sw / dw;
-    const float y_scale = (float)sh / dh;
+    *ox = ((float)IMG_PANEL_W - dw) * 0.5f;
+    *oy = ((float)IMG_PANEL_H - dh) * 0.5f;
+    *x_scale = (float)sw / dw;
+    *y_scale = (float)sh / dh;
+}
+
+uint8_t img_codes_cover_pixel(const uint8_t *codes, int sw, int sh, int lx, int ly)
+{
+    if (!codes || sw < 1 || sh < 1) {
+        return 0x1;
+    }
+    float ox, oy, x_scale, y_scale;
+    cover_params(sw, sh, &ox, &oy, &x_scale, &y_scale);
+    int syi = (int)(((float)ly + 0.5f - oy) * y_scale);
+    int sxi = (int)(((float)lx + 0.5f - ox) * x_scale);
+    if (syi < 0 || syi >= sh || sxi < 0 || sxi >= sw) {
+        return 0x1;
+    }
+    return codes[(size_t)syi * (size_t)sw + (size_t)sxi];
+}
+
+/** Cover-fit ink codes onto logical 1600×1200 FB (SoftAP imgFit='cover'). */
+static void codes_cover_to_fb(const uint8_t *codes, int sw, int sh, uint8_t *fb)
+{
+    float ox, oy, x_scale, y_scale;
+    cover_params(sw, sh, &ox, &oy, &x_scale, &y_scale);
+    if (sw < 1) {
+        sw = 1;
+    }
+    if (sh < 1) {
+        sh = 1;
+    }
 
     fb_fill(fb, 0x1);
     for (int ly = 0; ly < IMG_PANEL_H; ly++) {
@@ -375,20 +441,21 @@ static uint8_t *rgb_upscale_toward_budget(uint8_t *rgb, int *w_io, int *h_io, si
 }
 
 /**
- * URL path: source FS → shrink codes → cover into singleton FB.
+ * URL path: source FS → packed ink codes (caller streams or covers to FB).
  */
-static int rgb_to_panel_fb_owned(uint8_t *rgb, int sw, int sh, uint8_t **fb_out,
-                                 img_proc_mode_t mode)
+static int rgb_to_codes_owned(uint8_t *rgb, int *sw_io, int *sh_io, uint8_t **codes_out,
+                              img_proc_mode_t mode)
 {
     prep_lut_init();
-    *fb_out = NULL;
+    *codes_out = NULL;
+    int sw = *sw_io, sh = *sh_io;
 
     if (mode == IMG_PROC_QUALITY) {
         rgb = rgb_upscale_toward_budget(rgb, &sw, &sh, rgb_budget_for(mode));
     }
 
     size_t n = (size_t)sw * (size_t)sh;
-    ESP_LOGI(TAG, "dither %dx%d (%s) then cover→panel", sw, sh,
+    ESP_LOGI(TAG, "dither %dx%d (%s)", sw, sh,
              mode == IMG_PROC_QUALITY ? "quality" : "speed");
     int64_t t0 = esp_timer_get_time();
     if (dither_rgb_inplace_codes(rgb, sw, sh) != 0) {
@@ -403,30 +470,49 @@ static int rgb_to_panel_fb_owned(uint8_t *rgb, int sw, int sh, uint8_t **fb_out,
     if (!codes) {
         codes = rgb;
     }
-    rgb = NULL;
+    ESP_LOGI(TAG, "dither done in %lld ms (codes %u)",
+             (long long)((esp_timer_get_time() - t0) / 1000), (unsigned)n);
+    *sw_io = sw;
+    *sh_io = sh;
+    *codes_out = codes;
+    return 0;
+}
 
-    ESP_LOGI(TAG, "dither done in %lld ms — alloc FB (spiram free %u largest %u)",
-             (long long)((esp_timer_get_time() - t0) / 1000),
+static int rgb_to_panel_fb_owned(uint8_t *rgb, int sw, int sh, uint8_t **fb_out,
+                                 img_proc_mode_t mode)
+{
+    *fb_out = NULL;
+    uint8_t *codes = NULL;
+    if (rgb_to_codes_owned(rgb, &sw, &sh, &codes, mode) != 0 || !codes) {
+        return -1;
+    }
+    ESP_LOGI(TAG, "cover→panel FB (spiram free %u largest %u)",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-
-    if (!s_panel_fb) {
-        s_panel_fb = spiram_alloc(IMG_FB_BYTES);
-        if (!s_panel_fb) {
-            s_panel_fb = malloc(IMG_FB_BYTES);
-        }
-    }
-    if (!s_panel_fb) {
-        ESP_LOGE(TAG, "panel FB OOM after dither (need %u, free %u largest %u)",
-                 (unsigned)IMG_FB_BYTES,
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    if (panel_fb_ensure() != 0) {
         free(codes);
         return -1;
     }
     codes_cover_to_fb(codes, sw, sh, s_panel_fb);
     free(codes);
     *fb_out = s_panel_fb;
+    return 0;
+}
+
+int img_rgb_dither_codes(uint8_t *rgb, int w, int h, uint8_t **codes_out, int *cw_out,
+                         int *ch_out, img_proc_mode_t mode)
+{
+    if (!rgb || !codes_out || !cw_out || !ch_out || w < 1 || h < 1) {
+        free(rgb);
+        return -1;
+    }
+    *codes_out = NULL;
+    int sw = w, sh = h;
+    if (rgb_to_codes_owned(rgb, &sw, &sh, codes_out, mode) != 0) {
+        return -1;
+    }
+    *cw_out = sw;
+    *ch_out = sh;
     return 0;
 }
 
@@ -628,9 +714,27 @@ static int decode_png_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, in
     }
 
     size_t rgb_sz = (size_t)dw * (size_t)dh * 3;
+    /* If still too big for the largest block, keep stepping down. */
+    while (rgb_sz + rowbytes + 64 > heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) &&
+           step < 32) {
+        step++;
+        dw = (int)((width + step - 1) / step);
+        dh = (int)((height + step - 1) / step);
+        if (dw < 1) {
+            dw = 1;
+        }
+        if (dh < 1) {
+            dh = 1;
+        }
+        rgb_sz = (size_t)dw * (size_t)dh * 3;
+    }
     uint8_t *rgb = spiram_alloc(rgb_sz);
     uint8_t *row = spiram_alloc(rowbytes + 64);
     if (!rgb || !row) {
+        ESP_LOGE(TAG, "PNG OOM rgb=%u row=%u free_s=%u largest=%u",
+                 (unsigned)rgb_sz, (unsigned)(rowbytes + 64),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         free(rgb);
         free(row);
         png_destroy_read_struct(&png_ptr, &info_ptr, NULL);

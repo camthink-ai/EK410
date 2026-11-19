@@ -22,11 +22,13 @@ idf.py -p /dev/cu.wchusbserialXXXX flash monitor
 ### Convenience scripts (single image)
 
 ```bash
-bash tools/build_dual_sku.sh
-bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
+bash tools/build_release.sh
+bash tools/flash_release.sh /dev/cu.wchusbserialXXXX
+python3 tools/ct_prov_xor_test.py --port /dev/cu.wchusbserialXXXX
 ```
 
-`sdkconfig` is gitignored; defaults (including NimBLE) live in `sdkconfig.defaults`.
+One `sdkconfig.defaults` → one `ek410.bin`. SoftAP and BLE CT-Prov share that
+image and are XOR at runtime. `sdkconfig` is gitignored.
 
 ## SoftAP Web UI
 

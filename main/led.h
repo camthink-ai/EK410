@@ -3,12 +3,13 @@
  * @brief Status LED — RGB on AW9523B (VE071A P1_1/G P1_2/R P1_3/B).
  *
  * Policy:
- *   blue blink  — SoftAP / Wi-Fi connecting (shared)
- *   cyan blink  — BLE CT-Prov window
- *   green solid — running normally (STA up)
- *   red         — brief pulse on SoftAP/BLE/OTA/panel fault (must not stick)
- *   purple blink— OTA in progress
- * BLE idle timeout is normal — exit with blue then SoftAP green, never sticky red.
+ *   blue blink   — SoftAP only
+ *   orange blink — STA joining / reconnecting (not SoftAP — avoid confusion)
+ *   cyan blink   — BLE CT-Prov window
+ *   green solid  — running normally (STA up) or unprovisioned idle
+ *   red          — brief pulse on SoftAP/BLE/OTA/panel fault (must not stick)
+ *   purple blink — OTA in progress
+ * BLE idle timeout is normal — exit with SoftAP blue or join orange, never sticky red.
  * Transient faults must call wifi_led_refresh() after any red pulse.
  * MQTT does not drive the LED.
  */
@@ -21,15 +22,15 @@
 extern "C" {
 #endif
 
-#define LEDC_NET_R 0, 0, 255       /* blue: SoftAP / Wi-Fi joining */
-#define LEDC_BLE_R 0, 200, 255     /* cyan: BLE provisioning window */
-#define LEDC_OK_R  0, 255, 0       /* green solid: running OK      */
-#define LEDC_ERR_R 255, 0, 0       /* red: fault                   */
-#define LEDC_OTA_R 180, 0, 180     /* purple: upgrading            */
+#define LEDC_NET_R  0, 0, 255       /* blue: SoftAP */
+#define LEDC_JOIN_R 255, 120, 0     /* orange: STA joining / reconnect */
+#define LEDC_BLE_R  0, 200, 255     /* cyan: BLE provisioning window */
+#define LEDC_OK_R   0, 255, 0       /* green solid: running OK      */
+#define LEDC_ERR_R  255, 0, 0       /* red: fault                   */
+#define LEDC_OTA_R  180, 0, 180     /* purple: upgrading            */
 
 /* Back-compat aliases used by older call sites. */
-#define LEDC_BOOT_R LEDC_NET_R
-#define LEDC_JOIN_R LEDC_NET_R
+#define LEDC_BOOT_R LEDC_JOIN_R
 #define LEDC_AP_R   LEDC_NET_R
 
 typedef enum {

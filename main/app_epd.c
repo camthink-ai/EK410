@@ -25,6 +25,7 @@
 #include "esp_timer.h"
 
 #include "app_epd.h"
+#include "evtlog.h"
 #include "canvas.h"
 #include "EPD709.h"
 #include "comm.h"
@@ -42,17 +43,39 @@
 
 static const char *TAG = "app_epd";
 
-/* Pause MQTT TLS before a second HTTPS client — C61 cannot hold both. */
+/* Pause MQTT TLS before a second HTTPS client — C61 cannot hold both.
+ * Also disable Wi‑Fi modem sleep so large CDN downloads do not stall. */
 static void url_tls_prepare(void)
 {
-    mqtt_stop();
-    vTaskDelay(pdMS_TO_TICKS(50));
+    wifi_throughput_boost(true);
+    /* Preview b64 (~160KB) + HTTPS body fight for the same 2MB SPIRAM. */
+    last_frame_preview_drop();
+    if (mqtt_stop_wait(4000) != 0) {
+        ESP_LOGW(TAG, "url TLS prepare: mqtt still busy — proceed carefully");
+    }
+    vTaskDelay(pdMS_TO_TICKS(80));
 }
 
 static void url_tls_release(void)
 {
-    if (wifi_sta_is_connected() && !wifi_softap_is_up() && !wifi_ble_prov_is_up()) {
-        mqtt_start();
+    wifi_throughput_boost(false);
+    /* Large HTTPS can leave httpd down and MQTT stopped. Restore LAN Web
+     * first, then MQTT — same policy as SoftAP close. */
+    if (!wifi_sta_is_connected() || wifi_softap_is_up() || wifi_ble_prov_is_up()) {
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(800));
+    wifi_network_services_restore(true);
+    if (!mqtt_is_started()) {
+        for (int i = 0; i < 7; i++) {
+            vTaskDelay(pdMS_TO_TICKS(1500));
+            mqtt_start();
+            if (mqtt_is_started()) {
+                return;
+            }
+            ESP_LOGW(TAG, "mqtt restart attempt %d/7 — waiting for heap", i + 1);
+        }
+        ESP_LOGE(TAG, "mqtt restart failed after URL job — timer will keep retrying");
     }
 }
 
@@ -96,8 +119,17 @@ int app_epd_boot_paint_sync(void)
     return 0;
 }
 
-/* Max HTTP body for display_url decode path (JPEG/PNG). Raw 960000 also fits. */
-#define IMG_URL_MAX_BYTES (768 * 1024)
+/* Max HTTP body for display_url decode path (JPEG/PNG). Raw 960000 also fits.
+ * Soft cap keeps PSRAM headroom (body + QUALITY RGB ~720KB). Hard reject
+ * before buffering so a huge URL cannot hang/OOM the device. */
+#define IMG_URL_MAX_BYTES (1280 * 1024)
+/* Deadlines cover network + decode only. Final panel DRF has its own BUSY
+ * timeout (~40s). Modem-sleep + large HTTPS used to stall past a short net
+ * window (Module.png ~820KB → "URL net timeout" after TLS). */
+#define IMG_URL_NET_DEADLINE_MS    120000
+#define IMG_URL_DECODE_DEADLINE_MS 180000
+#define IMG_URL_HTTP_TIMEOUT_MS    60000
+#define IMG_URL_FORCE_SPEED_BYTES  (700 * 1024)
 
 #define CHUNK_SIZE 8192
 
@@ -112,6 +144,7 @@ static void url_fail(const char *why)
 {
     strlcpy(s_url_err, why ? why : "unknown", sizeof(s_url_err));
     ESP_LOGE(TAG, "url frame fail: %s", s_url_err);
+    evtlog_event("EPD", "display_url fail: %s", s_url_err);
 }
 
 static unsigned char *s_chunk; /* DMA-capable staging (also used per-line) */
@@ -141,6 +174,9 @@ static bool s_panelOk;
  * directly (no intermediate white wipe; that was blanking the panel). */
 static bool s_panelDirty = true;
 static bool s_userContent; /* true after customer push; SoftAP close must not wipe */
+/* Sleep gate: refuse new queue/upload; sleep_prepare HOLDs panel lock. */
+static bool s_acceptJobs = true;
+static bool s_sleepHoldsLock;
 
 #define EPD_COLOR_WHITE 0x11
 
@@ -157,6 +193,7 @@ static int epd_commit_display(void)
     if (!ok) {
         s_panelDirty = true;
         ESP_LOGW(TAG, "display incomplete — panel marked dirty");
+        evtlog_event("EPD", "display incomplete (BUSY timeout)");
     } else {
         s_panelDirty = false;
     }
@@ -216,6 +253,10 @@ static void stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void 
             writeEpdData(row, EPD_CS_LINE_BYTES);
             if (cap) {
                 last_frame_capture_write(row, (size_t)EPD_CS_LINE_BYTES);
+            }
+            /* Cover sampling is CPU-heavy — yield so IDLE can pet TWDT. */
+            if ((ny & 31) == 0) {
+                vTaskDelay(1);
             }
         }
         stream_end(csx);
@@ -295,9 +336,15 @@ static void render_task(void *arg)
                         "1. SoftAP web Image upload",
                         "2. Preconvert 6-color raw",
                         "   (960000 bytes 4bpp)",
-                        "3. JPEG/PNG <300KB, no WebP",
+                        "3. JPEG/PNG under size limit, no WebP",
                     };
-                    epd_text_screen(err, 8, 0x00, 0x11, 2);
+                    /* Avoid painting a full error wall for size/timeout — keep art. */
+                    if (strstr(why, "limit") || strstr(why, "timeout") ||
+                        strstr(why, "OOM")) {
+                        ESP_LOGW(TAG, "url fail (%s) — keep last frame (no error wall)", why);
+                    } else {
+                        epd_text_screen(err, 8, 0x00, 0x11, 2);
+                    }
                 } else {
                     ESP_LOGW(TAG, "url fail (%s) — restored last frame", why);
                 }
@@ -395,18 +442,24 @@ static render_msg_t *alloc_render_msg(int kind)
     return msg;
 }
 
+/* 0=queued, -1=queue full, -2=sleep pending, -3=internal */
 static int queue_render_owned(render_msg_t *msg, TickType_t wait)
 {
     if (!msg) {
-        return -1;
+        return -3;
+    }
+    if (!s_acceptJobs) {
+        ESP_LOGW(TAG, "render rejected — sleep pending");
+        free(msg);
+        return -2;
     }
     if (!s_renderQueue) {
         free(msg);
-        return -1;
+        return -3;
     }
     BaseType_t ok = xQueueSend(s_renderQueue, &msg, wait);
     if (ok != pdTRUE) {
-        ESP_LOGW(TAG, "render busy");
+        ESP_LOGW(TAG, "render queue full");
         free(msg);
         return -1;
     }
@@ -813,10 +866,19 @@ int app_epd_dma_buf_size(void)
 
 int epd_upload_start(void)
 {
+    if (!s_acceptJobs) {
+        ESP_LOGW(TAG, "upload rejected — sleep pending");
+        return -1;
+    }
     /* Full refresh holds the lock 20–40s; allow waiting out one in-flight job.
      * GC alone can take ~60s when dirty — wait long enough. */
     if (!s_panelLock || xSemaphoreTake(s_panelLock, pdMS_TO_TICKS(180000)) != pdTRUE) {
         ESP_LOGW(TAG, "panel busy, upload rejected");
+        return -1;
+    }
+    if (!s_acceptJobs) {
+        xSemaphoreGive(s_panelLock);
+        ESP_LOGW(TAG, "upload rejected — sleep pending after wait");
         return -1;
     }
     /* Anything still queued would run after we unlock and paint over this upload. */
@@ -971,6 +1033,62 @@ int app_epd_init(void)
         ESP_LOGI(TAG, "panel ready");
     }
     return 0;
+}
+
+bool app_epd_jobs_accepted(void)
+{
+    return s_acceptJobs;
+}
+
+bool app_epd_wait_idle(int timeout_ms)
+{
+    if (!s_panelLock) {
+        return true;
+    }
+    TickType_t ticks = (timeout_ms < 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    if (xSemaphoreTake(s_panelLock, ticks) != pdTRUE) {
+        ESP_LOGW(TAG, "wait idle timeout (%d ms) — panel still busy", timeout_ms);
+        return false;
+    }
+    xSemaphoreGive(s_panelLock);
+    return true;
+}
+
+bool app_epd_sleep_prepare(int timeout_ms)
+{
+    if (!s_panelLock) {
+        return true;
+    }
+    /* 1) Stop new work immediately so nothing queues during the wait. */
+    s_acceptJobs = false;
+    render_queue_drop_pending("sleep prepare");
+
+    /* 2) Wait for in-flight render/upload to release the panel, then HOLD it
+     * so mqtt_stop / wifi_stop / EPAD cut cannot race a new refresh. */
+    TickType_t ticks = (timeout_ms < 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    if (xSemaphoreTake(s_panelLock, ticks) != pdTRUE) {
+        ESP_LOGW(TAG, "sleep prepare timeout (%d ms) — resume jobs", timeout_ms);
+        s_acceptJobs = true;
+        s_sleepHoldsLock = false;
+        return false;
+    }
+    /* Drop anything that slipped in before the gate closed. */
+    render_queue_drop_pending("sleep prepare held");
+    s_sleepHoldsLock = true;
+    ESP_LOGI(TAG, "sleep prepare OK — panel lock held, jobs paused");
+    return true;
+}
+
+void app_epd_sleep_abort(void)
+{
+    s_acceptJobs = true;
+    if (s_sleepHoldsLock && s_panelLock) {
+        s_sleepHoldsLock = false;
+        xSemaphoreGive(s_panelLock);
+        ESP_LOGI(TAG, "sleep abort — panel lock released, jobs resumed");
+    } else {
+        s_sleepHoldsLock = false;
+    }
 }
 
 bool app_epd_panel_ok(void)
@@ -1172,6 +1290,17 @@ static unsigned char logical_fb_pixel(int lx, int ly, void *ctx)
     return (lx & 1) ? (b & 0x0F) : (b >> 4);
 }
 
+typedef struct {
+    const uint8_t *codes;
+    int sw, sh;
+} codes_cover_ctx_t;
+
+static unsigned char codes_cover_pixel(int lx, int ly, void *ctx)
+{
+    const codes_cover_ctx_t *c = (const codes_cover_ctx_t *)ctx;
+    return img_codes_cover_pixel(c->codes, c->sw, c->sh, lx, ly);
+}
+
 static int stream_raw_native(const uint8_t *raw, size_t len)
 {
     if (len != (size_t)EPD_HALF_BYTES * 2) {
@@ -1197,21 +1326,39 @@ static int stream_raw_native(const uint8_t *raw, size_t len)
     return epd_commit_display() ? 0 : -1;
 }
 
-/* Sparse stage text on panel (QUALITY URL path only — each call is a full refresh). */
+/* Progress is UART/evtlog only — a full E6 refresh per stage costs ~40s and
+ * used to make previously-working URLs fail under the job deadline. */
 static void url_stage(int show, const char *stage)
 {
-    if (!show || !stage) {
+    if (!stage) {
         return;
     }
-    const char *lines[] = { "URL image", stage };
-    epd_text_screen(lines, 2, 0x00, 0x11, 3);
+    ESP_LOGI(TAG, "url stage%s: %s", show ? "" : " (quiet)", stage);
+}
+
+static void url_heap_log(const char *stage)
+{
+    ESP_LOGI(TAG,
+             "url mem[%s] free=%u spiram=%u largest_s=%u int=%u largest_i=%u",
+             stage ? stage : "?",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }
 
 int epd_url_frame(const char *url)
 {
     s_url_err[0] = '\0';
+    if (!s_acceptJobs) {
+        url_fail("sleep pending");
+        return -1;
+    }
     ESP_LOGI(TAG, "url frame start: %.96s%s", url ? url : "",
              (url && strlen(url) > 96) ? "…" : "");
+    evtlog_event("EPD", "display_url start %.80s", url ? url : "");
+    url_heap_log("start");
 
     powerAttr_t pwr;
     cfg_get_power_attr(&pwr);
@@ -1223,10 +1370,14 @@ int epd_url_frame(const char *url)
      * stage is a full-panel refresh (tens of seconds). JPEG/PNG stages below. */
 
     const size_t raw_need = (size_t)EPD_HALF_BYTES * 2;
+    const int64_t t0 = esp_timer_get_time();
+    const int64_t net_deadline = t0 + (int64_t)IMG_URL_NET_DEADLINE_MS * 1000;
+    const int64_t decode_deadline = t0 + (int64_t)IMG_URL_DECODE_DEADLINE_MS * 1000;
+
     url_tls_prepare();
     esp_http_client_config_t cfg = {
         .url = url,
-        .timeout_ms = 60000,
+        .timeout_ms = IMG_URL_HTTP_TIMEOUT_MS,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .max_redirection_count = 5,
     };
@@ -1249,8 +1400,15 @@ int epd_url_frame(const char *url)
         url_fail("http open/TLS fail");
         goto out;
     }
+    if (esp_timer_get_time() > net_deadline) {
+        url_fail("URL net timeout");
+        goto out_close;
+    }
     long clen = esp_http_client_fetch_headers(client);
     int status = esp_http_client_get_status_code(client);
+    ESP_LOGI(TAG, "url headers status=%d clen=%ld (%.1fs)",
+             status, clen,
+             (esp_timer_get_time() - t0) / 1e6);
     if (status > 0 && (status < 200 || status >= 300)) {
         char buf[40];
         snprintf(buf, sizeof(buf), "HTTP status %d", status);
@@ -1258,10 +1416,14 @@ int epd_url_frame(const char *url)
         goto out_close;
     }
 
+    /* Reject oversized BEFORE allocating / buffering — keeps device alive. */
     size_t cap = IMG_URL_MAX_BYTES;
     if (clen > 0) {
         if ((size_t)clen > IMG_URL_MAX_BYTES && (size_t)clen != raw_need) {
-            url_fail("file >768KB limit");
+            char buf[40];
+            snprintf(buf, sizeof(buf), "file >%uKB limit",
+                     (unsigned)(IMG_URL_MAX_BYTES / 1024));
+            url_fail(buf);
             goto out_close;
         }
         if ((size_t)clen == raw_need) {
@@ -1271,17 +1433,23 @@ int epd_url_frame(const char *url)
         }
     }
 
+    /* Large bodies must stay in PSRAM — internal malloc fallback steals TLS/Wi‑Fi
+     * headroom and looks like a random hang/OOM later. */
     body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!body) {
-        body = malloc(cap);
-    }
-    if (!body) {
+        url_heap_log("body_oom");
         url_fail("download OOM");
         goto out_close;
     }
+    url_heap_log("body_alloc");
 
     size_t total = 0;
+    size_t last_log = 0;
     while (total < cap) {
+        if (esp_timer_get_time() > net_deadline) {
+            url_fail("URL net timeout");
+            goto out_close;
+        }
         int want = (int)((cap - total) > CHUNK_SIZE ? CHUNK_SIZE : (cap - total));
         int got = esp_http_client_read(client, (char *)body + total, want);
         if (got < 0) {
@@ -1292,10 +1460,37 @@ int epd_url_frame(const char *url)
             break;
         }
         total += (size_t)got;
+        if (total - last_log >= (128 * 1024) || total == cap) {
+            ESP_LOGI(TAG, "url download %u/%u (%.1fs)",
+                     (unsigned)total, (unsigned)cap,
+                     (esp_timer_get_time() - t0) / 1e6);
+            last_log = total;
+        }
+    }
+    /* Chunked / missing Content-Length: filled the cap and still more data → reject. */
+    if (total == cap && (size_t)clen != raw_need) {
+        char probe[1];
+        int extra = esp_http_client_read(client, probe, 1);
+        if (extra > 0) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "file >%uKB limit",
+                     (unsigned)(IMG_URL_MAX_BYTES / 1024));
+            url_fail(buf);
+            goto out_close;
+        }
     }
     ESP_LOGI(TAG, "downloaded %u bytes (clen=%ld)", (unsigned)total, clen);
+    url_heap_log("downloaded");
     if (total == 0) {
         url_fail("empty download");
+        goto out_close;
+    }
+    if (!s_acceptJobs) {
+        url_fail("sleep pending");
+        goto out_close;
+    }
+    if (esp_timer_get_time() > decode_deadline) {
+        url_fail("URL decode timeout");
         goto out_close;
     }
 
@@ -1304,9 +1499,14 @@ int epd_url_frame(const char *url)
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     client = NULL;
+    url_heap_log("tls_freed");
 
     img_fmt_t fmt = img_sniff_format(body, total);
     if (fmt == IMG_FMT_RAW4BPP || (total == raw_need && fmt != IMG_FMT_JPEG && fmt != IMG_FMT_PNG)) {
+        if (!s_acceptJobs) {
+            url_fail("sleep pending");
+            goto out;
+        }
         epd_lock();
         last_frame_capture_begin("url");
         ret = stream_raw_native(body, total);
@@ -1319,33 +1519,61 @@ int epd_url_frame(const char *url)
         }
         epd_unlock();
     } else if (fmt == IMG_FMT_JPEG || fmt == IMG_FMT_PNG) {
-        url_stage(quality, "Decoding...");
-        ESP_LOGI(TAG, "decode %s... (free heap %u spiram %u)",
-                 fmt == IMG_FMT_JPEG ? "JPEG" : "PNG",
-                 (unsigned)esp_get_free_heap_size(),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        if (esp_timer_get_time() > decode_deadline) {
+            url_fail("URL decode timeout");
+            goto out;
+        }
+        /* Prefer SPEED automatically when body is large — QUALITY decode+dither
+         * can starve RAM and look like a hang on 2MB PSRAM. */
+        img_proc_mode_t use_proc = proc;
+        if (total > IMG_URL_FORCE_SPEED_BYTES && use_proc == IMG_PROC_QUALITY) {
+            ESP_LOGW(TAG, "large body %u — force SPEED decode", (unsigned)total);
+            use_proc = IMG_PROC_SPEED;
+        }
+        url_stage(use_proc == IMG_PROC_QUALITY, "Decoding...");
+        url_heap_log("pre_decode");
         uint8_t *rgb = NULL;
         int rw = 0, rh = 0;
-        if (img_decode_to_rgb(body, total, &rgb, &rw, &rh, proc) != 0) {
+        if (img_decode_to_rgb(body, total, &rgb, &rw, &rh, use_proc) != 0) {
             url_fail(fmt == IMG_FMT_JPEG ? "JPEG decode fail" : "PNG decode fail");
         } else {
             free(body);
             body = NULL;
-            /* Dither is the long step — second (and last) progress refresh. */
-            url_stage(quality, "Dithering...");
-            ESP_LOGI(TAG, "rgb %dx%d — dither (free %u / spiram %u)", rw, rh,
-                     (unsigned)esp_get_free_heap_size(),
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-            if (img_rgb_dither_alloc_fb(rgb, rw, rh, &fb, proc) != 0) {
+            url_heap_log("post_decode");
+            if (esp_timer_get_time() > decode_deadline) {
+                free(rgb);
+                url_fail("URL decode timeout");
+                goto out;
+            }
+            if (!s_acceptJobs) {
+                free(rgb);
+                url_fail("sleep pending");
+                goto out;
+            }
+            url_stage(use_proc == IMG_PROC_QUALITY, "Dithering...");
+            /* Prefer codes→stream cover: avoids a contiguous 960KB FB alloc that
+             * often fails after TLS download fragmentation on 2MB PSRAM. */
+            uint8_t *codes = NULL;
+            int cw = 0, ch = 0;
+            if (img_rgb_dither_codes(rgb, rw, rh, &codes, &cw, &ch, use_proc) != 0) {
                 url_fail("dither OOM/fail");
             } else {
-                ESP_LOGI(TAG, "decode OK — streaming to panel");
+                codes_cover_ctx_t cctx = {.codes = codes, .sw = cw, .sh = ch};
+                url_heap_log("pre_stream");
+                ESP_LOGI(TAG, "decode OK — stream cover %dx%d", cw, ch);
+                if (!s_acceptJobs) {
+                    free(codes);
+                    url_fail("sleep pending");
+                    goto out;
+                }
                 epd_lock();
                 last_frame_capture_begin("url");
-                stream_render_unlocked(logical_fb_pixel, fb);
+                stream_render_unlocked(codes_cover_pixel, &cctx);
                 last_frame_capture_commit();
                 epd_unlock();
+                free(codes);
                 ret = 0;
+                url_heap_log("done");
                 ESP_LOGI(TAG, "decoded image frame OK (%s)",
                          fmt == IMG_FMT_JPEG ? "JPEG" : "PNG");
             }

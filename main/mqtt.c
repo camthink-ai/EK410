@@ -31,7 +31,9 @@
 #include "mqtt.h"
 #include "config.h"
 #include "wifi.h"
+#include "http.h"
 #include "app_epd.h"
+#include "evtlog.h"
 #include "canvas.h"
 #include "battery.h"
 #include "sleep.h"
@@ -68,12 +70,30 @@ static mdMqtt_t g_MQ = {0};
 static esp_timer_handle_t s_telemetryTimer;
 static esp_timer_handle_t s_startRetryTimer;
 static char s_lwtMsg[192];
+/* Last broker/TLS failure for testMqtt — avoid generic "timeout" when CONNACK refused. */
+static char s_lastFail[96];
+static volatile bool s_connectRefused;
+
+static void mqtt_clear_fail(void)
+{
+    s_lastFail[0] = '\0';
+    s_connectRefused = false;
+}
+
+static void mqtt_set_fail(const char *msg)
+{
+    if (!msg) {
+        return;
+    }
+    strlcpy(s_lastFail, msg, sizeof(s_lastFail));
+}
 #define MQTT_START_MIN_HEAP 48000
 /* Task stacks must live in internal RAM on ESP32-C61 (PSRAM stacks break create). */
-#define MQTT_TASK_STACK_TCP 5120
-#define MQTT_TASK_STACK_TLS 10240
-/* SoftAP APSTA often leaves largest_int ≈6.5KB; keep slack tight so MQTT recovers. */
-#define MQTT_TASK_STACK_SLACK 1024
+/* TCP client task stack. 2304 overflowed after CONNECTED (Stack protection
+ * fault). 3072 is the proven floor; SoftAP may defer start until heap frees. */
+#define MQTT_TASK_STACK_TCP 3072
+#define MQTT_TASK_STACK_TLS 8192
+#define MQTT_TASK_STACK_SLACK 256
 
 static int64_t now_s(void)
 {
@@ -97,7 +117,15 @@ static int mqtt_task_stack_for(int transport)
 static bool internal_heap_ready_for(int stack_bytes)
 {
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    return largest >= (size_t)(stack_bytes + MQTT_TASK_STACK_SLACK);
+    /* Stack alone is not enough: after client_start, DNS/lwIP sems and
+     * phy_track_pll_init also need internal RAM. With largest≈4KB the MQTT
+     * task creates then ESP_ERROR_CHECK(NO_MEM) aborts the chip — which
+     * looks like "open LAN IP → reboot". Keep a hard floor above the stack. */
+    size_t need = (size_t)stack_bytes + (size_t)MQTT_TASK_STACK_SLACK;
+    if (need < 10240) {
+        need = 10240;
+    }
+    return largest >= need;
 }
 
 static void build_broker_uri(char *uri, size_t uri_len, const mqttAttr_t *mqtt)
@@ -207,7 +235,7 @@ void mqtt_publish_telemetry(void)
     /* Last panel frame meta in cJSON; preview b64 appended manually — cJSON
      * Print would duplicate ~230KB and OOM on C61. Base64 needs no escaping. */
     cJSON_AddBoolToObject(root, "frame_present", frame.present);
-    const char *prev = NULL;
+    char *prev = NULL;
     if (frame.present) {
         cJSON_AddNumberToObject(root, "frame_seq", (double)frame.seq);
         cJSON_AddNumberToObject(root, "frame_crc32", (double)frame.crc32);
@@ -215,29 +243,32 @@ void mqtt_publish_telemetry(void)
         cJSON_AddStringToObject(root, "frame_source",
                                 frame.source[0] ? frame.source : "");
         cJSON_AddNumberToObject(root, "frame_bytes", (double)LAST_FRAME_BYTES);
-        prev = last_frame_preview_b64();
+        /* Snapshot under preview lock so URL drop cannot free under our feet. */
+        last_frame_preview_snap_t snap = { 0 };
+        (void)last_frame_preview_snapshot(&snap);
+        prev = snap.b64;
         if (prev && prev[0]) {
-            cJSON_AddStringToObject(root, "frame_preview_mime",
-                                    last_frame_preview_mime());
-            cJSON_AddNumberToObject(root, "frame_preview_w",
-                                    last_frame_preview_w());
-            cJSON_AddNumberToObject(root, "frame_preview_h",
-                                    last_frame_preview_h());
+            cJSON_AddStringToObject(root, "frame_preview_mime", "image/bmp");
+            cJSON_AddNumberToObject(root, "frame_preview_w", snap.w);
+            cJSON_AddNumberToObject(root, "frame_preview_h", snap.h);
         } else {
+            free(prev);
             prev = NULL;
         }
     }
     cJSON_AddNumberToObject(root, "hb", 1);
-    cJSON_AddBoolToObject(root, "online", true);
+    /* online tracks Wi-Fi + MQTT — do not claim cloud-ready when STA is down. */
+    cJSON_AddBoolToObject(root, "online", wifi_sta_is_connected());
+    cJSON_AddBoolToObject(root, "httpServerUp", http_server_is_up());
     cJSON_AddNumberToObject(root, "ts", (double)now_s());
-    ESP_LOGI(TAG, "telemetry build frame_present=%d preview_b64=%u (%dx%d)",
+    ESP_LOGI(TAG, "telemetry build frame_present=%d preview_b64=%u",
              frame.present ? 1 : 0,
-             (unsigned)(prev ? strlen(prev) : 0),
-             last_frame_preview_w(), last_frame_preview_h());
+             (unsigned)(prev ? strlen(prev) : 0));
     char *head = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!head) {
         ESP_LOGE(TAG, "telemetry JSON print OOM");
+        free(prev);
         return;
     }
     char *json = head;
@@ -258,6 +289,7 @@ void mqtt_publish_telemetry(void)
         if (!out) {
             ESP_LOGE(TAG, "telemetry preview append OOM (need %u)", (unsigned)out_len);
             free(head);
+            free(prev);
             return;
         }
         memcpy(out, head, hlen);
@@ -265,9 +297,21 @@ void mqtt_publish_telemetry(void)
         memcpy(out + hlen + strlen(prefix), prev, plen);
         memcpy(out + hlen + strlen(prefix) + plen, suffix, strlen(suffix) + 1);
         free(head);
+        free(prev);
+        prev = NULL;
         json = out;
     }
-    publish_up(json, 0);
+    /* Hold client mutex across publish so mqtt_stop cannot destroy mid-send;
+     * a contended stop returns busy and callers must not persist new broker. */
+    if (!g_MQ.mutex ||
+        xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        free(json);
+        return;
+    }
+    if (g_MQ.client && g_MQ.isConnected) {
+        publish_up(json, 0);
+    }
+    xSemaphoreGive(g_MQ.mutex);
     free(json);
 }
 
@@ -323,8 +367,7 @@ static void handle_command(const char *raw, int len)
     } else if (!strcasecmp(cmd, "clear")) {
         cJSON *c = cJSON_GetObjectItem(p, "color");
         int rc = app_epd_fill_async(cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x11);
-        mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error",
-                           rc == 0 ? "queued" : "render busy");
+        mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
     } else if (!strcasecmp(cmd, "render_text")) {
         cJSON *t = cJSON_GetObjectItem(p, "text");
         cJSON *c = cJSON_GetObjectItem(p, "color");
@@ -353,8 +396,7 @@ static void handle_command(const char *raw, int len)
             }
             int rc = app_epd_render_async(render);
             free(render);
-            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error",
-                                 rc == 0 ? "queued" : "render busy");
+            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
         }
     } else if (!strcasecmp(cmd, "render_canvas")) {
         canvas_t *cv = malloc(sizeof(canvas_t));
@@ -366,8 +408,7 @@ static void handle_command(const char *raw, int len)
             free(cv);
         } else {
             int rc = app_epd_canvas_async(cv);
-            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error",
-                               rc == 0 ? "queued" : "render busy");
+            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
             free(cv);
         }
     } else if (!strcasecmp(cmd, "display_url")) {
@@ -380,8 +421,7 @@ static void handle_command(const char *raw, int len)
             ESP_LOGI(TAG, "display_url queued: %.80s%s", u->valuestring,
                      strlen(u->valuestring) > 80 ? "…" : "");
             int rc = app_epd_url_async(u->valuestring);
-            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error",
-                               rc == 0 ? "queued" : "render busy");
+            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
         }
     } else if (!strcasecmp(cmd, "reboot")) {
         mqtt_publish_cmd_ack(cmd, "ok", "rebooting");
@@ -453,22 +493,41 @@ static void cmd_task(void *arg)
     }
 }
 
-static void enqueue_command(const char *data, int len)
+/* Take ownership of buf (NUL room at buf[len]). Worker frees after handle. */
+static void enqueue_command_owned(char *buf, int len)
+{
+    if (!buf) {
+        return;
+    }
+    if (len <= 0 || len >= CMD_BUF_SIZE) {
+        ESP_LOGW(TAG, "command size %d rejected", len);
+        mqtt_publish_cmd_ack("(queue)", "error", "command too large");
+        free(buf);
+        return;
+    }
+    buf[len] = '\0';
+    if (xQueueSend(g_MQ.cmdQueue, &buf, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "command queue full — drop %d bytes", len);
+        mqtt_publish_cmd_ack("(queue)", "error", "device busy");
+        free(buf);
+    }
+}
+
+static void enqueue_command_copy(const char *data, int len)
 {
     if (len <= 0 || len >= CMD_BUF_SIZE) {
         ESP_LOGW(TAG, "command size %d rejected", len);
+        mqtt_publish_cmd_ack("(queue)", "error", "command too large");
         return;
     }
     char *copy = malloc((size_t)len + 1);
     if (!copy) {
+        ESP_LOGE(TAG, "command OOM (%d bytes)", len);
+        mqtt_publish_cmd_ack("(queue)", "error", "out of memory");
         return;
     }
     memcpy(copy, data, (size_t)len);
-    copy[len] = 0;
-    if (xQueueSend(g_MQ.cmdQueue, &copy, 0) != pdTRUE) {
-        mqtt_publish_cmd_ack("(queue)", "error", "device busy");
-        free(copy);
-    }
+    enqueue_command_owned(copy, len);
 }
 
 static void rx_reset(void)
@@ -481,23 +540,26 @@ static void rx_reset(void)
 
 static void handle_data_event(esp_mqtt_event_handle_t event)
 {
-    /* Single-chunk fast path */
+    /* Single-chunk fast path — must copy; MQTT buffer is transient. */
     if (event->total_data_len > 0 &&
         event->current_data_offset == 0 &&
         event->data_len == event->total_data_len) {
-        enqueue_command(event->data, event->data_len);
+        enqueue_command_copy(event->data, event->data_len);
         return;
     }
 
-    /* Reassemble fragmented payloads (large render_canvas). */
+    /* Reassemble fragmented payloads; transfer ownership to the cmd queue. */
     if (event->current_data_offset == 0) {
         rx_reset();
         if (event->total_data_len <= 0 || event->total_data_len >= CMD_BUF_SIZE) {
             ESP_LOGW(TAG, "command too large (%d)", event->total_data_len);
+            mqtt_publish_cmd_ack("(queue)", "error", "command too large");
             return;
         }
         g_MQ.rxBuf = malloc((size_t)event->total_data_len + 1);
         if (!g_MQ.rxBuf) {
+            ESP_LOGE(TAG, "fragment OOM (%d)", event->total_data_len);
+            mqtt_publish_cmd_ack("(queue)", "error", "out of memory");
             return;
         }
         g_MQ.rxTotal = event->total_data_len;
@@ -518,8 +580,12 @@ static void handle_data_event(esp_mqtt_event_handle_t event)
     memcpy(g_MQ.rxBuf + g_MQ.rxLen, event->data, (size_t)event->data_len);
     g_MQ.rxLen += event->data_len;
     if (g_MQ.rxLen >= g_MQ.rxTotal) {
-        enqueue_command(g_MQ.rxBuf, g_MQ.rxTotal);
-        rx_reset();
+        char *owned = g_MQ.rxBuf;
+        int total = g_MQ.rxTotal;
+        g_MQ.rxBuf = NULL;
+        g_MQ.rxLen = 0;
+        g_MQ.rxTotal = 0;
+        enqueue_command_owned(owned, total);
     }
 }
 
@@ -535,10 +601,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         int sub = esp_mqtt_client_subscribe(g_MQ.client, g_MQ.topicDown, qos);
         if (sub < 0) {
             ESP_LOGE(TAG, "subscribe failed (down=%d) — not marking online", sub);
+            evtlog_event("MQTT", "subscribe fail rc=%d", sub);
             g_MQ.isConnected = false;
             break;
         }
         g_MQ.isConnected = true;
+        mqtt_clear_fail();
+        evtlog_event("MQTT", "connected sub=%s qos=%d", g_MQ.topicDown, qos);
         publish_status("online", 1);
         /* Do NOT publish full telemetry (≈160KB preview) here — it races
          * PAGE/BLE enter, fragments internal RAM, and causes NimBLE/Wi-Fi
@@ -547,6 +616,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "disconnected");
+        evtlog_event("MQTT", "disconnected");
         g_MQ.isConnected = false;
         rx_reset();
         break;
@@ -562,8 +632,37 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                      event->error_handle->error_type,
                      event->error_handle->esp_tls_last_esp_err,
                      event->error_handle->esp_tls_stack_err);
+            evtlog_event("MQTT", "error type=%d tls=0x%x",
+                         event->error_handle->error_type,
+                         event->error_handle->esp_tls_last_esp_err);
+            if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+                s_connectRefused = true;
+                switch (event->error_handle->connect_return_code) {
+                case MQTT_CONNECTION_REFUSE_BAD_USERNAME:
+                    mqtt_set_fail("bad username or password");
+                    break;
+                case MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED:
+                    mqtt_set_fail("not authorized");
+                    break;
+                case MQTT_CONNECTION_REFUSE_ID_REJECTED:
+                    mqtt_set_fail("client id rejected");
+                    break;
+                case MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE:
+                    mqtt_set_fail("broker unavailable");
+                    break;
+                case MQTT_CONNECTION_REFUSE_PROTOCOL:
+                    mqtt_set_fail("protocol refused");
+                    break;
+                default:
+                    mqtt_set_fail("connection refused by broker");
+                    break;
+                }
+            } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+                mqtt_set_fail("TLS/TCP transport failed");
+            }
         } else {
             ESP_LOGE(TAG, "error (no detail)");
+            evtlog_event("MQTT", "error (no detail)");
         }
         break;
     default:
@@ -578,15 +677,26 @@ static void telemetry_timer_cb(void *arg)
 }
 
 static void mqtt_start_retry_cb(void *arg);
+static void mqtt_bringup_task(void *arg);
+
+static SemaphoreHandle_t s_bringupSem;
+static volatile bool s_bringupPending;
 
 void mqtt_open(void)
 {
     memset(&g_MQ, 0, sizeof(mdMqtt_t));
     g_MQ.mutex = xSemaphoreCreateMutex();
     g_MQ.cmdQueue = xQueueCreate(CMD_QUEUE_LEN, sizeof(char *));
-    /* Keep ≤8KB — larger stacks here starve wifi_start (lock_init abort loop).
+    s_bringupSem = xSemaphoreCreateBinary();
+    /* Keep lean — 8KB here + httpd 5K left largest_int ≈640 after boot paint
+     * and wifi_start, so the MQTT client task (3K TCP / 8K TLS) never started.
      * Long render_text uses heap-backed espd_render_t. */
-    xTaskCreate(cmd_task, "mqtt_cmd", 8192, NULL, 5, NULL);
+    xTaskCreate(cmd_task, "mqtt_cmd", 5120, NULL, 5, NULL);
+    /* Permanent bring-up worker — created at boot while internal heap is whole.
+     * Spawning 6KB mqtt_up later (SoftAP/test) hits NO_MEM and testMqtt hangs. */
+    if (s_bringupSem) {
+        xTaskCreate(mqtt_bringup_task, "mqtt_up", 6144, NULL, 5, NULL);
+    }
 
     const esp_timer_create_args_t timerArgs = {
         .name = "telemetry", .callback = telemetry_timer_cb,
@@ -720,6 +830,63 @@ static bool mqtt_esp_start_locked(void)
     return true;
 }
 
+/**
+ * Heavy MQTT bring-up must NOT run on sys_evt (GOT_IP) — that task has ~2.8KB
+ * stack and Stack-protection-fault reboots the device. SoftAP heap coalesce is
+ * also too big for sys_evt. Worker is created once in mqtt_open().
+ */
+static void mqtt_bringup_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        if (!s_bringupSem || xSemaphoreTake(s_bringupSem, portMAX_DELAY) != pdTRUE) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+        s_bringupPending = false;
+
+        if (wifi_ble_prov_is_up()) {
+            continue;
+        }
+
+        /* Wait briefly for httpd/Wi-Fi heap to settle — never stop httpd here. */
+        mqttAttr_t peek;
+        cfg_get_mqtt_attr(&peek);
+        const int need_stack = mqtt_task_stack_for(peek.transport);
+        for (int i = 0; i < 30 && peek.host[0] && !internal_heap_ready_for(need_stack); i++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        xSemaphoreTake(g_MQ.mutex, portMAX_DELAY);
+        if (g_MQ.client) {
+            xSemaphoreGive(g_MQ.mutex);
+            continue;
+        }
+        size_t free_heap = esp_get_free_heap_size();
+        if (free_heap < MQTT_START_MIN_HEAP ||
+            (peek.host[0] && !internal_heap_ready_for(need_stack))) {
+            ESP_LOGW(TAG, "defer start — free %u largest_int %u need_stack %d",
+                     (unsigned)free_heap,
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                     need_stack);
+            xSemaphoreGive(g_MQ.mutex);
+            if (s_startRetryTimer) {
+                esp_timer_stop(s_startRetryTimer);
+                esp_timer_start_once(s_startRetryTimer, 2000000ULL);
+            }
+            continue;
+        }
+        if (mqtt_esp_start_locked()) {
+            esp_timer_stop(s_telemetryTimer);
+            esp_timer_start_periodic(s_telemetryTimer, TELEMETRY_PERIOD_US);
+        } else if (s_startRetryTimer) {
+            esp_timer_stop(s_startRetryTimer);
+            esp_timer_start_once(s_startRetryTimer, 5000000ULL);
+        }
+        xSemaphoreGive(g_MQ.mutex);
+    }
+}
+
 static void mqtt_start_retry_cb(void *arg)
 {
     (void)arg;
@@ -728,44 +895,47 @@ static void mqtt_start_retry_cb(void *arg)
 
 void mqtt_start(void)
 {
-    xSemaphoreTake(g_MQ.mutex, portMAX_DELAY);
-    if (g_MQ.client) {
-        xSemaphoreGive(g_MQ.mutex);
-        return;
-    }
-    size_t free_heap = esp_get_free_heap_size();
-    if (free_heap < MQTT_START_MIN_HEAP) {
-        ESP_LOGW(TAG, "defer start — free heap %u < %u",
-                 (unsigned)free_heap, (unsigned)MQTT_START_MIN_HEAP);
-        xSemaphoreGive(g_MQ.mutex);
+    /* SoftAP XOR BLE: never recreate the client while NimBLE owns the radio. */
+    if (wifi_ble_prov_is_up()) {
+        ESP_LOGW(TAG, "skip start — BLE CT-Prov is up");
         if (s_startRetryTimer) {
             esp_timer_stop(s_startRetryTimer);
-            esp_timer_start_once(s_startRetryTimer, 2000000ULL);
         }
         return;
     }
-    if (mqtt_esp_start_locked()) {
-        esp_timer_stop(s_telemetryTimer);
-        esp_timer_start_periodic(s_telemetryTimer, TELEMETRY_PERIOD_US);
-    } else if (s_startRetryTimer) {
-        esp_timer_stop(s_startRetryTimer);
-        esp_timer_start_once(s_startRetryTimer, 5000000ULL);
+    if (g_MQ.client) {
+        return;
     }
-    xSemaphoreGive(g_MQ.mutex);
+    if (!s_bringupSem) {
+        ESP_LOGW(TAG, "mqtt_start before mqtt_open");
+        return;
+    }
+    if (s_bringupPending) {
+        return;
+    }
+    s_bringupPending = true;
+    xSemaphoreGive(s_bringupSem);
 }
 
-void mqtt_stop(void)
+int mqtt_stop(void)
 {
     if (!g_MQ.mutex) {
-        return; /* mqtt_open not called yet */
+        return 0; /* mqtt_open not called yet */
+    }
+    /* Cancel deferred starts before waiting — otherwise a pending
+     * mqtt_start_retry can recreate the client during BLE enter. */
+    if (s_startRetryTimer) {
+        esp_timer_stop(s_startRetryTimer);
+    }
+    /* Bounded wait — SoftAP↔BLE XOR must not hang on a large telemetry outbox.
+     * Do NOT stop the telemetry timer before the lock: a failed take would leave
+     * the client running with periodic telemetry permanently disabled. */
+    if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(1500)) != pdTRUE) {
+        ESP_LOGW(TAG, "mqtt_stop: mutex busy — client may still be running");
+        return -1;
     }
     if (s_telemetryTimer) {
         esp_timer_stop(s_telemetryTimer);
-    }
-    /* Bounded wait — SoftAP↔BLE XOR must not hang on a large telemetry outbox. */
-    if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(1500)) != pdTRUE) {
-        ESP_LOGW(TAG, "mqtt_stop: mutex busy — skipping clean stop");
-        return;
     }
     g_MQ.isConnected = false; /* prevent further telemetry while tearing down */
     /* Do not publish offline here — QoS1 + preview telemetry can block for seconds. */
@@ -778,17 +948,50 @@ void mqtt_stop(void)
     }
     rx_reset();
     xSemaphoreGive(g_MQ.mutex);
+    return 0;
 }
 
-void mqtt_restart(void)
+int mqtt_stop_wait(int budget_ms)
 {
-    mqtt_stop();
+    if (budget_ms < 0) {
+        budget_ms = 0;
+    }
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(budget_ms);
+    int attempt = 0;
+    for (;;) {
+        if (mqtt_stop() == 0) {
+            return 0;
+        }
+        attempt++;
+        TickType_t now = xTaskGetTickCount();
+        if ((int32_t)(deadline - now) <= 0) {
+            ESP_LOGE(TAG, "mqtt_stop_wait: still busy after %d ms (%d tries)",
+                     budget_ms, attempt);
+            return -1;
+        }
+        ESP_LOGW(TAG, "mqtt_stop_wait: retry %d", attempt);
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+}
+
+int mqtt_restart(void)
+{
+    if (mqtt_stop_wait(4000) != 0) {
+        ESP_LOGE(TAG, "mqtt_restart aborted — stop busy; old client kept");
+        return -1;
+    }
     mqtt_start();
+    return 0;
 }
 
 bool mqtt_is_connected(void)
 {
     return g_MQ.isConnected;
+}
+
+bool mqtt_is_started(void)
+{
+    return g_MQ.client != NULL;
 }
 
 int mqtt_test_ping(int timeout_ms, char *errBuf, int errLen)
@@ -810,23 +1013,55 @@ int mqtt_test_ping(int timeout_ms, char *errBuf, int errLen)
         }
         return -1;
     }
+    /* Already up — return immediately. Do NOT publish here: telemetry may hold
+     * the client lock for a large preview and would wedge the httpd worker. */
+    if (g_MQ.isConnected && g_MQ.client) {
+        if (errBuf) {
+            snprintf(errBuf, errLen, "ok → %s (already connected)", g_MQ.topicUp);
+        }
+        return 0;
+    }
+
+    /* Transport is explicit (mqtt | mqtts) — never infer from port. */
+    const bool softap = wifi_softap_is_up();
+    mqtt_clear_fail();
     mqtt_start();
     int waited = 0;
     while (!g_MQ.isConnected && waited < timeout_ms) {
+        if (s_connectRefused && s_lastFail[0]) {
+            break; /* broker answered — no point waiting out the full budget */
+        }
         vTaskDelay(pdMS_TO_TICKS(100));
         waited += 100;
+        /* Start may have been deferred for heap — keep trying. */
+        if (!g_MQ.client && (waited % 1000) == 0) {
+            mqtt_start();
+        }
     }
+    int rc = 0;
     if (!g_MQ.isConnected || !g_MQ.client) {
         if (errBuf) {
-            snprintf(errBuf, errLen, "connect timeout (%d ms) → %s://%s:%d",
-                     timeout_ms, mqtt_transport_str(mqtt.transport),
-                     mqtt.host, mqtt.port > 0 ? mqtt.port : mqtt_default_port(mqtt.transport));
+            if (s_lastFail[0]) {
+                snprintf(errBuf, errLen, "%s → %s://%s:%d",
+                         s_lastFail, mqtt_transport_str(mqtt.transport),
+                         mqtt.host, mqtt.port > 0 ? mqtt.port : mqtt_default_port(mqtt.transport));
+            } else {
+                snprintf(errBuf, errLen, "connect timeout (%d ms) → %s://%s:%d",
+                         timeout_ms, mqtt_transport_str(mqtt.transport),
+                         mqtt.host, mqtt.port > 0 ? mqtt.port : mqtt_default_port(mqtt.transport));
+            }
         }
-        return -1;
+        rc = -1;
+        /* SoftAP + failed probe: stop so TLS/auth retries do not freeze the UI.
+         * STA-only: leave client running (same as old firmware). */
+        if (softap) {
+            (void)mqtt_stop_wait(3000);
+        }
+    } else {
+        /* Do not publish on the httpd task — status/telemetry can block for seconds. */
+        if (errBuf) {
+            snprintf(errBuf, errLen, "ok → %s (%d ms)", g_MQ.topicUp, waited);
+        }
     }
-    mqtt_publish_telemetry();
-    if (errBuf) {
-        snprintf(errBuf, errLen, "ok → %s (%d ms)", g_MQ.topicUp, waited);
-    }
-    return 0;
+    return rc;
 }

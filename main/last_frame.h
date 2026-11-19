@@ -50,14 +50,32 @@ int last_frame_get_meta(last_frame_meta_t *out);
 
 /**
  * Cached MQTT preview of the last frame (≤200KB 8bpp BMP, base64).
- * Built on save / boot when a frame is present. NULL if unavailable.
- * Lifetime: valid until next frame commit replaces it.
+ * Prefer last_frame_preview_snapshot() from MQTT — raw getters are not
+ * safe across concurrent preview_drop / rebuild.
  */
 const char *last_frame_preview_b64(void);
 int last_frame_preview_w(void);
 int last_frame_preview_h(void);
 /** Always "image/bmp" when preview is present. */
 const char *last_frame_preview_mime(void);
+
+typedef struct {
+    char *b64; /* heap copy — caller free(); NULL if no preview */
+    int w;
+    int h;
+} last_frame_preview_snap_t;
+
+/**
+ * Copy preview b64 + dimensions under the preview lock (same frame).
+ * Returns 0 always; out->b64 NULL when unavailable. Caller frees out->b64.
+ */
+int last_frame_preview_snapshot(last_frame_preview_snap_t *out);
+
+/**
+ * Free in-RAM preview (≈160KB SPIRAM). Call before large URL decode;
+ * rebuilds automatically on the next successful frame commit.
+ */
+void last_frame_preview_drop(void);
 
 /**
  * Read the native frame into caller buffer (must be LAST_FRAME_BYTES).

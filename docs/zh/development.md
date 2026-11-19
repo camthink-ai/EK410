@@ -22,11 +22,13 @@ idf.py -p /dev/cu.wchusbserialXXXX flash monitor
 ### 便捷脚本（单镜像）
 
 ```bash
-bash tools/build_dual_sku.sh
-bash tools/flash_dual_sku.sh /dev/cu.wchusbserialXXXX
+bash tools/build_release.sh
+bash tools/flash_release.sh /dev/cu.wchusbserialXXXX
+python3 tools/ct_prov_xor_test.py --port /dev/cu.wchusbserialXXXX
 ```
 
-`sdkconfig` 不入库；默认（含 NimBLE）见 `sdkconfig.defaults`。
+一套 `sdkconfig.defaults` → 一份 `ek410.bin`。SoftAP 与 BLE CT-Prov 同镜像，
+运行时互斥。`sdkconfig` 不入库。
 
 ## 配置页
 

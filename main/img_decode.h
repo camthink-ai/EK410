@@ -49,9 +49,21 @@ int img_decode_to_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, int *w
  * SoftAP-style E6 FS at source res + cover into panel. Consumes/frees `rgb`.
  * Returns a process-lifetime panel FB in *fb_out (do not free — use
  * img_fb_release). QUALITY may nearest-upscale RGB toward the budget before FS.
+ * On 2MB C61 this may fail after a large HTTPS body (fragmentation); prefer
+ * img_rgb_dither_codes + streaming cover for the URL path.
  */
 int img_rgb_dither_alloc_fb(uint8_t *rgb, int w, int h, uint8_t **fb_out,
                             img_proc_mode_t mode);
+
+/**
+ * Dither RGB → packed ink codes (*codes_out, length w*h). Consumes/frees `rgb`.
+ * Caller frees *codes_out. Use with img_codes_cover_pixel + panel stream.
+ */
+int img_rgb_dither_codes(uint8_t *rgb, int w, int h, uint8_t **codes_out, int *cw_out,
+                         int *ch_out, img_proc_mode_t mode);
+
+/** Cover-fit sample: logical (lx,ly) on 1600×1200 → ink from codes[sw×sh]. */
+uint8_t img_codes_cover_pixel(const uint8_t *codes, int sw, int sh, int lx, int ly);
 
 /** Convenience: decode + dither; *fb_out via img_rgb_dither_alloc_fb. */
 int img_decode_alloc_fb(const uint8_t *data, size_t len, uint8_t **fb_out,

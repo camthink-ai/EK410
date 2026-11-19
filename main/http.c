@@ -25,6 +25,9 @@
  *        {mode:always|cycle|hibernate, sleepMin, wakeSec, wakeUrl,
  *         imageQuality:"quality"|"speed"}
  * POST /api/v1/system/sleepNow            deep sleep (MAIN wakes; cycle also timer)
+ * GET  /api/v1/system/getEventLogMeta     {present,bytes,seq,capBytes,keepDays,timeOk}
+ * GET  /api/v1/system/eventLog            text/plain download (critical events)
+ * POST /api/v1/system/clearEventLog
  *
  * Handlers return the data JSON directly (no envelope), like lowpower_camera.
  */
@@ -34,6 +37,7 @@
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -52,6 +56,7 @@
 #include "sleep.h"
 #include "led.h"
 #include "last_frame.h"
+#include "evtlog.h"
 #include "ct_prov.h"
 #include "www_html.h"
 
@@ -133,7 +138,9 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
         cfg_get_wifi_attr(&w);
         cJSON_AddStringToObject(obj, "wifiSsid", w.ssid);
     }
-    cJSON_AddBoolToObject(obj, "mqttConnected", mqtt_is_connected());
+    cJSON_AddBoolToObject(obj, "mqttConnected",
+                          mqtt_is_connected() && wifi_sta_is_connected());
+    cJSON_AddBoolToObject(obj, "httpServerUp", http_server_is_up());
     cJSON_AddBoolToObject(obj, "softapUp", wifi_softap_is_up());
     cJSON_AddBoolToObject(obj, "bleProvUp", wifi_ble_prov_is_up());
     /* Single image always includes NimBLE CT-Prov (XOR with SoftAP). */
@@ -141,6 +148,12 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "projectName", ota_running_project_name());
     cJSON_AddBoolToObject(obj, "provisioned", config_is_provisioned());
     cJSON_AddBoolToObject(obj, "panelOk", app_epd_panel_ok());
+    {
+        evtlog_meta_t em;
+        evtlog_get_meta(&em);
+        cJSON_AddBoolToObject(obj, "evtLogPresent", em.present);
+        cJSON_AddNumberToObject(obj, "evtLogBytes", em.bytes);
+    }
     if (wifi_softap_is_up()) {
         cJSON_AddStringToObject(obj, "softApPass", "12345678");
     }
@@ -405,19 +418,51 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (cJSON_IsString(user)) {
         strlcpy(mqtt.username, user->valuestring, sizeof(mqtt.username));
     }
-    if (cJSON_IsString(pass)) {
+    /* Empty password in the form means "unchanged" — browsers often leave the
+     * field blank; clearing NVS here broke auth and wedged Testing MQTT. */
+    if (cJSON_IsString(pass) && pass->valuestring[0] != '\0') {
         strlcpy(mqtt.password, pass->valuestring, sizeof(mqtt.password));
     }
     if (cJSON_IsBool(tlsVerify)) {
         mqtt.tlsVerify = cJSON_IsTrue(tlsVerify);
     }
-    cfg_set_mqtt_attr(&mqtt);
+
+    mqttAttr_t prev;
+    cfg_get_mqtt_attr(&prev);
+    const bool same_broker =
+        prev.transport == mqtt.transport &&
+        prev.port == mqtt.port &&
+        prev.tlsVerify == mqtt.tlsVerify &&
+        strcmp(prev.host, mqtt.host) == 0 &&
+        strcmp(prev.username, mqtt.username) == 0 &&
+        strcmp(prev.password, mqtt.password) == 0;
+    const bool ca_touch = cJSON_IsString(caPem) && caPem->valuestring[0] != '\0';
+    /* Test button always POSTs setMqttParam first. If nothing changed and we
+     * are already online, skip stop/restart. */
+    const bool keep_live = same_broker && !ca_touch && mqtt_is_connected();
+
+    if (wifi_sta_is_connected() && !keep_live) {
+        /* Stop old client BEFORE persist — otherwise a busy restart leaves NVS
+         * on the new broker while the live client still talks to the old one. */
+        if (mqtt_stop_wait(4000) != 0) {
+            cJSON_Delete(root);
+            return send_err(req, "mqtt stop busy");
+        }
+    }
+    /* CA before broker attrs: if CA NVS fails, leave host/port unchanged. */
     if (cJSON_IsString(caPem)) {
-        cfg_set_mqtt_ca_pem(caPem->valuestring);
+        if (cfg_set_mqtt_ca_pem(caPem->valuestring) != ESP_OK) {
+            cJSON_Delete(root);
+            return send_err(req, "mqtt CA save failed");
+        }
+    }
+    if (cfg_set_mqtt_attr(&mqtt) != ESP_OK) {
+        cJSON_Delete(root);
+        return send_err(req, "mqtt config save failed");
     }
     cJSON_Delete(root);
-    if (wifi_sta_is_connected()) {
-        mqtt_restart();
+    if (wifi_sta_is_connected() && !keep_live) {
+        mqtt_start();
     }
     return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
 }
@@ -524,7 +569,9 @@ static esp_err_t close_ble_handle(httpd_req_t *req)
 static esp_err_t test_mqtt_handle(httpd_req_t *req)
 {
     char err[96];
-    int rc = mqtt_test_ping(8000, err, sizeof(err));
+    /* Cap wait — httpd worker must not sit in mqtt_test_ping for long or the
+     * SoftAP/LAN UI looks frozen on "Testing MQTT…". */
+    int rc = mqtt_test_ping(5000, err, sizeof(err));
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddNumberToObject(obj, "code", rc == 0 ? 0 : 1);
     cJSON_AddStringToObject(obj, "msg", err[0] ? err : (rc == 0 ? "ok" : "failed"));
@@ -571,17 +618,18 @@ static esp_err_t display_render_text_handle(httpd_req_t *req)
     free(render);
     cJSON_Delete(root);
     if (rc != 0) {
-        return send_err(req, "render busy");
+        return send_err(req, app_epd_queue_err(rc));
     }
-    return send_json(req, "{\"code\":0,\"msg\":\"rendering\"}");
+    return send_json(req, "{\"code\":0,\"msg\":\"queued\"}");
 }
 
 static esp_err_t display_test_pattern_handle(httpd_req_t *req)
 {
-    if (app_epd_test_pattern_async() != 0) {
-        return send_err(req, "render busy");
+    int rc = app_epd_test_pattern_async();
+    if (rc != 0) {
+        return send_err(req, app_epd_queue_err(rc));
     }
-    return send_json(req, "{\"code\":0,\"msg\":\"rendering\"}");
+    return send_json(req, "{\"code\":0,\"msg\":\"queued\"}");
 }
 
 static esp_err_t display_render_canvas_handle(httpd_req_t *req)
@@ -617,9 +665,9 @@ static esp_err_t display_render_canvas_handle(httpd_req_t *req)
     int rc = app_epd_canvas_async(cv);
     free(cv);
     if (rc != 0) {
-        return send_err(req, "render busy");
+        return send_err(req, app_epd_queue_err(rc));
     }
-    return send_json(req, "{\"code\":0,\"msg\":\"rendering\"}");
+    return send_json(req, "{\"code\":0,\"msg\":\"queued\"}");
 }
 
 static esp_err_t display_url_handle(httpd_req_t *req)
@@ -642,8 +690,9 @@ static esp_err_t display_url_handle(httpd_req_t *req)
     int rc = app_epd_url_async(u->valuestring);
     cJSON_Delete(root);
     if (rc != 0) {
-        return send_err(req, "render busy");
+        return send_err(req, app_epd_queue_err(rc));
     }
+    /* Accepted onto the render queue — panel refresh finishes later. */
     return send_json(req, "{\"code\":0,\"msg\":\"queued\"}");
 }
 
@@ -722,6 +771,9 @@ static esp_err_t display_upload_frame_handle(httpd_req_t *req)
 {
     if (req->content_len != 960000) {
         return send_err(req, "body must be a raw 960000-byte frame");
+    }
+    if (!app_epd_jobs_accepted()) {
+        return send_err(req, "sleep pending");
     }
     if (epd_upload_start() != 0) {
         return send_err(req, "panel busy");
@@ -941,6 +993,9 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
     cJSON_Delete(root);
     cfg_set_power_attr(&p);
     cfg_get_power_attr(&p); /* re-read normalized values */
+    evtlog_event("SYS", "power mode=%s sleepMin=%d wakeSec=%d img=%s",
+                 power_mode_str(p.mode), p.sleepMin, p.wakeSec,
+                 img_quality_str(p.imageQuality));
 
     bool sleepSoon = false;
     if (p.mode == POWER_MODE_CYCLE) {
@@ -978,13 +1033,117 @@ static esp_err_t sleep_now_handle(httpd_req_t *req)
     return res;
 }
 
+static esp_err_t get_event_log_meta_handle(httpd_req_t *req)
+{
+    softap_touch();
+    evtlog_meta_t m;
+    evtlog_get_meta(&m);
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddBoolToObject(obj, "present", m.present);
+    cJSON_AddNumberToObject(obj, "bytes", m.bytes);
+    cJSON_AddNumberToObject(obj, "seq", m.seq);
+    cJSON_AddNumberToObject(obj, "capBytes", m.cap_bytes);
+    cJSON_AddNumberToObject(obj, "keepDays", m.keep_days);
+    cJSON_AddBoolToObject(obj, "timeOk", m.time_ok);
+    char *s = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    if (!s) {
+        return send_err(req, "OOM");
+    }
+    esp_err_t res = send_json(req, s);
+    free(s);
+    return res;
+}
+
+typedef struct {
+    httpd_req_t *req;
+    bool hdr_sent;
+} evtlog_http_ctx_t;
+
+static int evtlog_http_writer(const uint8_t *data, size_t len, void *ctx)
+{
+    evtlog_http_ctx_t *c = (evtlog_http_ctx_t *)ctx;
+    if (!c->hdr_sent) {
+        httpd_resp_set_type(c->req, "text/plain; charset=utf-8");
+        httpd_resp_set_hdr(c->req, "Content-Disposition",
+                           "attachment; filename=\"ek410-event.log\"");
+        httpd_resp_set_hdr(c->req, "Cache-Control", "no-store");
+        c->hdr_sent = true;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    return httpd_resp_send_chunk(c->req, (const char *)data, len) == ESP_OK ? 0 : -1;
+}
+
+static esp_err_t get_event_log_handle(httpd_req_t *req)
+{
+    softap_touch();
+    evtlog_meta_t m;
+    evtlog_get_meta(&m);
+    if (!m.present) {
+        return send_err(req, "event log unavailable");
+    }
+    evtlog_http_ctx_t ctx = { .req = req, .hdr_sent = false };
+    int rc = evtlog_stream(evtlog_http_writer, &ctx);
+    if (rc == -2) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return send_err(req, "event log busy");
+    }
+    if (!ctx.hdr_sent) {
+        /* Empty log still returns a downloadable file. */
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        httpd_resp_set_hdr(req, "Content-Disposition",
+                           "attachment; filename=\"ek410-event.log\"");
+        return httpd_resp_sendstr(req, "# EK410 event log (empty)\n");
+    }
+    if (rc != 0) {
+        httpd_resp_send_chunk(req, NULL, 0);
+        return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+static esp_err_t clear_event_log_handle(httpd_req_t *req)
+{
+    softap_touch();
+    evtlog_meta_t m;
+    evtlog_get_meta(&m);
+    if (!m.present) {
+        return send_err(req, "event log unavailable");
+    }
+    evtlog_clear();
+    return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
+}
+
 /* ---------- static page ---------- */
 
 static esp_err_t get_root_handler(httpd_req_t *req)
 {
     softap_touch();
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, INDEX_HTML, strlen(INDEX_HTML));
+    /*
+     * INDEX is ~212KB raw. Pushing that over STA while MQTT holds Wi-Fi buffers
+     * causes wifi:mem fail → accept(113) → otadata NO_MEM → stack panic/reboot.
+     * Serve pre-gzipped blob (~58KB) with Content-Encoding so wire traffic stays
+     * small; still chunk + yield so TX rings can drain.
+     */
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    const size_t total = INDEX_HTML_GZ_LEN;
+    const size_t chunk = 2048;
+    for (size_t off = 0; off < total; off += chunk) {
+        size_t n = total - off;
+        if (n > chunk) {
+            n = chunk;
+        }
+        if (httpd_resp_send_chunk(req, (const char *)(INDEX_HTML_GZ + off), n) != ESP_OK) {
+            httpd_resp_send_chunk(req, NULL, 0);
+            return ESP_FAIL;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 /* ---------- registration ---------- */
@@ -1017,15 +1176,32 @@ static const httpd_uri_t g_handlers[] = {
     { .uri = "/api/v1/system/getPowerParam", .method = HTTP_GET, .handler = get_power_param_handle },
     { .uri = "/api/v1/system/setPowerParam", .method = HTTP_POST, .handler = set_power_param_handle },
     { .uri = "/api/v1/system/sleepNow", .method = HTTP_POST, .handler = sleep_now_handle },
+    { .uri = "/api/v1/system/getEventLogMeta", .method = HTTP_GET, .handler = get_event_log_meta_handle },
+    { .uri = "/api/v1/system/eventLog", .method = HTTP_GET, .handler = get_event_log_handle },
+    { .uri = "/api/v1/system/clearEventLog", .method = HTTP_POST, .handler = clear_event_log_handle },
     /* NeoLink CT-Prov/1 SoftAP binding (§16) — also reachable on STA IP for tests. */
     { .uri = "/api/v1/ctprov", .method = HTTP_POST, .handler = ct_prov_http_handle },
 };
 
 static httpd_handle_t s_httpd;
+static volatile bool s_httpdStopping;
+static SemaphoreHandle_t s_httpdStopDone;
 
 bool http_server_is_up(void)
 {
     return s_httpd != NULL;
+}
+
+bool http_server_is_stopping(void)
+{
+    return s_httpdStopping;
+}
+
+static void httpd_stop_done_ensure(void)
+{
+    if (!s_httpdStopDone) {
+        s_httpdStopDone = xSemaphoreCreateBinary();
+    }
 }
 
 static void httpd_stop_task(void *arg)
@@ -1037,29 +1213,68 @@ static void httpd_stop_task(void *arg)
     } else {
         ESP_LOGI(TAG, "web server stopped");
     }
+    s_httpdStopping = false;
+    if (s_httpdStopDone) {
+        xSemaphoreGive(s_httpdStopDone);
+    }
     vTaskDelete(NULL);
 }
 
 void http_server_stop(void)
 {
+    if (s_httpdStopping) {
+        return;
+    }
     if (!s_httpd) {
         return;
     }
+    httpd_stop_done_ensure();
+    if (s_httpdStopDone) {
+        xSemaphoreTake(s_httpdStopDone, 0); /* clear stale */
+    }
     httpd_handle_t h = s_httpd;
     s_httpd = NULL;
+    s_httpdStopping = true;
     /*
      * httpd_stop() can block forever on lingering TCP sessions — never call it
-     * synchronously on the BLE/SoftAP toggle path. If the helper task cannot
-     * be created (NO_MEM), abandon the handle; Wi-Fi teardown + NimBLE still
-     * proceed (orphan httpd RAM returns on next reboot).
+     * synchronously on the BLE/SoftAP toggle path. Retry task create briefly
+     * so SoftAP close can wait for a real teardown before restarting.
      */
-    /* 2K stack: only calls httpd_stop; keep lean so BLE enter can arm it
-     * after Wi-Fi teardown when largest_int is tight. */
-    if (xTaskCreate(httpd_stop_task, "httpd_off", 2048, h, 6, NULL) != pdPASS) {
-        ESP_LOGW(TAG, "httpd_off task NO_MEM — abandon handle (no sync stop)");
-    } else {
-        ESP_LOGI(TAG, "web server stop armed");
+    for (int i = 0; i < 8; i++) {
+        if (xTaskCreate(httpd_stop_task, "httpd_off", 2048, h, 6, NULL) == pdPASS) {
+            ESP_LOGI(TAG, "web server stop armed");
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
+    ESP_LOGW(TAG, "httpd_off task NO_MEM — abandon handle (no sync stop)");
+    s_httpdStopping = false;
+    if (s_httpdStopDone) {
+        xSemaphoreGive(s_httpdStopDone);
+    }
+}
+
+int http_server_stop_wait(int budget_ms)
+{
+    if (!s_httpd && !s_httpdStopping) {
+        return 0;
+    }
+    if (s_httpd && !s_httpdStopping) {
+        http_server_stop();
+    }
+    if (!s_httpdStopping) {
+        return 0;
+    }
+    httpd_stop_done_ensure();
+    if (!s_httpdStopDone) {
+        vTaskDelay(pdMS_TO_TICKS(budget_ms > 0 ? budget_ms : 200));
+        return s_httpdStopping ? -1 : 0;
+    }
+    TickType_t ticks = pdMS_TO_TICKS(budget_ms > 0 ? budget_ms : 1);
+    if (xSemaphoreTake(s_httpdStopDone, ticks) == pdTRUE) {
+        return 0;
+    }
+    return s_httpdStopping ? -1 : 0;
 }
 
 void http_server_start(void)
@@ -1067,12 +1282,23 @@ void http_server_start(void)
     if (s_httpd) {
         return;
     }
+    /* Do not race a still-running httpd_stop (port still bound). */
+    if (s_httpdStopping) {
+        (void)http_server_stop_wait(1500);
+        if (s_httpdStopping) {
+            ESP_LOGW(TAG, "httpd_start deferred — previous stop still running");
+            return;
+        }
+    }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = sizeof(g_handlers) / sizeof(g_handlers[0]);
     /* Canvas/upload + ctprov Wi-Fi scan need headroom beyond 4KB default.
      * Do NOT raise to 32KB — each httpd worker would exhaust C61 internal RAM.
      * 5K + static prov 4K .bss leaves room for httpd_start after Wi-Fi. */
     config.stack_size = 5120;
+    /* Browser + SPA can open many sockets; cap so Wi-Fi TX/RX buffers survive.
+     * Each worker burns config.stack_size from internal RAM on C61. */
+    config.max_open_sockets = 3;
     /* setWifiParam may block up to ~20s while trying STA association */
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;

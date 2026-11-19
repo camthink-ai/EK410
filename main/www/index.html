@@ -1310,8 +1310,18 @@ Edge e-paper · 1600×1200
                   <button type="button" data-qual="speed" data-i18n="sys.img_qual_speed">速度优先</button>
                 </div>
               </div>
-              <div class="meta" style="margin-top:6px;line-height:1.4" data-i18n="sys.img_qual_hint">仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。</div>
+              <div class="meta" style="margin-top:6px;line-height:1.4" data-i18n="sys.img_qual_hint">仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。切换后立即保存。</div>
             </div>
+          </div>
+        </div>
+
+        <div class="sys-block">
+          <h2 class="card-title" data-i18n="sys.sec_log">事件日志</h2>
+          <div class="meta" style="padding:0 18px 8px;line-height:1.45" data-i18n="sys.log_hint">关键事件（配网 / Wi‑Fi / MQTT / 刷屏 / 休眠），约 48KB 或 7 天自动裁剪。用于现场排查。</div>
+          <div class="row"><label style="min-width:88px" data-i18n="sys.log_size">大小</label><span class="grow meta-val" id="evtLogMeta">—</span></div>
+          <div class="actions" style="padding:4px 18px 12px">
+            <button class="btn solid" type="button" id="btnLogDl" data-i18n="sys.log_dl">下载日志</button>
+            <button class="btn" type="button" id="btnLogClear" data-i18n="sys.log_clear">清空</button>
           </div>
         </div>
 
@@ -1344,6 +1354,7 @@ Edge e-paper · 1600×1200
             <div class="row"><label style="min-width:88px" data-i18n="sys.wake">唤醒图</label><input class="ghost grow" id="pwrWake" placeholder="http(s)://…/frame.bin" style="text-align:left"></div>
           </div>
           <div class="actions" style="padding:4px 18px 12px">
+            <button class="btn solid" type="button" id="btnPwrSave" data-i18n="sys.pwr_save">保存工作模式</button>
             <button class="btn" type="button" id="btnSleepNow" data-i18n="sys.sleep_now">立即休眠</button>
           </div>
         </div>
@@ -1450,7 +1461,7 @@ zh:{
   "md.write":"编写 Markdown","md.open":"打开文件","md.paste":"粘贴","md.apply":"生成预览",
   "md.note":"右侧为屏幕布局预览（非富文本）。H1→大字 · 段落→正文 · 列表→多行。",
   "md.sample":"# CamThink EK410\n\n边缘墨水屏 · 1600×1200\n\n- Wi‑Fi / MQTT 配网\n- 六色显示\n",
-  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。效果优先默认；较慢时屏上会显示阶段提示。","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.wake_sec":"在线窗（秒）","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开","toast.mode_cycle":"已选定时刷新","toast.mode_hibernate":"已选休眠（保存后将深睡）","toast.sys_saved":"系统设置已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
+  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_log":"事件日志","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。切换后立即保存。","sys.log_hint":"关键事件（配网 / Wi‑Fi / MQTT / 刷屏 / 休眠），约 48KB 或 7 天自动裁剪。用于现场排查。","sys.log_unavailable":"当前分区表无事件日志（旧机应用 OTA 后常见）。完整烧录后可用。","sys.log_size":"大小","sys.log_dl":"下载日志","sys.log_clear":"清空","toast.log_cleared":"事件日志已清空","toast.log_unavailable":"事件日志不可用","toast.queue_full":"设备忙，请稍后再试","toast.sleep_pending":"设备正在进入休眠","toast.oom":"设备内存不足","toast.img_qual_saved":"图片质量已保存","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.wake_sec":"在线窗（秒）","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.pwr_save":"保存工作模式","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开 — 点「保存工作模式」生效","toast.mode_cycle":"已选定时刷新 — 点「保存工作模式」生效","toast.mode_hibernate":"已选休眠 — 保存后将深睡","toast.sys_saved":"系统设置已保存","toast.pwr_saved":"工作模式已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
   "toast.guide_on":"已显示安全区 / 中线","toast.guide_off":"已隐藏布局辅助",
   "toast.color_eink":"预览：Spectra 6 量化","toast.color_source":"预览：原色（未量化）",
   "toast.mode_image":"图片：预览量化与布局","toast.mode_editor":"编辑器：布局 + 六色","toast.mode_md":"Markdown：映射到屏布局",
@@ -1513,7 +1524,7 @@ en:{
   "md.write":"Write Markdown","md.open":"Open file","md.paste":"Paste","md.apply":"Generate preview",
   "md.note":"Right side is screen layout preview (not rich text). H1→large · paragraph→body · list→lines.",
   "md.sample":"# CamThink EK410\n\nEdge e‑paper · 1600×1200\n\n- Wi‑Fi / MQTT setup\n- 6‑color display\n",
-  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Quality is default; the panel shows stage text while waiting.","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"Stay online for a configurable window after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.wake_sec":"Online window (s)","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected","toast.mode_cycle":"Timed refresh selected","toast.mode_hibernate":"Hibernate selected (saves will sleep)","toast.sys_saved":"System settings saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
+  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_log":"Event log","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Changes save immediately.","sys.log_hint":"Critical events (prov / Wi‑Fi / MQTT / refresh / sleep). Capped ~48KB or 7 days. For field debug.","sys.log_unavailable":"Event log partition missing (common after app-only OTA on older tables). Full flash enables it.","sys.log_size":"Size","sys.log_dl":"Download log","sys.log_clear":"Clear","toast.log_cleared":"Event log cleared","toast.log_unavailable":"Event log unavailable","toast.queue_full":"Device busy — try again","toast.sleep_pending":"Device is entering sleep","toast.oom":"Device out of memory","toast.img_qual_saved":"Image quality saved","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"Stay online for a configurable window after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.wake_sec":"Online window (s)","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.pwr_save":"Save work mode","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected — tap Save work mode","toast.mode_cycle":"Timed refresh selected — tap Save work mode","toast.mode_hibernate":"Hibernate selected — save will deep-sleep","toast.sys_saved":"System settings saved","toast.pwr_saved":"Work mode saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
   "toast.guide_on":"Layout guides on","toast.guide_off":"Layout guides off",
   "toast.color_eink":"Preview: Spectra 6 quantized","toast.color_source":"Preview: original (not quantized)",
   "toast.mode_image":"Image: quantize & layout preview","toast.mode_editor":"Editor: layout + 6‑color","toast.mode_md":"Markdown: mapped to screen layout",
@@ -1579,6 +1590,8 @@ function go(name){
     loadOverviewPanel(true, false);
     scheduleOverviewCanvasPaint();
   }
+  if(name==='system' && typeof loadEventLogMeta==='function') loadEventLogMeta();
+  if(name==='system' && typeof loadPower==='function') loadPower();
 }
 document.querySelectorAll('#dock button, #railNav button').forEach(b=>b.addEventListener('click',()=>go(b.dataset.page)));
 
@@ -3483,6 +3496,9 @@ function mapProxyErr(msg){
   if(!msg) return t('toast.url_fail');
   if(/STA|Wi-?Fi/i.test(msg)) return t('toast.url_need_sta');
   if(/proxy busy|in progress/i.test(msg)) return t('toast.url_busy');
+  if(/sleep pending/i.test(msg)) return t('toast.sleep_pending');
+  if(/queue full|render busy|device busy/i.test(msg)) return t('toast.queue_full');
+  if(/out of memory|\boom\b|OOM/i.test(msg)) return t('toast.oom');
   return msg;
 }
 function loadUrlIntoPreview(url){
@@ -3902,11 +3918,65 @@ function setImgQuality(q){
     });
   }
 }
+async function saveImgQualityNow(){
+  try{
+    const mode=(typeof workMode!=='undefined')?workMode:'always';
+    const sleepMin=(+($('pwrSleep')&&$('pwrSleep').value)||60);
+    let wakeSec=(+($('pwrWakeSec')&&$('pwrWakeSec').value)||120);
+    if(wakeSec<30) wakeSec=30; if(wakeSec>600) wakeSec=600;
+    const wakeUrl=($('pwrWake')&&$('pwrWake').value||'').trim();
+    await post('/api/v1/system/setPowerParam',{mode, sleepMin, wakeSec, wakeUrl, imageQuality});
+    toast(t('toast.img_qual_saved'));
+  }catch(e){ toast(e.message||'save failed'); }
+}
 if($('imgQualSeg')){
   $('imgQualSeg').querySelectorAll('button').forEach(btn=>{
-    btn.onclick=()=>setImgQuality(btn.dataset.qual);
+    btn.onclick=()=>{
+      setImgQuality(btn.dataset.qual);
+      saveImgQualityNow();
+    };
   });
 }
+async function loadEventLogMeta(){
+  try{
+    const m=await get('/api/v1/system/getEventLogMeta');
+    const el=$('evtLogMeta');
+    const dl=$('btnLogDl');
+    const clr=$('btnLogClear');
+    const avail=!!m.present;
+    if(dl) dl.disabled=!avail;
+    if(clr) clr.disabled=!avail;
+    if(!el) return;
+    if(!avail){
+      el.textContent=t('sys.log_unavailable');
+      return;
+    }
+    const kb=(m.bytes/1024).toFixed(1);
+    const cap=(m.capBytes/1024).toFixed(0);
+    el.textContent=kb+' / '+cap+' KB · '+m.keepDays+'d'+(m.timeOk?'':' · no clock');
+  }catch(e){}
+}
+function mapDeviceErr(msg){
+  const s=String(msg||'');
+  if(/event log unavailable/i.test(s)) return t('toast.log_unavailable');
+  if(/sleep pending/i.test(s)) return t('toast.sleep_pending');
+  if(/queue full|device busy|panel busy|render busy/i.test(s)) return t('toast.queue_full');
+  if(/out of memory|\boom\b|OOM/i.test(s)) return t('toast.oom');
+  return s;
+}
+if($('btnLogDl')) $('btnLogDl').onclick=()=>{
+  if($('btnLogDl').disabled){ toast(t('toast.log_unavailable')); return; }
+  window.location.href='/api/v1/system/eventLog?_='+Date.now();
+};
+if($('btnLogClear')) $('btnLogClear').onclick=async()=>{
+  if($('btnLogClear').disabled){ toast(t('toast.log_unavailable')); return; }
+  if(!await ask(t('sys.log_clear'), t('sys.log_hint'))) return;
+  try{
+    await post('/api/v1/system/clearEventLog',{});
+    toast(t('toast.log_cleared'));
+    loadEventLogMeta();
+  }catch(e){ toast(mapDeviceErr(e.message)||'failed'); }
+};
 async function loadPower(){
   try{
     const p=await get('/api/v1/system/getPowerParam');
@@ -4030,12 +4100,23 @@ if($('btnMqttSave')) $('btnMqttSave').onclick=async()=>{
 if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
   if(!validateMqtt()){ toast(t('err.mqtt_incomplete')); return; }
   busy($('btnMqttTest'),1); toast(t('toast.mqtt_test'));
+  const ctrl=typeof AbortController!=='undefined'?new AbortController():null;
+  const to=ctrl?setTimeout(()=>ctrl.abort(),16000):null;
   try{
     await post('/api/v1/network/setMqttParam', mqttPayload());
-    const r=await post('/api/v1/network/testMqtt',{});
-    toast(r.ok?(r.msg||'OK'):(r.msg||'failed'), 3500); loadInfo(); loadCfg();
-  }catch(e){ toast(e.message||'failed'); }
-  finally{ busy($('btnMqttTest'),0); }
+    const opt={method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'};
+    if(ctrl) opt.signal=ctrl.signal;
+    const res=await fetch('/api/v1/network/testMqtt',opt);
+    let r=null; try{r=await res.json()}catch(e){}
+    if(!res.ok) throw new Error((r&&r.msg)||('HTTP '+res.status));
+    toast(r&&r.ok?(r.msg||'OK'):((r&&r.msg)||'failed'), 3500); loadInfo(); loadCfg();
+  }catch(e){
+    const msg=(e&&e.name==='AbortError')
+      ?(lang==='zh'?'MQTT 测试超时（请检查 Broker/TLS 或先连家里 Wi‑Fi）':'MQTT test timed out')
+      :(e.message||'failed');
+    toast(msg, 4500);
+  }
+  finally{ if(to) clearTimeout(to); busy($('btnMqttTest'),0); }
 };
 
 if($('btnCloseAp')) $('btnCloseAp').onclick=async()=>{
@@ -4053,11 +4134,9 @@ if($('btnCloseAp')) $('btnCloseAp').onclick=async()=>{
   toast(tip, 5000);
 };
 
-if($('btnSysSave')) $('btnSysSave').onclick=async()=>{
-  busy($('btnSysSave'),1);
+async function savePowerParam(btn, okToastKey){
+  if(btn) busy(btn,1);
   try{
-    const name=($('devName')&&$('devName').value||'').trim();
-    if(name) await post('/api/v1/system/setDevInfo',{devName:name});
     const mode = (typeof workMode!=='undefined') ? workMode : 'always';
     const sleepMin = (+($('pwrSleep')&&$('pwrSleep').value)||60);
     let wakeSec = (+($('pwrWakeSec')&&$('pwrWakeSec').value)||120);
@@ -4065,9 +4144,25 @@ if($('btnSysSave')) $('btnSysSave').onclick=async()=>{
     const wakeUrl = ($('pwrWake')&&$('pwrWake').value||'').trim();
     const hibernate = mode==='hibernate';
     await post('/api/v1/system/setPowerParam',{mode, sleepMin, wakeSec, wakeUrl, imageQuality});
-    if(hibernate){ toast(t('toast.sleeping')); return; }
-    toast(t('toast.sys_saved'));
-    loadInfo(); loadPower();
+    if(hibernate){ toast(t('toast.sleeping')); return true; }
+    toast(t(okToastKey||'toast.pwr_saved'));
+    if(typeof loadPower==='function') loadPower();
+    if(typeof loadInfo==='function') loadInfo();
+    return true;
+  }catch(e){
+    toast(e.message||'save failed');
+    return false;
+  }finally{
+    if(btn) busy(btn,0);
+  }
+}
+if($('btnPwrSave')) $('btnPwrSave').onclick=()=>savePowerParam($('btnPwrSave'),'toast.pwr_saved');
+if($('btnSysSave')) $('btnSysSave').onclick=async()=>{
+  busy($('btnSysSave'),1);
+  try{
+    const name=($('devName')&&$('devName').value||'').trim();
+    if(name) await post('/api/v1/system/setDevInfo',{devName:name});
+    await savePowerParam(null,'toast.sys_saved');
   }catch(e){ toast(e.message||'save failed'); }
   finally{ busy($('btnSysSave'),0); }
 };
@@ -4136,8 +4231,9 @@ async function uploadPanelCanvas(panelCanvas){
   toast(lang==='zh'?'上传刷屏…':'Uploading…');
   const res=await fetch('/api/v1/display/uploadFrame',{method:'POST',body:frame});
   const j=await res.json().catch(()=>({}));
-  if(!res.ok||(j.code!=null&&j.code!==0)) throw new Error(j.msg||('HTTP '+res.status));
-  toast(lang==='zh'?'已上传，正在刷新…':'Uploaded — refreshing…',4000);
+  if(!res.ok||(j.code!=null&&j.code!==0)) throw new Error(mapDeviceErr(j.msg)||('HTTP '+res.status));
+  /* uploadFrame is synchronous through panel write; refresh finishes before return. */
+  toast(lang==='zh'?'已刷到屏幕':'Pushed to panel',4000);
   scheduleOverviewPanelRefresh();
 }
 async function pushImageToDevice(){
@@ -4231,7 +4327,7 @@ if($('dispPush')) $('dispPush').onclick=async()=>{
 };
 
 /* boot */
-loadCfg(); loadPower(); loadInfo().then(()=>armInfoPoll());
+loadCfg(); loadPower(); loadEventLogMeta(); loadInfo().then(()=>armInfoPoll());
 armInfoPoll();
 /* Show current panel snapshot on Overview (not Display editor). */
 setTimeout(()=>{ loadOverviewPanel(true, true); }, 400);

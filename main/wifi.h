@@ -80,6 +80,26 @@ void wifi_get_ap_ssid(char *buf, int buflen);
  */
 void wifi_led_refresh(void);
 
+/**
+ * Restore LAN web + optional MQTT after SoftAP close / BLE exit / TLS pause.
+ * Order: wait httpd stop → coalesce heap → httpd (with retry) → mqtt.
+ * Safe to call when services are already up (idempotent).
+ */
+void wifi_network_services_restore(bool want_mqtt);
+
+/**
+ * SoftAP+httpd often leaves largest_int too small for the MQTT task stack.
+ * Briefly stop httpd (SoftAP radio stays up), then restart it so MQTT can
+ * allocate. Call only when mqtt_start is about to defer for heap.
+ */
+void wifi_coalesce_for_mqtt(void);
+
+/**
+ * Temporarily disable modem sleep for bulk HTTPS (display_url / wake image).
+ * Call with true before the transfer, false when done. Nested calls are counted.
+ */
+void wifi_throughput_boost(bool enable);
+
 #define WIFI_SCAN_MAX 24
 
 typedef struct {

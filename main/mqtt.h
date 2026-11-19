@@ -19,9 +19,19 @@ extern "C" {
 
 void mqtt_open(void);
 void mqtt_start(void);   /* no-op if host empty or already started */
-void mqtt_stop(void);
-void mqtt_restart(void);
+/**
+ * Stop MQTT client under the module mutex.
+ * Returns 0 if stopped (or already idle), -1 if mutex timed out — client
+ * may still be running (e.g. large telemetry publish). Callers that tear
+ * down Wi‑Fi / start NimBLE must treat -1 as failure and abort or retry.
+ */
+int mqtt_stop(void);
+/** Retry mqtt_stop until budget_ms elapses. Returns 0 / -1. */
+int mqtt_stop_wait(int budget_ms);
+/** Stop then start. Returns 0, or -1 if stop timed out (old client may still run). */
+int mqtt_restart(void);
 bool mqtt_is_connected(void);
+bool mqtt_is_started(void); /* client object exists (may still be connecting) */
 void mqtt_publish_telemetry(void);
 
 /* Async command result (e.g. display_url finished after "queued" ack). */

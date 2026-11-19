@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "evtlog.h"
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "cJSON.h"
@@ -275,8 +276,10 @@ static int apply_wifi_section(cJSON *wifi, char *err, size_t errlen)
         ESP_LOGI(TAG, "BLE window: saved wifi ssid=%s", w.ssid);
         if (wifi_sta_try_connect(w.ssid, w.password, 6000)) {
             ESP_LOGI(TAG, "BLE window: early associate ok");
+            evtlog_event("CTPROV", "wifi saved ssid=%s early_ok=1", w.ssid);
         } else {
             ESP_LOGW(TAG, "BLE window: associate deferred until BLE exit");
+            evtlog_event("CTPROV", "wifi saved ssid=%s early_ok=0", w.ssid);
         }
         return 1;
     }
@@ -299,12 +302,18 @@ static int apply_mqtt_section(cJSON *mqtt, char *err, size_t errlen)
     }
     cJSON *enable = cJSON_GetObjectItem(mqtt, "enable");
     if (cJSON_IsBool(enable) && !cJSON_IsTrue(enable)) {
-        /* Disable: clear host so mqtt_start skips. */
+        /* Stop first — only clear host when the client is actually gone. */
+        if (mqtt_stop_wait(4000) != 0) {
+            snprintf(err, errlen, "mqtt stop busy");
+            return -4;
+        }
         mqttAttr_t m;
         cfg_get_mqtt_attr(&m);
         m.host[0] = '\0';
-        cfg_set_mqtt_attr(&m);
-        mqtt_stop();
+        if (cfg_set_mqtt_attr(&m) != ESP_OK) {
+            snprintf(err, errlen, "mqtt config save failed");
+            return -3;
+        }
         return 0;
     }
 
@@ -351,9 +360,20 @@ static int apply_mqtt_section(cJSON *mqtt, char *err, size_t errlen)
     if (cJSON_IsBool(tls)) {
         m.tlsVerify = true; /* NeoLink tls flag selects transport; keep verify on */
     }
-    cfg_set_mqtt_attr(&m);
+    /* Same order as enable:false — stop first, then persist, then start.
+     * Busy stop keeps old broker in NVS and on the wire. */
     if (wifi_sta_is_connected()) {
-        mqtt_restart();
+        if (mqtt_stop_wait(4000) != 0) {
+            snprintf(err, errlen, "mqtt stop busy");
+            return -4;
+        }
+    }
+    if (cfg_set_mqtt_attr(&m) != ESP_OK) {
+        snprintf(err, errlen, "mqtt config save failed");
+        return -3;
+    }
+    if (wifi_sta_is_connected()) {
+        mqtt_start();
     }
     return 0;
 }
@@ -397,7 +417,13 @@ static char *op_config_set(int id, cJSON *req_data)
         }
         if (rc != 0) {
             cJSON_Delete(stored);
-            return make_err(id, "config.set.result", "INVALID_ARGUMENT", err);
+            const char *code = "INVALID_ARGUMENT";
+            if (rc == -4) {
+                code = "RESOURCE_BUSY";
+            } else if (rc == -3) {
+                code = "STORAGE_FAILED";
+            }
+            return make_err(id, "config.set.result", code, err);
         }
         cJSON_AddItemToArray(stored, cJSON_CreateString("mqtt"));
     }

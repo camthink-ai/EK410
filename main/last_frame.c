@@ -57,9 +57,24 @@ static uint32_t s_seq;
 static bool s_meta_valid;
 static last_frame_meta_t s_meta;
 static SemaphoreHandle_t s_stream_mu;
+static SemaphoreHandle_t s_preview_mu;
 static char *s_preview_b64;
 static int s_preview_w;
 static int s_preview_h;
+
+static void preview_lock(void)
+{
+    if (s_preview_mu) {
+        xSemaphoreTake(s_preview_mu, portMAX_DELAY);
+    }
+}
+
+static void preview_unlock(void)
+{
+    if (s_preview_mu) {
+        xSemaphoreGive(s_preview_mu);
+    }
+}
 
 #define STREAM_CHUNK 4096
 
@@ -112,7 +127,7 @@ static uint8_t native_ink_at(const uint8_t *frame, int nx, int ny)
     return (local & 1) ? (byte & 0x0F) : (byte >> 4);
 }
 
-static void preview_clear(void)
+static void preview_clear_unlocked(void)
 {
     if (s_preview_b64) {
         free(s_preview_b64);
@@ -122,10 +137,22 @@ static void preview_clear(void)
     s_preview_h = 0;
 }
 
+void last_frame_preview_drop(void)
+{
+    preview_lock();
+    if (s_preview_b64) {
+        ESP_LOGI(TAG, "drop preview to free SPIRAM for URL decode");
+        preview_clear_unlocked();
+    }
+    preview_unlock();
+}
+
 /** Build ≤200KB 8-bit paletted BMP + base64 from native last-frame buffer. */
 static void preview_rebuild_from_native(const uint8_t *frame)
 {
-    preview_clear();
+    preview_lock();
+    preview_clear_unlocked();
+    preview_unlock();
     if (!frame) {
         return;
     }
@@ -218,9 +245,12 @@ static void preview_rebuild_from_native(const uint8_t *frame)
     }
     b64[written] = '\0';
     free(bmp);
+    preview_lock();
+    preview_clear_unlocked();
     s_preview_b64 = b64;
     s_preview_w = PREVIEW_W;
     s_preview_h = PREVIEW_H;
+    preview_unlock();
     ESP_LOGI(TAG, "preview ready %dx%d 8bpp bmp=%u b64=%u",
              PREVIEW_W, PREVIEW_H, (unsigned)bmp_size, (unsigned)written);
 }
@@ -240,7 +270,7 @@ static int ensure_cap_buf(void)
 static void preview_rebuild_from_flash(void)
 {
     if (!s_part || !s_meta.present) {
-        preview_clear();
+        last_frame_preview_drop();
         return;
     }
     if (ensure_cap_buf() != 0) {
@@ -256,6 +286,7 @@ static void preview_rebuild_from_flash(void)
 
 const char *last_frame_preview_b64(void)
 {
+    /* Unsafe across drop/rebuild — prefer last_frame_preview_snapshot(). */
     return s_preview_b64;
 }
 
@@ -274,10 +305,39 @@ const char *last_frame_preview_mime(void)
     return s_preview_b64 ? "image/bmp" : "";
 }
 
+int last_frame_preview_snapshot(last_frame_preview_snap_t *out)
+{
+    if (!out) {
+        return -1;
+    }
+    out->b64 = NULL;
+    out->w = 0;
+    out->h = 0;
+    preview_lock();
+    if (s_preview_b64 && s_preview_b64[0]) {
+        size_t n = strlen(s_preview_b64);
+        char *copy = heap_caps_malloc(n + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!copy) {
+            copy = malloc(n + 1);
+        }
+        if (copy) {
+            memcpy(copy, s_preview_b64, n + 1);
+            out->b64 = copy;
+            out->w = s_preview_w;
+            out->h = s_preview_h;
+        }
+    }
+    preview_unlock();
+    return 0;
+}
+
 void last_frame_init(void)
 {
     if (!s_stream_mu) {
         s_stream_mu = xSemaphoreCreateMutex();
+    }
+    if (!s_preview_mu) {
+        s_preview_mu = xSemaphoreCreateMutex();
     }
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, PART_LABEL);
     if (!s_part) {

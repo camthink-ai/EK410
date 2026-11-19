@@ -14,10 +14,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 - Single firmware image: SoftAP XOR BLE CT-Prov in-process (no dual OTA SKU / reboot switch).
 - NimBLE enabled in `sdkconfig.defaults`; PAGE/MAIN toggle NimBLE without changing boot slot.
+- Release entry: `tools/build_release.sh` / `flash_release.sh` → one `dist/ek410.bin` (legacy `*_dual_sku.sh` are aliases). SoftAP↔BLE smoke: `ct_prov_xor_test.py`.
+- Keep SoftAP-oriented Wi-Fi buffer defaults; do not merge old BLE-SKU tighter RX sizes into the single image.
+- MQTT fragmented commands transfer the reassembly buffer to the cmd queue (no second full copy); OOM / size / queue-full return explicit acks.
+- Event log: no full rewrite on download; HTTP stream snapshots then sends outside the mutex; header persist every 8 lines (sector 0 only); boot recovers incomplete tails; compact only when over capacity.
+- Async display HTTP/MQTT accept replies use `queued` / `queue full` / `sleep pending`; SoftAP shows event-log unavailable on old partition tables.
+- `mqtt_stop()` returns success/busy; BLE/SoftAP enter use `mqtt_stop_wait()` and abort+restore on timeout (no NimBLE start over a live MQTT client).
+- Stop telemetry timer only after taking the MQTT mutex; `mqtt_restart()` / CT-Prov disable propagate stop failure so a busy client keeps periodic telemetry.
+- BLE exit: coalesce heap, lean `wifi_init` after NimBLE, httpd before wifi_init + retry timer; `wifi_sta_reconnect_saved(0)` starts Wi‑Fi after teardown; `mqtt_stop` cancels start-retry so MQTT cannot restart mid-BLE.
+- MQTT broker change (HTTP `setMqttParam` + CT-Prov `config.set`): stop old client first, then persist host/CA, then start — busy stop keeps old NVS and live connection.
+- `cfg_set_mqtt_ca_pem` / `cfg_set_mqtt_attr` return NVS errors; CA write rolls back RAM on failure; Web reports `mqtt CA save failed` / `mqtt config save failed` instead of false OK.
+- QA gate: `tools/qa_gate.py` + `qa_lib` (smoke/candidate/soak, JSON statuses); plan in `docs/qa_automation.md`.
+- LAN Web: embed gzip `INDEX_HTML` (~63KB wire), chunked send, `max_open_sockets=3`; cold boot uses lean Wi‑Fi buffers; MQTT requires `largest_int≥10KB`; defer httpd until STA online so opening the device IP no longer triggers `wifi:mem fail` / `phy_track_pll` NO_MEM abort.
 
 ### 中文
 
 - 单镜像：SoftAP 与 BLE CT-Prov 进程内互斥启停，不再切换 OTA SKU。
+- 发布入口改为 `build_release.sh` / `flash_release.sh`，只产出一份 `ek410.bin`；旧双 SKU 脚本名保留为别名。
+- MQTT 分片所有权转交队列；事件日志下载不再全分区擦写；旧分区表上 Web 明确显示日志不可用。
+- 更换 MQTT broker：先停旧客户端再写 NVS；停止忙时保留旧配置与旧连接。
+- MQTT CA / broker 持久化失败会返回错误；CA 写失败时回滚内存中的 PEM。
+- 自动化验收入口 `qa_gate.py`（smoke / candidate / soak）与方案文档。
+- 局域网打开设备 IP 不再因首页过大 / 内部堆过紧而重启：gzip 首页、lean Wi‑Fi、MQTT 堆门槛、STA 未上线时推迟 httpd。
 
 ---
 

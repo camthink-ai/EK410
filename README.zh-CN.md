@@ -106,8 +106,8 @@ idf.py -p PORT flash monitor
 ### 便捷脚本
 
 ```bash
-bash tools/build_dual_sku.sh        # fullclean + build → dist/ek410.bin
-bash tools/flash_dual_sku.sh PORT   # 烧 bootloader + 分区表 + 镜像（双槽镜像）
+bash tools/build_release.sh        # fullclean + build → dist/ek410.bin
+bash tools/flash_release.sh PORT    # 烧 bootloader + 分区表 + 镜像（双槽同镜像）
 ```
 
 更多：[docs/zh/development.md](docs/zh/development.md) · [tools/README.md](tools/README.md)。

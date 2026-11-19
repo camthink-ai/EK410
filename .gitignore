@@ -17,7 +17,7 @@ compile_commands.json
 .cursor/
 .claude/
 
-# ESP-IDF build outputs (SoftAP + dual-SKU BLE tree)
+# ESP-IDF build outputs (legacy build_ble/ may still exist locally)
 build/
 build_ble/
 build_*/
@@ -26,7 +26,7 @@ sdkconfig.old
 sdkconfig.ci
 sdkconfig.*.bak
 
-# Dual-SKU flash artifacts (rebuild via tools/build_dual_sku.sh)
+# Release flash artifacts (rebuild via tools/build_release.sh → dist/ek410.bin)
 dist/
 
 # Nested diagnostic firmware builds

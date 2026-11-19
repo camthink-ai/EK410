@@ -29,8 +29,9 @@ NimBLE and restores httpd (and SoftAP if MAIN requested it).
 `ota_0` / `ota_1` are for **firmware upgrade rollback** only (same `ek410` binary).
 
 ```bash
-bash tools/build_dual_sku.sh
-bash tools/flash_dual_sku.sh /dev/cu.wchusbserial3130
+bash tools/build_release.sh
+bash tools/flash_release.sh /dev/cu.wchusbserial3130
+python3 tools/ct_prov_xor_test.py --port /dev/cu.wchusbserial3130
 ```
 
 ## Supported SoftAP ops

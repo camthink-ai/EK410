@@ -9,9 +9,11 @@
  * NeoMind topics: device/ek410_Eink/{deviceId}/uplink|downlink
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include "esp_log.h"
+#include "evtlog.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_mac.h"
@@ -189,21 +191,45 @@ const char *cfg_mqtt_ca_pem(void)
     return s_mqtt_ca;
 }
 
-void cfg_set_mqtt_ca_pem(const char *pem)
+esp_err_t cfg_set_mqtt_ca_pem(const char *pem)
 {
+    if (!s_mqtt_ca_loaded) {
+        mqtt_ca_load_from_nvs();
+    }
+    /* Heap — do not put MQTT_CA_PEM_MAX on the httpd / sys_evt stack. */
+    char *prev = malloc(MQTT_CA_PEM_MAX);
+    if (!prev) {
+        return ESP_ERR_NO_MEM;
+    }
+    strlcpy(prev, s_mqtt_ca, MQTT_CA_PEM_MAX);
     if (!pem) {
         pem = "";
     }
     strlcpy(s_mqtt_ca, pem, sizeof(s_mqtt_ca));
     s_mqtt_ca_loaded = true;
+
     nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
-        return;
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        strlcpy(s_mqtt_ca, prev, sizeof(s_mqtt_ca));
+        free(prev);
+        ESP_LOGE(TAG, "mqtt CA nvs_open: %s", esp_err_to_name(err));
+        return err;
     }
-    nvs_set_str(h, "mqca", s_mqtt_ca);
-    nvs_commit(h);
+    err = nvs_set_str(h, "mqca", s_mqtt_ca);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
     nvs_close(h);
+    if (err != ESP_OK) {
+        strlcpy(s_mqtt_ca, prev, sizeof(s_mqtt_ca));
+        free(prev);
+        ESP_LOGE(TAG, "mqtt CA persist failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    free(prev);
     ESP_LOGI(TAG, "mqtt CA PEM saved (%u bytes)", (unsigned)strlen(s_mqtt_ca));
+    return ESP_OK;
 }
 
 void cfg_get_mqtt_attr(mqttAttr_t *mqtt)
@@ -255,25 +281,55 @@ void cfg_get_mqtt_attr(mqttAttr_t *mqtt)
     }
 }
 
-void cfg_set_mqtt_attr(const mqttAttr_t *mqtt)
+esp_err_t cfg_set_mqtt_attr(const mqttAttr_t *mqtt)
 {
+    if (!mqtt) {
+        return ESP_ERR_INVALID_ARG;
+    }
     nvs_handle_t h;
     int transport = (mqtt->transport == MQTT_TRANSPORT_TLS) ? MQTT_TRANSPORT_TLS : MQTT_TRANSPORT_TCP;
     int port = mqtt->port > 0 ? mqtt->port : mqtt_default_port(transport);
-    ESP_ERROR_CHECK(nvs_open(NS, NVS_READWRITE, &h));
-    ESP_ERROR_CHECK(nvs_set_str(h, "host", mqtt->host));
-    ESP_ERROR_CHECK(nvs_set_str(h, "cid", mqtt->clientId));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "port", (int32_t)port));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "qos", (int32_t)mqtt->qos));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "tls", (int32_t)transport));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "mqverify", mqtt->tlsVerify ? 1 : 0));
-    ESP_ERROR_CHECK(nvs_set_str(h, "mquser", mqtt->username));
-    ESP_ERROR_CHECK(nvs_set_str(h, "mqpass", mqtt->password));
-    ESP_ERROR_CHECK(nvs_commit(h));
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mqtt attr nvs_open: %s", esp_err_to_name(err));
+        return err;
+    }
+    do {
+        if ((err = nvs_set_str(h, "host", mqtt->host)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_str(h, "cid", mqtt->clientId)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "port", (int32_t)port)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "qos", (int32_t)mqtt->qos)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "tls", (int32_t)transport)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "mqverify", mqtt->tlsVerify ? 1 : 0)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_str(h, "mquser", mqtt->username)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_str(h, "mqpass", mqtt->password)) != ESP_OK) {
+            break;
+        }
+        err = nvs_commit(h);
+    } while (0);
     nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mqtt attr persist failed: %s", esp_err_to_name(err));
+        return err;
+    }
     ESP_LOGI(TAG, "mqtt attr saved (%s://%s:%d verify=%d)",
              mqtt_transport_str(transport), mqtt->host, port,
              mqtt->tlsVerify ? 1 : 0);
+    return ESP_OK;
 }
 
 void cfg_get_dev_info(devInfo_t *info)
@@ -552,5 +608,7 @@ void cfg_factory_reset(void)
         nvs_commit(h);
         nvs_close(h);
     }
+    evtlog_clear();
+    evtlog_event("BOOT", "factory reset (uid preserved)");
     ESP_LOGW(TAG, "factory reset done (uid preserved)");
 }

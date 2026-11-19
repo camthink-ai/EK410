@@ -1,5 +1,5 @@
 set(srcs
-    "ct_prov.c" "ct_prov_frag.c" "ct_prov_ble.c" "last_frame.c" "main.c" "config.c"
+    "ct_prov.c" "ct_prov_frag.c" "ct_prov_ble.c" "last_frame.c" "evtlog.c" "main.c" "config.c"
     "wifi.c" "mqtt.c" "http.c" "comm.c"
     "epd709.c" "app_epd.c" "canvas.c" "qrcodegen.c" "battery.c" "ota.c" "sleep.c"
     "led.c" "button.c"
