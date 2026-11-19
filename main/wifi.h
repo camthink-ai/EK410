@@ -88,10 +88,12 @@ void wifi_led_refresh(void);
 void wifi_network_services_restore(bool want_mqtt);
 
 /**
- * SoftAP+httpd often leaves largest_int too small for the MQTT task stack.
- * Briefly stop httpd (SoftAP radio stays up), then restart it so MQTT can
- * allocate. Call only when mqtt_start is about to defer for heap.
+ * SoftAP+httpd leave too little internal RAM for the MQTT task stack.
+ * Pause httpd (SoftAP radio stays up) → mqtt_start → resume lean httpd.
+ * Prefer wifi_httpd_pause/resume around mqtt bring-up; coalesce is pause+resume.
  */
+void wifi_httpd_pause_for_mqtt(void);
+void wifi_httpd_resume_after_mqtt(void);
 void wifi_coalesce_for_mqtt(void);
 
 /** Last SoftAP/BLE enter failure token for Web ("" when clear). */

@@ -1422,9 +1422,9 @@ const I18N = {
 zh:{
   "preview.tag":"显示预览 · 六色 / 布局","preview.phone":"手机","preview.tablet":"平板","preview.desktop":"桌面",
   "nav.overview":"概览","nav.network":"网络","nav.display":"显示","nav.system":"系统",
-  "banner.title":"配网热点已开启","banner.desc":"SSID 为 EK410-{deviceId}；配置中保持开启，可主动关闭。","banner.close":"关闭热点","banner.ble":"改用 BLE","toast.ap_closed":"热点已关闭","toast.ap_lost":"热点已关闭或连接断开，请改连家里 Wi‑Fi 后用设备 IP 打开。","toast.ble_start":"正在开启 BLE 配网…","toast.ble_ok":"BLE 已开启，请用 NeoLink 连接","toast.ble_busy":"MQTT 正忙（大图遥测），请稍后再开 SoftAP/BLE","toast.mqtt_busy":"MQTT 正忙，配置未保存，请稍后再试","toast.mqtt_warn_port":"端口与协议可能不匹配，仍要保存吗？","toast.sleep_deferred_ap":"已保存；SoftAP 开启时休眠暂不生效，关热点后自动排程","toast.sleep_deferred_sta":"已保存；连上家里 Wi‑Fi 后才会排程休眠","toast.display_done":"刷屏完成","toast.display_fail":"刷屏失败，请查看事件日志","toast.ota_pending":"OTA 待确认：请保持联网直至状态消失",
-  "prov.title":"配网方式","prov.hint":"SoftAP 与 BLE 互斥。热点配网时常驻 MQTT 会暂停以省内存；测 MQTT 需已连家里 Wi‑Fi（APSTA）。","prov.open_ap":"开启 SoftAP","prov.open_ble":"开启 BLE（NeoLink）",
-  "ov.mqtt_paused":"MQTT 配网暂停","ov.mqtt_heap":"MQTT 堆不足推迟","ov.mqtt_connecting":"MQTT 连接中","ov.bat_na":"电量不可用",
+  "banner.title":"配网热点已开启","banner.desc":"SSID 为 EK410-{deviceId}；配置中保持开启，可主动关闭。","banner.close":"关闭热点","banner.ble":"改用 BLE","toast.ap_closed":"热点已关闭","toast.ap_lost":"热点已关闭或连接断开，请改连家里 Wi‑Fi 后用设备 IP 打开。","toast.ble_start":"正在开启 BLE 配网…","toast.ble_ok":"BLE 已开启，请用 NeoLink 连接","toast.ble_busy":"MQTT 正忙（大图遥测），请稍后再开 SoftAP/BLE","toast.mqtt_busy":"MQTT 正忙，配置未保存，请稍后再试","toast.mqtt_saved_softap":"MQTT 已保存；请先连家里 Wi‑Fi 再连接","toast.mqtt_softap_connect":"正在 SoftAP 下连接 MQTT（网页可能短暂暂停）…","toast.mqtt_warn_port":"端口与协议可能不匹配，仍要保存吗？","toast.sleep_deferred_ap":"已保存；SoftAP 开启时休眠暂不生效，关热点后自动排程","toast.sleep_deferred_sta":"已保存；连上家里 Wi‑Fi 后才会排程休眠","toast.display_done":"刷屏完成","toast.display_fail":"刷屏失败，请查看事件日志","toast.ota_pending":"OTA 待确认：请保持联网直至状态消失",
+  "prov.title":"配网方式","prov.hint":"SoftAP 与 BLE 互斥。先连家里 Wi‑Fi，再保存/测试 MQTT；连接时网页可能短暂无响应，成功后可保持 SoftAP 并看到已连接。","prov.open_ap":"开启 SoftAP","prov.open_ble":"开启 BLE（NeoLink）",
+  "ov.mqtt_paused":"MQTT 需先连家里 Wi‑Fi","ov.mqtt_heap":"MQTT 堆不足推迟","ov.mqtt_connecting":"MQTT 连接中","ov.bat_na":"电量不可用",
   "ov.wlan_off":"WLAN 未连接","ov.wlan_on":"WLAN 已连接","ov.mqtt_off":"MQTT 未连接","ov.mqtt_on":"MQTT 已连接","ov.ap_on":"热点开启","ov.ap_off":"热点关闭",
   "ov.uptime_val":"2 分钟","ov.uptime":"运行","ov.cfg_net":"配置网络","ov.edit_screen":"编辑画面",
   "ov.fw":"固件","ov.part":"分区","ov.sleep":"休眠","ov.sleep_on":"常开",
@@ -1487,9 +1487,9 @@ zh:{
 en:{
   "preview.tag":"Display preview · 6-color / layout","preview.phone":"Phone","preview.tablet":"Tablet","preview.desktop":"Desktop",
   "nav.overview":"Overview","nav.network":"Network","nav.display":"Display","nav.system":"System",
-  "banner.title":"SoftAP is on","banner.desc":"SSID EK410-{deviceId}; stays on while configuring.","banner.close":"Close SoftAP","banner.ble":"Use BLE","toast.ap_closed":"Hotspot closed","toast.ap_lost":"Hotspot closed or link lost. Rejoin home Wi‑Fi and open the device IP.","toast.ble_start":"Starting BLE provisioning…","toast.ble_ok":"BLE on — connect with NeoLink","toast.ble_busy":"MQTT busy (large telemetry) — retry SoftAP/BLE later","toast.mqtt_busy":"MQTT busy — config not saved, retry shortly","toast.mqtt_warn_port":"Port and protocol may mismatch. Save anyway?","toast.sleep_deferred_ap":"Saved; sleep waits until SoftAP closes","toast.sleep_deferred_sta":"Saved; sleep arms after home Wi‑Fi is up","toast.display_done":"Display refresh done","toast.display_fail":"Display failed — check event log","toast.ota_pending":"OTA pending verify — stay online until cleared",
-  "prov.title":"Provisioning","prov.hint":"SoftAP and BLE are mutually exclusive. SoftAP pauses permanent MQTT for RAM; MQTT test needs home Wi‑Fi (APSTA).","prov.open_ap":"Open SoftAP","prov.open_ble":"Open BLE (NeoLink)",
-  "ov.mqtt_paused":"MQTT paused (prov)","ov.mqtt_heap":"MQTT deferred (heap)","ov.mqtt_connecting":"MQTT connecting","ov.bat_na":"Battery N/A",
+  "banner.title":"SoftAP is on","banner.desc":"SSID EK410-{deviceId}; stays on while configuring.","banner.close":"Close SoftAP","banner.ble":"Use BLE","toast.ap_closed":"Hotspot closed","toast.ap_lost":"Hotspot closed or link lost. Rejoin home Wi‑Fi and open the device IP.","toast.ble_start":"Starting BLE provisioning…","toast.ble_ok":"BLE on — connect with NeoLink","toast.ble_busy":"MQTT busy (large telemetry) — retry SoftAP/BLE later","toast.mqtt_busy":"MQTT busy — config not saved, retry shortly","toast.mqtt_saved_softap":"MQTT saved — join home Wi‑Fi to connect","toast.mqtt_softap_connect":"Connecting MQTT over SoftAP (brief web pause)…","toast.mqtt_warn_port":"Port and protocol may mismatch. Save anyway?","toast.sleep_deferred_ap":"Saved; sleep waits until SoftAP closes","toast.sleep_deferred_sta":"Saved; sleep arms after home Wi‑Fi is up","toast.display_done":"Display refresh done","toast.display_fail":"Display failed — check event log","toast.ota_pending":"OTA pending verify — stay online until cleared",
+  "prov.title":"Provisioning","prov.hint":"SoftAP and BLE are mutually exclusive. Join home Wi‑Fi first, then save/test MQTT; the page may pause briefly while connecting, then stay on SoftAP with mqttConnected.","prov.open_ap":"Open SoftAP","prov.open_ble":"Open BLE (NeoLink)",
+  "ov.mqtt_paused":"MQTT needs home Wi‑Fi","ov.mqtt_heap":"MQTT deferred (heap)","ov.mqtt_connecting":"MQTT connecting","ov.bat_na":"Battery N/A",
   "ov.wlan_off":"WLAN disconnected","ov.wlan_on":"WLAN connected","ov.mqtt_off":"MQTT disconnected","ov.mqtt_on":"MQTT connected","ov.ap_on":"Hotspot on","ov.ap_off":"Hotspot off",
   "ov.uptime_val":"2 min","ov.uptime":"Uptime","ov.cfg_net":"Configure network","ov.edit_screen":"Edit screen",
   "ov.fw":"Firmware","ov.part":"Partition","ov.sleep":"Sleep","ov.sleep_on":"Always on",
@@ -1778,8 +1778,9 @@ $('wfPass').addEventListener('input',()=>{
 function mqttReasonLabel(reason, connected){
   if(connected) return {key:'mq.connected', text:t('mq.connected')};
   const map={
-    softap_paused:'ov.mqtt_paused', ble_paused:'ov.mqtt_paused',
-    deferred_heap:'ov.mqtt_heap', connecting:'ov.mqtt_connecting'
+    softap_paused:'ov.mqtt_paused', softap_need_sta:'ov.mqtt_paused',
+    ble_paused:'ov.mqtt_paused', deferred_heap:'ov.mqtt_heap',
+    connecting:'ov.mqtt_connecting'
   };
   const key=map[reason]||'mq.disconnected';
   return {key, text:t(key)};
@@ -3918,7 +3919,7 @@ async function loadInfo(){
       const ready=!!(i.wifiConnected && i.provisioned);
       $('setupHint').textContent = ready
         ? (lang==='zh'?'配网完成：可关闭 SoftAP，改连家里 Wi‑Fi 后用设备 IP 管理。':'Setup done — close SoftAP and rejoin home Wi‑Fi.')
-        : (lang==='zh'?'请完成：连接家里 Wi‑Fi（可测 MQTT）→ 填写 Broker → 测试。SoftAP 期常驻 MQTT 会暂停。':'Finish: join home Wi‑Fi (for MQTT test) → broker → test. SoftAP pauses permanent MQTT.');
+        : (lang==='zh'?'请完成：连接家里 Wi‑Fi → 填写 MQTT → 保存/测试（可保持 SoftAP 看到已连接）。':'Finish: join home Wi‑Fi → MQTT save/test (stay on SoftAP and see connected).');
     }
   }catch(e){
     console.warn(e);
@@ -4182,7 +4183,11 @@ if($('btnMqttSave')) $('btnMqttSave').onclick=async()=>{
   busy($('btnMqttSave'),1);
   try{
     const r=await post('/api/v1/network/setMqttParam', mqttPayload());
-    toast(r&&r.warn?(r.warn+' — '+(r.msg||'ok')):t('toast.mqtt_saved'), 3500);
+    let tip=t('toast.mqtt_saved');
+    if(r&&r.mqttSoftApConnect) tip=t('toast.mqtt_softap_connect');
+    else if(r&&r.mqttDeferred) tip=t('toast.mqtt_saved_softap');
+    else if(r&&r.warn) tip=r.warn+' — '+(r.msg||'ok');
+    toast(tip, 4000);
     setTimeout(()=>{ loadInfo(); loadCfg(); },1200);
   }catch(e){
     const msg=(e&&e.message)||'';
@@ -4197,17 +4202,19 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
   const ctrl=typeof AbortController!=='undefined'?new AbortController():null;
   const to=ctrl?setTimeout(()=>ctrl.abort(),16000):null;
   try{
-    await post('/api/v1/network/setMqttParam', mqttPayload());
+    const saved=await post('/api/v1/network/setMqttParam', mqttPayload());
+    if(saved&&saved.mqttSoftApConnect) toast(t('toast.mqtt_softap_connect'), 3500);
+    else if(saved&&saved.mqttDeferred) toast(t('toast.mqtt_saved_softap'), 3000);
     const opt={method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'};
     if(ctrl) opt.signal=ctrl.signal;
     const res=await fetch('/api/v1/network/testMqtt',opt);
     let r=null; try{r=await res.json()}catch(e){}
     if(!res.ok) throw new Error((r&&r.msg)||('HTTP '+res.status));
-    toast(r&&r.ok?(r.msg||'OK'):((r&&r.msg)||'failed'), 3500); loadInfo(); loadCfg();
+    toast(r&&r.ok?(r.msg||'OK'):((r&&r.msg)||'failed'), 4000); loadInfo(); loadCfg();
   }catch(e){
     const raw=(e&&e.message)||'';
     const msg=(e&&e.name==='AbortError')
-      ?(lang==='zh'?'MQTT 测试超时（请检查 Broker/TLS 或先连家里 Wi‑Fi）':'MQTT test timed out')
+      ?(lang==='zh'?'MQTT 测试超时：请先在 SoftAP 页连上家里 Wi‑Fi 再测':'MQTT test timed out — join home Wi‑Fi on SoftAP first')
       :(/busy/i.test(raw)?t('toast.mqtt_busy'):raw||'failed');
     toast(msg, 4500);
   }

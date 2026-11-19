@@ -243,17 +243,19 @@ void mqtt_publish_telemetry(void)
         cJSON_AddStringToObject(root, "frame_source",
                                 frame.source[0] ? frame.source : "");
         cJSON_AddNumberToObject(root, "frame_bytes", (double)LAST_FRAME_BYTES);
-        /* Snapshot under preview lock so URL drop cannot free under our feet. */
-        last_frame_preview_snap_t snap = { 0 };
-        (void)last_frame_preview_snapshot(&snap);
-        prev = snap.b64;
-        if (prev && prev[0]) {
-            cJSON_AddStringToObject(root, "frame_preview_mime", "image/bmp");
-            cJSON_AddNumberToObject(root, "frame_preview_w", snap.w);
-            cJSON_AddNumberToObject(root, "frame_preview_h", snap.h);
-        } else {
-            free(prev);
-            prev = NULL;
+        /* SoftAP+MQTT: skip ~160KB preview so SoftAP UI and broker stay up. */
+        if (!wifi_softap_is_up()) {
+            last_frame_preview_snap_t snap = { 0 };
+            (void)last_frame_preview_snapshot(&snap);
+            prev = snap.b64;
+            if (prev && prev[0]) {
+                cJSON_AddStringToObject(root, "frame_preview_mime", "image/bmp");
+                cJSON_AddNumberToObject(root, "frame_preview_w", snap.w);
+                cJSON_AddNumberToObject(root, "frame_preview_h", snap.h);
+            } else {
+                free(prev);
+                prev = NULL;
+            }
         }
     }
     cJSON_AddNumberToObject(root, "hb", 1);
@@ -849,27 +851,48 @@ static void mqtt_bringup_task(void *arg)
             continue;
         }
 
-        /* Wait briefly for httpd/Wi-Fi heap to settle — never stop httpd here. */
         mqttAttr_t peek;
         cfg_get_mqtt_attr(&peek);
         const int need_stack = mqtt_task_stack_for(peek.transport);
-        for (int i = 0; i < 30 && peek.host[0] && !internal_heap_ready_for(need_stack); i++) {
-            vTaskDelay(pdMS_TO_TICKS(100));
+        const bool softap = wifi_softap_is_up();
+        bool paused_httpd = false;
+
+        /*
+         * SoftAP+httpd fragment internal RAM. Pause SoftAP web (radio stays),
+         * start MQTT, then resume lean httpd so customers can stay on AP and
+         * still see mqttConnected before closing the hotspot.
+         */
+        if (softap && peek.host[0]) {
+            wifi_httpd_pause_for_mqtt();
+            paused_httpd = true;
+            for (int i = 0; i < 40 && !internal_heap_ready_for(need_stack); i++) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+        } else {
+            for (int i = 0; i < 30 && peek.host[0] && !internal_heap_ready_for(need_stack); i++) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
         }
 
         xSemaphoreTake(g_MQ.mutex, portMAX_DELAY);
         if (g_MQ.client) {
             xSemaphoreGive(g_MQ.mutex);
+            if (paused_httpd) {
+                wifi_httpd_resume_after_mqtt();
+            }
             continue;
         }
         size_t free_heap = esp_get_free_heap_size();
         if (free_heap < MQTT_START_MIN_HEAP ||
             (peek.host[0] && !internal_heap_ready_for(need_stack))) {
-            ESP_LOGW(TAG, "defer start — free %u largest_int %u need_stack %d",
+            ESP_LOGW(TAG, "defer start — free %u largest_int %u need_stack %d softap=%d",
                      (unsigned)free_heap,
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                     need_stack);
+                     need_stack, softap ? 1 : 0);
             xSemaphoreGive(g_MQ.mutex);
+            if (paused_httpd) {
+                wifi_httpd_resume_after_mqtt();
+            }
             if (s_startRetryTimer) {
                 esp_timer_stop(s_startRetryTimer);
                 esp_timer_start_once(s_startRetryTimer, 2000000ULL);
@@ -884,6 +907,9 @@ static void mqtt_bringup_task(void *arg)
             esp_timer_start_once(s_startRetryTimer, 5000000ULL);
         }
         xSemaphoreGive(g_MQ.mutex);
+        if (paused_httpd) {
+            wifi_httpd_resume_after_mqtt();
+        }
     }
 }
 
@@ -1008,13 +1034,9 @@ void mqtt_status_detail(char *buf, size_t len)
         snprintf(buf, len, "connected");
         return;
     }
-    if (wifi_softap_is_up() && !mqtt_is_connected()) {
-        /* SoftAP keeps permanent MQTT down for internal RAM. */
-        snprintf(buf, len, "softap_paused");
-        return;
-    }
     if (!wifi_sta_is_connected()) {
-        snprintf(buf, len, "no_sta");
+        /* SoftAP alone cannot reach the broker until home Wi‑Fi (APSTA) is up. */
+        snprintf(buf, len, wifi_softap_is_up() ? "softap_need_sta" : "no_sta");
         return;
     }
     mqttAttr_t mqtt;
@@ -1102,10 +1124,14 @@ int mqtt_test_ping(int timeout_ms, char *errBuf, int errLen)
             (void)mqtt_stop_wait(3000);
         }
     } else {
-        /* Do not publish on the httpd task — status/telemetry can block for seconds. */
+        /* Leave client up (incl. SoftAP) — bringup already resumed lean httpd. */
         if (errBuf) {
-            snprintf(errBuf, errLen, "ok → %s (%d ms)", g_MQ.topicUp, waited);
+            snprintf(errBuf, errLen, softap
+                     ? "ok → %s (%d ms; SoftAP+STA)"
+                     : "ok → %s (%d ms)",
+                     g_MQ.topicUp, waited);
         }
+        (void)softap;
     }
     return rc;
 }

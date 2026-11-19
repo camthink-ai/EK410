@@ -476,13 +476,23 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
         return send_err(req, "mqtt config save failed");
     }
     cJSON_Delete(root);
+    /* SoftAP+STA: mqtt_bringup pauses httpd briefly, starts MQTT, resumes lean. */
+    const bool softap = wifi_softap_is_up();
     if (wifi_sta_is_connected() && !keep_live) {
         mqtt_start();
     }
     /* Port is independent of transport — surface mismatch so UI can confirm. */
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "code", 0);
-    cJSON_AddStringToObject(resp, "msg", "ok");
+    if (softap && wifi_sta_is_connected() && !keep_live) {
+        cJSON_AddStringToObject(resp, "msg", "ok — connecting MQTT over SoftAP (brief web pause)");
+        cJSON_AddBoolToObject(resp, "mqttSoftApConnect", true);
+    } else if (softap && !wifi_sta_is_connected()) {
+        cJSON_AddStringToObject(resp, "msg", "saved — join home Wi-Fi to connect MQTT");
+        cJSON_AddBoolToObject(resp, "mqttDeferred", true);
+    } else {
+        cJSON_AddStringToObject(resp, "msg", "ok");
+    }
     if (mqtt.transport == MQTT_TRANSPORT_TCP && mqtt.port == 8883) {
         cJSON_AddStringToObject(resp, "warn", "port 8883 with mqtt (expected mqtts?)");
     } else if (mqtt.transport == MQTT_TRANSPORT_TLS && mqtt.port == 1883) {
@@ -1337,10 +1347,12 @@ void http_server_start(void)
     /* Canvas/upload + ctprov Wi-Fi scan need headroom beyond 4KB default.
      * Do NOT raise to 32KB — each httpd worker would exhaust C61 internal RAM.
      * 5K + static prov 4K .bss leaves room for httpd_start after Wi-Fi. */
-    config.stack_size = 5120;
+    /* SoftAP + MQTT coexistence: leaner workers so MQTT task stack fits. */
+    const bool softap = wifi_softap_is_up();
+    config.stack_size = softap ? 4608 : 5120;
     /* Browser + SPA can open many sockets; cap so Wi-Fi TX/RX buffers survive.
      * Each worker burns config.stack_size from internal RAM on C61. */
-    config.max_open_sockets = 3;
+    config.max_open_sockets = softap ? 2 : 3;
     /* setWifiParam may block up to ~20s while trying STA association */
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;
@@ -1355,5 +1367,7 @@ void http_server_start(void)
     for (size_t i = 0; i < sizeof(g_handlers) / sizeof(g_handlers[0]); i++) {
         ESP_ERROR_CHECK(httpd_register_uri_handler(s_httpd, &g_handlers[i]));
     }
-    ESP_LOGI(TAG, "web server up (%d endpoints)", config.max_uri_handlers);
+    ESP_LOGI(TAG, "web server up (%d endpoints, sockets=%d stack=%d softap=%d)",
+             config.max_uri_handlers, config.max_open_sockets, config.stack_size,
+             softap ? 1 : 0);
 }
