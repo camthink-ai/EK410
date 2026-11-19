@@ -90,9 +90,13 @@ void wifi_network_services_restore(bool want_mqtt);
 /**
  * SoftAP+httpd leave too little internal RAM for the MQTT task stack.
  * Pause httpd (SoftAP radio stays up) → mqtt_start → resume lean httpd.
- * Prefer wifi_httpd_pause/resume around mqtt bring-up; coalesce is pause+resume.
+ *
+ * wifi_httpd_pause_for_mqtt() return:
+ *   1  — this call stopped httpd; caller MUST resume after MQTT start
+ *   0  — httpd already down / nothing to pause; do not resume for our sake
+ *  -1  — stop did not finish in time; do not start MQTT on this attempt
  */
-void wifi_httpd_pause_for_mqtt(void);
+int wifi_httpd_pause_for_mqtt(void);
 void wifi_httpd_resume_after_mqtt(void);
 void wifi_coalesce_for_mqtt(void);
 

@@ -19,6 +19,10 @@ extern "C" {
 #endif
 
 void mqtt_open(void);
+/** False if mutex/queue/bring-up task failed at boot — Web should show error. */
+bool mqtt_infra_ok(void);
+/** Last broker/TLS failure string for UI ("" if none). */
+const char *mqtt_last_error(void);
 void mqtt_start(void);   /* no-op if host empty or already started */
 /**
  * Stop MQTT client under the module mutex.

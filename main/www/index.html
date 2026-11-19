@@ -1422,7 +1422,7 @@ const I18N = {
 zh:{
   "preview.tag":"显示预览 · 六色 / 布局","preview.phone":"手机","preview.tablet":"平板","preview.desktop":"桌面",
   "nav.overview":"概览","nav.network":"网络","nav.display":"显示","nav.system":"系统",
-  "banner.title":"配网热点已开启","banner.desc":"SSID 为 EK410-{deviceId}；配置中保持开启，可主动关闭。","banner.close":"关闭热点","banner.ble":"改用 BLE","toast.ap_closed":"热点已关闭","toast.ap_lost":"热点已关闭或连接断开，请改连家里 Wi‑Fi 后用设备 IP 打开。","toast.ble_start":"正在开启 BLE 配网…","toast.ble_ok":"BLE 已开启，请用 NeoLink 连接","toast.ble_busy":"MQTT 正忙（大图遥测），请稍后再开 SoftAP/BLE","toast.mqtt_busy":"MQTT 正忙，配置未保存，请稍后再试","toast.mqtt_saved_softap":"MQTT 已保存；请先连家里 Wi‑Fi 再连接","toast.mqtt_softap_connect":"正在 SoftAP 下连接 MQTT（网页可能短暂暂停）…","toast.mqtt_warn_port":"端口与协议可能不匹配，仍要保存吗？","toast.sleep_deferred_ap":"已保存；SoftAP 开启时休眠暂不生效，关热点后自动排程","toast.sleep_deferred_sta":"已保存；连上家里 Wi‑Fi 后才会排程休眠","toast.display_done":"刷屏完成","toast.display_fail":"刷屏失败，请查看事件日志","toast.ota_pending":"OTA 待确认：请保持联网直至状态消失",
+  "banner.title":"配网热点已开启","banner.desc":"SSID 为 EK410-{deviceId}；配置中保持开启，可主动关闭。","banner.close":"关闭热点","banner.ble":"改用 BLE","toast.ap_closed":"热点已关闭","toast.ap_lost":"热点已关闭或连接断开，请改连家里 Wi‑Fi 后用设备 IP 打开。","toast.ble_start":"正在开启 BLE 配网…","toast.ble_ok":"BLE 已开启，请用 NeoLink 连接","toast.ble_busy":"MQTT 正忙（大图遥测），请稍后再开 SoftAP/BLE","toast.mqtt_busy":"MQTT 正忙，配置未保存，请稍后再试","toast.mqtt_saved_softap":"配置已保存，请先连接上游 Wi‑Fi","toast.mqtt_softap_connect":"配置已保存，正在连接…","toast.mqtt_wait":"等待 MQTT 连接结果…","toast.mqtt_ok":"MQTT 已连接","toast.mqtt_fail":"MQTT 未连接","toast.mqtt_infra":"MQTT 后台未就绪，请重启设备","toast.mqtt_warn_port":"端口与协议可能不匹配，仍要保存吗？","toast.sleep_deferred_ap":"已保存；SoftAP 开启时休眠暂不生效，关热点后自动排程","toast.sleep_deferred_sta":"已保存；连上家里 Wi‑Fi 后才会排程休眠","toast.display_done":"刷屏完成","toast.display_fail":"刷屏失败，请查看事件日志","toast.ota_pending":"OTA 待确认：请保持联网直至状态消失",
   "prov.title":"配网方式","prov.hint":"SoftAP 与 BLE 互斥。先连家里 Wi‑Fi，再保存/测试 MQTT；连接时网页可能短暂无响应，成功后可保持 SoftAP 并看到已连接。","prov.open_ap":"开启 SoftAP","prov.open_ble":"开启 BLE（NeoLink）",
   "ov.mqtt_paused":"MQTT 需先连家里 Wi‑Fi","ov.mqtt_heap":"MQTT 堆不足推迟","ov.mqtt_connecting":"MQTT 连接中","ov.bat_na":"电量不可用",
   "ov.wlan_off":"WLAN 未连接","ov.wlan_on":"WLAN 已连接","ov.mqtt_off":"MQTT 未连接","ov.mqtt_on":"MQTT 已连接","ov.ap_on":"热点开启","ov.ap_off":"热点关闭",
@@ -1487,7 +1487,7 @@ zh:{
 en:{
   "preview.tag":"Display preview · 6-color / layout","preview.phone":"Phone","preview.tablet":"Tablet","preview.desktop":"Desktop",
   "nav.overview":"Overview","nav.network":"Network","nav.display":"Display","nav.system":"System",
-  "banner.title":"SoftAP is on","banner.desc":"SSID EK410-{deviceId}; stays on while configuring.","banner.close":"Close SoftAP","banner.ble":"Use BLE","toast.ap_closed":"Hotspot closed","toast.ap_lost":"Hotspot closed or link lost. Rejoin home Wi‑Fi and open the device IP.","toast.ble_start":"Starting BLE provisioning…","toast.ble_ok":"BLE on — connect with NeoLink","toast.ble_busy":"MQTT busy (large telemetry) — retry SoftAP/BLE later","toast.mqtt_busy":"MQTT busy — config not saved, retry shortly","toast.mqtt_saved_softap":"MQTT saved — join home Wi‑Fi to connect","toast.mqtt_softap_connect":"Connecting MQTT over SoftAP (brief web pause)…","toast.mqtt_warn_port":"Port and protocol may mismatch. Save anyway?","toast.sleep_deferred_ap":"Saved; sleep waits until SoftAP closes","toast.sleep_deferred_sta":"Saved; sleep arms after home Wi‑Fi is up","toast.display_done":"Display refresh done","toast.display_fail":"Display failed — check event log","toast.ota_pending":"OTA pending verify — stay online until cleared",
+  "banner.title":"SoftAP is on","banner.desc":"SSID EK410-{deviceId}; stays on while configuring.","banner.close":"Close SoftAP","banner.ble":"Use BLE","toast.ap_closed":"Hotspot closed","toast.ap_lost":"Hotspot closed or link lost. Rejoin home Wi‑Fi and open the device IP.","toast.ble_start":"Starting BLE provisioning…","toast.ble_ok":"BLE on — connect with NeoLink","toast.ble_busy":"MQTT busy (large telemetry) — retry SoftAP/BLE later","toast.mqtt_busy":"MQTT busy — config not saved, retry shortly","toast.mqtt_saved_softap":"Saved — join upstream Wi‑Fi first","toast.mqtt_softap_connect":"Saved — connecting…","toast.mqtt_wait":"Waiting for MQTT…","toast.mqtt_ok":"MQTT connected","toast.mqtt_fail":"MQTT not connected","toast.mqtt_infra":"MQTT backend not ready — reboot device","toast.mqtt_warn_port":"Port and protocol may mismatch. Save anyway?","toast.sleep_deferred_ap":"Saved; sleep waits until SoftAP closes","toast.sleep_deferred_sta":"Saved; sleep arms after home Wi‑Fi is up","toast.display_done":"Display refresh done","toast.display_fail":"Display failed — check event log","toast.ota_pending":"OTA pending verify — stay online until cleared",
   "prov.title":"Provisioning","prov.hint":"SoftAP and BLE are mutually exclusive. Join home Wi‑Fi first, then save/test MQTT; the page may pause briefly while connecting, then stay on SoftAP with mqttConnected.","prov.open_ap":"Open SoftAP","prov.open_ble":"Open BLE (NeoLink)",
   "ov.mqtt_paused":"MQTT needs home Wi‑Fi","ov.mqtt_heap":"MQTT deferred (heap)","ov.mqtt_connecting":"MQTT connecting","ov.bat_na":"Battery N/A",
   "ov.wlan_off":"WLAN disconnected","ov.wlan_on":"WLAN connected","ov.mqtt_off":"MQTT disconnected","ov.mqtt_on":"MQTT connected","ov.ap_on":"Hotspot on","ov.ap_off":"Hotspot off",
@@ -1780,7 +1780,7 @@ function mqttReasonLabel(reason, connected){
   const map={
     softap_paused:'ov.mqtt_paused', softap_need_sta:'ov.mqtt_paused',
     ble_paused:'ov.mqtt_paused', deferred_heap:'ov.mqtt_heap',
-    connecting:'ov.mqtt_connecting'
+    connecting:'ov.mqtt_connecting', infra_fail:'toast.mqtt_infra'
   };
   const key=map[reason]||'mq.disconnected';
   return {key, text:t(key)};
@@ -4177,18 +4177,57 @@ if($('mqTlsVerify')){
     btn.onclick=()=>setMqTlsVerify(btn.dataset.verify!=='0', true);
   });
 }
+/** Poll getDevInfo only — never re-save or call testMqtt during SoftAP pause. */
+async function waitMqttOutcome(timeoutMs){
+  const deadline=Date.now()+(timeoutMs||30000);
+  let lastReason='', lastErr='';
+  toast(t('toast.mqtt_wait'), 2500);
+  while(Date.now()<deadline){
+    try{
+      const i=await get('/api/v1/system/getDevInfo');
+      if(i.mqttInfraOk===false) return {ok:false, err:t('toast.mqtt_infra'), i};
+      if(i.mqttConnected) return {ok:true, i};
+      lastReason=i.mqttReason||'';
+      if(i.mqttLastError && i.mqttLastError!=='deferred_heap' && i.mqttReason!=='connecting'){
+        return {ok:false, err:i.mqttLastError, reason:lastReason, i};
+      }
+      lastErr=i.mqttLastError||'';
+    }catch(e){ /* SoftAP httpd pause — retry read-only */ }
+    await new Promise(r=>setTimeout(r,1000));
+  }
+  return {ok:false, err:lastErr||lastReason||'timeout', reason:lastReason};
+}
+async function applyMqttSaveResult(r, {poll}){
+  if(r&&r.mqttDeferred){
+    toast(t('toast.mqtt_saved_softap'), 4000);
+    return;
+  }
+  if(r&&r.mqttSoftApConnect){
+    toast(t('toast.mqtt_softap_connect'), 3500);
+    if(poll){
+      const o=await waitMqttOutcome(30000);
+      if(o.ok) toast(t('toast.mqtt_ok'), 3500);
+      else toast((o.err&&o.err!=='timeout')?o.err:(t('toast.mqtt_fail')+(o.reason?(' · '+o.reason):'')), 4500);
+    }
+    return;
+  }
+  let tip=t('toast.mqtt_saved');
+  if(r&&r.warn) tip=r.warn+' — '+(r.msg||'ok');
+  toast(tip, 3500);
+  if(poll){
+    const o=await waitMqttOutcome(20000);
+    if(o.ok) toast(t('toast.mqtt_ok'), 3500);
+    else if(o.err&&o.err!=='timeout') toast(o.err, 4500);
+  }
+}
 if($('btnMqttSave')) $('btnMqttSave').onclick=async()=>{
   if(!validateMqtt()){ toast(t('err.mqtt_incomplete')); return; }
   if(mqTransportPortWarn() && !(await ask(t('mq.transport'), t('toast.mqtt_warn_port')))) return;
   busy($('btnMqttSave'),1);
   try{
     const r=await post('/api/v1/network/setMqttParam', mqttPayload());
-    let tip=t('toast.mqtt_saved');
-    if(r&&r.mqttSoftApConnect) tip=t('toast.mqtt_softap_connect');
-    else if(r&&r.mqttDeferred) tip=t('toast.mqtt_saved_softap');
-    else if(r&&r.warn) tip=r.warn+' — '+(r.msg||'ok');
-    toast(tip, 4000);
-    setTimeout(()=>{ loadInfo(); loadCfg(); },1200);
+    await applyMqttSaveResult(r, {poll:!!(r&&r.mqttSoftApConnect)});
+    setTimeout(()=>{ loadInfo(); loadCfg(); },800);
   }catch(e){
     const msg=(e&&e.message)||'';
     toast(/busy/i.test(msg)?t('toast.mqtt_busy'):(msg||'MQTT save failed'), 4500);
@@ -4199,26 +4238,38 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
   if(!validateMqtt()){ toast(t('err.mqtt_incomplete')); return; }
   if(mqTransportPortWarn() && !(await ask(t('mq.transport'), t('toast.mqtt_warn_port')))) return;
   busy($('btnMqttTest'),1); toast(t('toast.mqtt_test'));
-  const ctrl=typeof AbortController!=='undefined'?new AbortController():null;
-  const to=ctrl?setTimeout(()=>ctrl.abort(),16000):null;
   try{
     const saved=await post('/api/v1/network/setMqttParam', mqttPayload());
-    if(saved&&saved.mqttSoftApConnect) toast(t('toast.mqtt_softap_connect'), 3500);
-    else if(saved&&saved.mqttDeferred) toast(t('toast.mqtt_saved_softap'), 3000);
+    if(saved&&saved.mqttDeferred){
+      toast(t('toast.mqtt_saved_softap'), 4000);
+      return;
+    }
+    if(saved&&saved.mqttSoftApConnect){
+      await applyMqttSaveResult(saved, {poll:true});
+      loadInfo(); loadCfg();
+      return;
+    }
+    /* Already online / LAN: optional sync probe — httpd will not pause SoftAP. */
+    try{
+      const i0=await get('/api/v1/system/getDevInfo');
+      if(i0.mqttConnected){
+        toast(t('toast.mqtt_ok')+' (session)', 3500);
+        loadInfo(); loadCfg();
+        return;
+      }
+    }catch(e){}
     const opt={method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'};
-    if(ctrl) opt.signal=ctrl.signal;
     const res=await fetch('/api/v1/network/testMqtt',opt);
     let r=null; try{r=await res.json()}catch(e){}
     if(!res.ok) throw new Error((r&&r.msg)||('HTTP '+res.status));
-    toast(r&&r.ok?(r.msg||'OK'):((r&&r.msg)||'failed'), 4000); loadInfo(); loadCfg();
+    if(r&&r.ok) toast(r.msg||t('toast.mqtt_ok'), 4000);
+    else toast((r&&r.msg)||t('toast.mqtt_fail'), 4500);
+    loadInfo(); loadCfg();
   }catch(e){
     const raw=(e&&e.message)||'';
-    const msg=(e&&e.name==='AbortError')
-      ?(lang==='zh'?'MQTT 测试超时：请先在 SoftAP 页连上家里 Wi‑Fi 再测':'MQTT test timed out — join home Wi‑Fi on SoftAP first')
-      :(/busy/i.test(raw)?t('toast.mqtt_busy'):raw||'failed');
-    toast(msg, 4500);
+    toast(/busy/i.test(raw)?t('toast.mqtt_busy'):(raw||'failed'), 4500);
   }
-  finally{ if(to) clearTimeout(to); busy($('btnMqttTest'),0); }
+  finally{ busy($('btnMqttTest'),0); }
 };
 
 if($('btnOpenBle')) $('btnOpenBle').onclick=async()=>{

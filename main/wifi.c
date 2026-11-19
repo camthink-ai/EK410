@@ -118,29 +118,37 @@ static void httpd_wait_heap_for_start(void)
 
 static bool s_httpdPausedForMqtt;
 
-void wifi_httpd_pause_for_mqtt(void)
+int wifi_httpd_pause_for_mqtt(void)
 {
     if (s_bleProvUp || s_bleEntering || wifi_ble_prov_is_up()) {
-        return;
+        return 0;
     }
     if (!http_server_is_up() && !http_server_is_stopping()) {
-        return;
+        return 0;
     }
     ESP_LOGI(TAG, "pause httpd for MQTT (softap=%d largest_int=%u)",
              s_softapUp ? 1 : 0,
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    s_httpdPausedForMqtt = true;
     http_server_stop();
-    (void)http_server_stop_wait(2000);
+    if (http_server_stop_wait(2000) != 0 || http_server_is_stopping()) {
+        ESP_LOGW(TAG, "httpd pause incomplete — still stopping");
+        s_httpdPausedForMqtt = false;
+        return -1;
+    }
+    s_httpdPausedForMqtt = true;
     vTaskDelay(pdMS_TO_TICKS(150));
     ESP_LOGI(TAG, "httpd paused largest_int=%u",
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    return 1;
 }
 
 void wifi_httpd_resume_after_mqtt(void)
 {
     if (s_bleProvUp || s_bleEntering || wifi_ble_prov_is_up()) {
         s_httpdPausedForMqtt = false;
+        return;
+    }
+    if (!s_httpdPausedForMqtt && http_server_is_up()) {
         return;
     }
     s_httpdPausedForMqtt = false;
@@ -159,9 +167,10 @@ void wifi_httpd_resume_after_mqtt(void)
 
 void wifi_coalesce_for_mqtt(void)
 {
-    wifi_httpd_pause_for_mqtt();
-    vTaskDelay(pdMS_TO_TICKS(50));
-    wifi_httpd_resume_after_mqtt();
+    if (wifi_httpd_pause_for_mqtt() == 1) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        wifi_httpd_resume_after_mqtt();
+    }
 }
 
 void wifi_network_services_restore(bool want_mqtt)

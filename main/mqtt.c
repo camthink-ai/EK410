@@ -683,31 +683,52 @@ static void mqtt_bringup_task(void *arg);
 
 static SemaphoreHandle_t s_bringupSem;
 static volatile bool s_bringupPending;
+static bool s_mqttInfraOk;
+
+bool mqtt_infra_ok(void)
+{
+    return s_mqttInfraOk;
+}
+
+const char *mqtt_last_error(void)
+{
+    return s_lastFail;
+}
 
 void mqtt_open(void)
 {
     memset(&g_MQ, 0, sizeof(mdMqtt_t));
+    s_mqttInfraOk = false;
     g_MQ.mutex = xSemaphoreCreateMutex();
     g_MQ.cmdQueue = xQueueCreate(CMD_QUEUE_LEN, sizeof(char *));
     s_bringupSem = xSemaphoreCreateBinary();
-    /* Keep lean — 8KB here + httpd 5K left largest_int ≈640 after boot paint
-     * and wifi_start, so the MQTT client task (3K TCP / 8K TLS) never started.
-     * Long render_text uses heap-backed espd_render_t. */
-    xTaskCreate(cmd_task, "mqtt_cmd", 5120, NULL, 5, NULL);
-    /* Permanent bring-up worker — created at boot while internal heap is whole.
+    if (!g_MQ.mutex || !g_MQ.cmdQueue || !s_bringupSem) {
+        ESP_LOGE(TAG, "mqtt_open: mutex/queue/sem alloc failed");
+        return;
+    }
+    /* Keep lean — created at boot while internal heap is whole.
      * Spawning 6KB mqtt_up later (SoftAP/test) hits NO_MEM and testMqtt hangs. */
-    if (s_bringupSem) {
-        xTaskCreate(mqtt_bringup_task, "mqtt_up", 6144, NULL, 5, NULL);
+    if (xTaskCreate(cmd_task, "mqtt_cmd", 5120, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "mqtt_open: mqtt_cmd task create failed");
+        return;
+    }
+    if (xTaskCreate(mqtt_bringup_task, "mqtt_up", 6144, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "mqtt_open: mqtt_up task create failed");
+        return;
     }
 
     const esp_timer_create_args_t timerArgs = {
         .name = "telemetry", .callback = telemetry_timer_cb,
     };
-    ESP_ERROR_CHECK(esp_timer_create(&timerArgs, &s_telemetryTimer));
     const esp_timer_create_args_t retryArgs = {
         .name = "mqtt_start", .callback = mqtt_start_retry_cb,
     };
-    ESP_ERROR_CHECK(esp_timer_create(&retryArgs, &s_startRetryTimer));
+    if (esp_timer_create(&timerArgs, &s_telemetryTimer) != ESP_OK ||
+        esp_timer_create(&retryArgs, &s_startRetryTimer) != ESP_OK) {
+        ESP_LOGE(TAG, "mqtt_open: timer create failed");
+        return;
+    }
+    s_mqttInfraOk = true;
 }
 
 static bool mqtt_esp_start_locked(void)
@@ -863,8 +884,17 @@ static void mqtt_bringup_task(void *arg)
          * still see mqttConnected before closing the hotspot.
          */
         if (softap && peek.host[0]) {
-            wifi_httpd_pause_for_mqtt();
-            paused_httpd = true;
+            int pr = wifi_httpd_pause_for_mqtt();
+            if (pr < 0) {
+                ESP_LOGW(TAG, "defer start — httpd pause incomplete");
+                mqtt_set_fail("httpd pause incomplete");
+                if (s_startRetryTimer) {
+                    esp_timer_stop(s_startRetryTimer);
+                    esp_timer_start_once(s_startRetryTimer, 2000000ULL);
+                }
+                continue;
+            }
+            paused_httpd = (pr == 1);
             for (int i = 0; i < 40 && !internal_heap_ready_for(need_stack); i++) {
                 vTaskDelay(pdMS_TO_TICKS(50));
             }
@@ -889,6 +919,7 @@ static void mqtt_bringup_task(void *arg)
                      (unsigned)free_heap,
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                      need_stack, softap ? 1 : 0);
+            mqtt_set_fail("deferred_heap");
             xSemaphoreGive(g_MQ.mutex);
             if (paused_httpd) {
                 wifi_httpd_resume_after_mqtt();
@@ -900,6 +931,7 @@ static void mqtt_bringup_task(void *arg)
             continue;
         }
         if (mqtt_esp_start_locked()) {
+            mqtt_clear_fail();
             esp_timer_stop(s_telemetryTimer);
             esp_timer_start_periodic(s_telemetryTimer, TELEMETRY_PERIOD_US);
         } else if (s_startRetryTimer) {
@@ -929,11 +961,11 @@ void mqtt_start(void)
         }
         return;
     }
-    if (g_MQ.client) {
+    if (!s_mqttInfraOk || !s_bringupSem) {
+        ESP_LOGW(TAG, "mqtt_start skipped — infra not ready");
         return;
     }
-    if (!s_bringupSem) {
-        ESP_LOGW(TAG, "mqtt_start before mqtt_open");
+    if (g_MQ.client) {
         return;
     }
     if (s_bringupPending) {
@@ -1045,12 +1077,16 @@ void mqtt_status_detail(char *buf, size_t len)
         snprintf(buf, len, "no_host");
         return;
     }
+    if (!s_mqttInfraOk) {
+        snprintf(buf, len, "infra_fail");
+        return;
+    }
     if (g_MQ.client) {
         snprintf(buf, len, "connecting");
         return;
     }
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    if (largest < 10240) {
+    if (largest < 10240 || (s_lastFail[0] && strcmp(s_lastFail, "deferred_heap") == 0)) {
         snprintf(buf, len, "deferred_heap");
         return;
     }

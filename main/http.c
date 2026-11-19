@@ -141,10 +141,17 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     cJSON_AddBoolToObject(obj, "mqttConnected",
                           mqtt_is_connected() && wifi_sta_is_connected());
     cJSON_AddBoolToObject(obj, "mqttStarted", mqtt_is_started());
+    cJSON_AddBoolToObject(obj, "mqttInfraOk", mqtt_infra_ok());
     {
         char mqReason[32];
         mqtt_status_detail(mqReason, sizeof(mqReason));
         cJSON_AddStringToObject(obj, "mqttReason", mqReason);
+    }
+    {
+        const char *le = mqtt_last_error();
+        if (le && le[0]) {
+            cJSON_AddStringToObject(obj, "mqttLastError", le);
+        }
     }
     cJSON_AddBoolToObject(obj, "httpServerUp", http_server_is_up());
     cJSON_AddBoolToObject(obj, "softapUp", wifi_softap_is_up());
@@ -447,6 +454,7 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     const bool same_broker =
         prev.transport == mqtt.transport &&
         prev.port == mqtt.port &&
+        prev.qos == mqtt.qos &&
         prev.tlsVerify == mqtt.tlsVerify &&
         strcmp(prev.host, mqtt.host) == 0 &&
         strcmp(prev.username, mqtt.username) == 0 &&
@@ -476,15 +484,13 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
         return send_err(req, "mqtt config save failed");
     }
     cJSON_Delete(root);
-    /* SoftAP+STA: mqtt_bringup pauses httpd briefly, starts MQTT, resumes lean. */
+    /* SoftAP+STA: mqtt_bringup may pause httpd — send HTTP response FIRST so
+     * SoftAP clients do not lose the setMqttParam reply mid-pause. */
     const bool softap = wifi_softap_is_up();
-    if (wifi_sta_is_connected() && !keep_live) {
-        mqtt_start();
-    }
-    /* Port is independent of transport — surface mismatch so UI can confirm. */
+    const bool will_start = wifi_sta_is_connected() && !keep_live;
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "code", 0);
-    if (softap && wifi_sta_is_connected() && !keep_live) {
+    if (softap && will_start) {
         cJSON_AddStringToObject(resp, "msg", "ok — connecting MQTT over SoftAP (brief web pause)");
         cJSON_AddBoolToObject(resp, "mqttSoftApConnect", true);
     } else if (softap && !wifi_sta_is_connected()) {
@@ -502,6 +508,11 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     esp_err_t res = send_json(req, str);
     cJSON_free(str);
     cJSON_Delete(resp);
+    if (will_start) {
+        /* Let the SoftAP TCP stack flush the response before pause. */
+        vTaskDelay(pdMS_TO_TICKS(80));
+        mqtt_start();
+    }
     return res;
 }
 
@@ -1347,11 +1358,10 @@ void http_server_start(void)
     /* Canvas/upload + ctprov Wi-Fi scan need headroom beyond 4KB default.
      * Do NOT raise to 32KB — each httpd worker would exhaust C61 internal RAM.
      * 5K + static prov 4K .bss leaves room for httpd_start after Wi-Fi. */
-    /* SoftAP + MQTT coexistence: leaner workers so MQTT task stack fits. */
+    /* SoftAP + MQTT: leaner httpd. esp_http_server uses ONE server task for
+     * multiple sockets — max_open_sockets cuts socket/lwIP cost, not N stacks. */
     const bool softap = wifi_softap_is_up();
     config.stack_size = softap ? 4608 : 5120;
-    /* Browser + SPA can open many sockets; cap so Wi-Fi TX/RX buffers survive.
-     * Each worker burns config.stack_size from internal RAM on C61. */
     config.max_open_sockets = softap ? 2 : 3;
     /* setWifiParam may block up to ~20s while trying STA association */
     config.recv_wait_timeout = 30;
