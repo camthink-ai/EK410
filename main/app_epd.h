@@ -94,6 +94,11 @@ void app_epd_sleep_abort(void);
 /** False while sleep_prepare holds the gate (callers should return busy). */
 bool app_epd_jobs_accepted(void);
 
+/** True while a render job is running or queued (Web polls after "queued"). */
+bool app_epd_display_busy(void);
+/** Result of the last panel commit / URL display (true = OK). */
+bool app_epd_last_display_ok(void);
+
 /* Queue the title+lines boot/setup screen. */
 int app_epd_boot_screen_async(const char *title, const char *const *lines, int count);
 

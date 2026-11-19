@@ -174,10 +174,12 @@ void app_main(void)
     /* Deep-sleep MAIN → SoftAP, PAGE → BLE (consumes wake intent). */
     boot_apply_sleep_wake_provisioning();
 
-    if (http_server_is_up() || app_epd_panel_ok()) {
+    /* Prefer httpd/panel; STA-online alone is enough (headless OK). GOT_IP /
+     * httpd watchdog also call ota_confirm_running() if deferred here. */
+    if (http_server_is_up() || app_epd_panel_ok() || online) {
         ota_confirm_running();
     } else {
-        ESP_LOGW(TAG, "deferring OTA confirm — no httpd/panel yet");
+        ESP_LOGW(TAG, "deferring OTA confirm — no httpd/panel/STA yet");
     }
 
     {

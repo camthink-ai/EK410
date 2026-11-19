@@ -36,6 +36,7 @@
 #include "sleep.h"
 #include "app_epd.h"
 #include "evtlog.h"
+#include "ota.h"
 
 #define TAG "-->WIFI"
 #define AP_PASS "12345678"
@@ -62,6 +63,26 @@ static bool s_wifiDriverUp; /* esp_wifi_init done */
  * start aborted in phy_track_pll_init (ESP_ERR_NO_MEM). After NimBLE
  * teardown this flag stays true for the same reason. */
 static bool s_wifiLeanBuffers = true;
+static char s_lastProvErr[96];
+
+const char *wifi_last_error(void)
+{
+    return s_lastProvErr;
+}
+
+void wifi_clear_last_error(void)
+{
+    s_lastProvErr[0] = '\0';
+}
+
+static void wifi_set_last_error(const char *msg)
+{
+    if (!msg || !msg[0]) {
+        s_lastProvErr[0] = '\0';
+        return;
+    }
+    strlcpy(s_lastProvErr, msg, sizeof(s_lastProvErr));
+}
 static bool s_softapUp;
 static bool s_softapOpening; /* STA→APSTA in progress — suppress reconnect thrash */
 static bool s_softapClosing; /* suppress LED thrash while APSTA→STA tears down */
@@ -403,6 +424,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
                              (unsigned)largest);
                 }
             }
+            if (http_server_is_up()) {
+                /* Confirm OTA once LAN web is up (covers headless / late IP). */
+                ota_confirm_running();
+            }
             if (http_server_is_up() || s_softapUp) {
                 mqtt_start();
             } else {
@@ -436,6 +461,7 @@ static void httpd_retry_timer_cb(void *arg)
         }
     }
     if (http_server_is_up()) {
+        ota_confirm_running();
         if (wifi_sta_is_connected()) {
             mqtt_start();
         }
@@ -474,8 +500,11 @@ static void httpd_watchdog_timer_cb(void *arg)
     http_server_start();
     if (!http_server_is_up()) {
         httpd_arm_retry(20);
-    } else if (wifi_sta_is_connected() && !mqtt_is_started()) {
-        mqtt_start();
+    } else {
+        ota_confirm_running();
+        if (wifi_sta_is_connected() && !mqtt_is_started()) {
+            mqtt_start();
+        }
     }
 }
 
@@ -888,6 +917,7 @@ void wifi_softap_open(void)
     if (mqtt_stop_wait(5000) != 0) {
         ESP_LOGE(TAG, "SoftAP open aborted — mqtt_stop busy");
         evtlog_event("WIFI", "SoftAP open aborted mqtt busy");
+        wifi_set_last_error("mqtt_busy");
         s_softapOpening = false;
         wifi_led_apply_idle_state();
         led_pulse(LEDC_ERR_R, 1200);
@@ -936,6 +966,7 @@ void wifi_softap_open(void)
     s_softapUp = true;
     s_softapOpening = false;
     s_apClients = 0;
+    wifi_clear_last_error();
     led_set(LEDC_NET_R, LED_BLINK);
     softap_arm_idle();
 
@@ -1103,6 +1134,7 @@ void wifi_ble_prov_enter(void)
     if (mqtt_stop_wait(5000) != 0) {
         ESP_LOGE(TAG, "BLE enter aborted — mqtt_stop busy (retry SoftAP/STA)");
         evtlog_event("BLE", "enter aborted mqtt busy");
+        wifi_set_last_error("mqtt_busy");
         ble_enter_restore(was_softap);
         return;
     }
@@ -1126,12 +1158,14 @@ void wifi_ble_prov_enter(void)
 
     if (ct_prov_ble_start() != ESP_OK) {
         ESP_LOGE(TAG, "CT-Prov BLE start failed");
+        wifi_set_last_error("ble_start_failed");
         ble_enter_restore(was_softap);
         return;
     }
 
     s_bleProvUp = true;
     s_bleEntering = false;
+    wifi_clear_last_error();
     ble_prov_arm_idle();
     led_set(LEDC_BLE_R, LED_BLINK);
     evtlog_event("BLE", "CT-Prov up idle=%us", (unsigned)(ble_idle_ms() / 1000u));
@@ -1151,6 +1185,7 @@ void wifi_ble_prov_enter(void)
     if (warm_largest < 10240) {
         ESP_LOGW(TAG, "BLE warm skip — largest_int %u < 10KB (manual SSID ok)",
                  (unsigned)warm_largest);
+        wifi_set_last_error("ble_scan_warm_skip");
     } else if (wifi_driver_ensure() == ESP_OK &&
                esp_wifi_set_mode(WIFI_MODE_STA) == ESP_OK) {
         if (!s_wifiStarted && esp_wifi_start() == ESP_OK) {
@@ -1159,10 +1194,12 @@ void wifi_ble_prov_enter(void)
         }
     } else {
         ESP_LOGW(TAG, "BLE warm: Wi-Fi unavailable — NeoLink may need manual SSID");
+        wifi_set_last_error("ble_scan_warm_skip");
     }
 
     if (ct_prov_ble_start_worker() != ESP_OK) {
         ESP_LOGW(TAG, "CT-Prov worker deferred fail — GATT cmds unavailable");
+        wifi_set_last_error("ble_gatt_unavailable");
     }
 }
 

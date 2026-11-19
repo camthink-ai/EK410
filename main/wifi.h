@@ -94,6 +94,10 @@ void wifi_network_services_restore(bool want_mqtt);
  */
 void wifi_coalesce_for_mqtt(void);
 
+/** Last SoftAP/BLE enter failure token for Web ("" when clear). */
+const char *wifi_last_error(void);
+void wifi_clear_last_error(void);
+
 /**
  * Temporarily disable modem sleep for bulk HTTPS (display_url / wake image).
  * Call with true before the transfer, false when done. Nested calls are counted.

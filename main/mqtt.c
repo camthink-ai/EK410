@@ -994,6 +994,47 @@ bool mqtt_is_started(void)
     return g_MQ.client != NULL;
 }
 
+void mqtt_status_detail(char *buf, size_t len)
+{
+    if (!buf || len == 0) {
+        return;
+    }
+    buf[0] = '\0';
+    if (wifi_ble_prov_is_up()) {
+        snprintf(buf, len, "ble_paused");
+        return;
+    }
+    if (mqtt_is_connected() && wifi_sta_is_connected()) {
+        snprintf(buf, len, "connected");
+        return;
+    }
+    if (wifi_softap_is_up() && !mqtt_is_connected()) {
+        /* SoftAP keeps permanent MQTT down for internal RAM. */
+        snprintf(buf, len, "softap_paused");
+        return;
+    }
+    if (!wifi_sta_is_connected()) {
+        snprintf(buf, len, "no_sta");
+        return;
+    }
+    mqttAttr_t mqtt;
+    cfg_get_mqtt_attr(&mqtt);
+    if (mqtt.host[0] == '\0') {
+        snprintf(buf, len, "no_host");
+        return;
+    }
+    if (g_MQ.client) {
+        snprintf(buf, len, "connecting");
+        return;
+    }
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (largest < 10240) {
+        snprintf(buf, len, "deferred_heap");
+        return;
+    }
+    snprintf(buf, len, "disconnected");
+}
+
 int mqtt_test_ping(int timeout_ms, char *errBuf, int errLen)
 {
     if (errBuf && errLen > 0) {
@@ -1001,7 +1042,10 @@ int mqtt_test_ping(int timeout_ms, char *errBuf, int errLen)
     }
     if (!wifi_sta_is_connected()) {
         if (errBuf) {
-            snprintf(errBuf, errLen, "Wi-Fi not connected");
+            snprintf(errBuf, errLen,
+                     wifi_softap_is_up()
+                         ? "need home Wi-Fi (STA) — SoftAP alone cannot reach broker"
+                         : "Wi-Fi not connected");
         }
         return -1;
     }
@@ -1013,11 +1057,11 @@ int mqtt_test_ping(int timeout_ms, char *errBuf, int errLen)
         }
         return -1;
     }
-    /* Already up — return immediately. Do NOT publish here: telemetry may hold
-     * the client lock for a large preview and would wedge the httpd worker. */
+    /* Already up — session check only. Do NOT publish: telemetry may hold the
+     * client lock for a large preview and would wedge the httpd worker. */
     if (g_MQ.isConnected && g_MQ.client) {
         if (errBuf) {
-            snprintf(errBuf, errLen, "ok → %s (already connected)", g_MQ.topicUp);
+            snprintf(errBuf, errLen, "ok → %s (session up, no publish)", g_MQ.topicUp);
         }
         return 0;
     }

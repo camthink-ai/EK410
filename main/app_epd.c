@@ -177,6 +177,8 @@ static bool s_userContent; /* true after customer push; SoftAP close must not wi
 /* Sleep gate: refuse new queue/upload; sleep_prepare HOLDs panel lock. */
 static bool s_acceptJobs = true;
 static bool s_sleepHoldsLock;
+static volatile bool s_displayBusy;
+static bool s_lastDisplayOk = true;
 
 #define EPD_COLOR_WHITE 0x11
 
@@ -192,10 +194,12 @@ static int epd_commit_display(void)
     int ok = epdDisplay();
     if (!ok) {
         s_panelDirty = true;
+        s_lastDisplayOk = false;
         ESP_LOGW(TAG, "display incomplete — panel marked dirty");
         evtlog_event("EPD", "display incomplete (BUSY timeout)");
     } else {
         s_panelDirty = false;
+        s_lastDisplayOk = true;
     }
     return ok;
 }
@@ -290,6 +294,7 @@ static void render_task(void *arg)
         if (!msg) {
             continue;
         }
+        s_displayBusy = true;
         switch (msg->kind) {
         case 1: {
             const char *lines[] = { "EPAPER OK", "six color test" };
@@ -348,8 +353,10 @@ static void render_task(void *arg)
                 } else {
                     ESP_LOGW(TAG, "url fail (%s) — restored last frame", why);
                 }
+                s_lastDisplayOk = false;
                 mqtt_publish_cmd_ack("display_url", "error", why);
             } else {
+                s_lastDisplayOk = true;
                 mqtt_publish_cmd_ack("display_url", "ok", "displayed");
             }
             break;
@@ -427,7 +434,19 @@ static void render_task(void *arg)
         }
         free(msg);
         msg = NULL;
+        s_displayBusy = false;
     }
+}
+
+bool app_epd_display_busy(void)
+{
+    UBaseType_t queued = s_renderQueue ? uxQueueMessagesWaiting(s_renderQueue) : 0;
+    return s_displayBusy || queued > 0;
+}
+
+bool app_epd_last_display_ok(void)
+{
+    return s_lastDisplayOk;
 }
 
 /* Build queue items on the heap — render_msg_t embeds canvas_t (~12KB with

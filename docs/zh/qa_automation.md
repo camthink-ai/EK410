@@ -77,3 +77,5 @@
 72h 结束发布记录须能回答：稳定性（零 panic/WDT/非计划重启）、业务结果、资源趋势、功耗与刷屏零切电、可追溯（SHA、串口、波形、汇总、失败样本）。
 
 **落地顺序**：睡眠电流与面板切电采集 → MQTT 忙时自动化（已基本具备）→ 72h 长测。本文为首版执行方案，循环次数与 10% 回退线尚未用 EK410 真机数据校准。
+
+**与固件产品闭环**：`mqttReason` / `provError` / `displayBusy` / `sleepDeferred`、SoftAP·BLE Web 入口、端口↔协议告警已在设备侧收口；`qa_gate.py smoke` 不替代 candidate/soak 真机门禁（无 CI、功耗仪表与断电循环用例仍多为 skipped/invalid）。

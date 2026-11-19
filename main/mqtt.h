@@ -12,6 +12,7 @@
 #define __MQTT_H__
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,6 +33,11 @@ int mqtt_stop_wait(int budget_ms);
 int mqtt_restart(void);
 bool mqtt_is_connected(void);
 bool mqtt_is_started(void); /* client object exists (may still be connecting) */
+/**
+ * Short machine token for UI: connected | softap_paused | ble_paused |
+ * no_sta | no_host | connecting | deferred_heap | disconnected.
+ */
+void mqtt_status_detail(char *buf, size_t len);
 void mqtt_publish_telemetry(void);
 
 /* Async command result (e.g. display_url finished after "queued" ack). */

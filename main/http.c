@@ -140,14 +140,28 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     }
     cJSON_AddBoolToObject(obj, "mqttConnected",
                           mqtt_is_connected() && wifi_sta_is_connected());
+    cJSON_AddBoolToObject(obj, "mqttStarted", mqtt_is_started());
+    {
+        char mqReason[32];
+        mqtt_status_detail(mqReason, sizeof(mqReason));
+        cJSON_AddStringToObject(obj, "mqttReason", mqReason);
+    }
     cJSON_AddBoolToObject(obj, "httpServerUp", http_server_is_up());
     cJSON_AddBoolToObject(obj, "softapUp", wifi_softap_is_up());
     cJSON_AddBoolToObject(obj, "bleProvUp", wifi_ble_prov_is_up());
     /* Single image always includes NimBLE CT-Prov (XOR with SoftAP). */
     cJSON_AddBoolToObject(obj, "bleSkuAvailable", true);
+    {
+        const char *pe = wifi_last_error();
+        if (pe && pe[0]) {
+            cJSON_AddStringToObject(obj, "provError", pe);
+        }
+    }
     cJSON_AddStringToObject(obj, "projectName", ota_running_project_name());
     cJSON_AddBoolToObject(obj, "provisioned", config_is_provisioned());
     cJSON_AddBoolToObject(obj, "panelOk", app_epd_panel_ok());
+    cJSON_AddBoolToObject(obj, "displayBusy", app_epd_display_busy());
+    cJSON_AddBoolToObject(obj, "lastDisplayOk", app_epd_last_display_ok());
     {
         evtlog_meta_t em;
         evtlog_get_meta(&em);
@@ -159,6 +173,7 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     }
     cJSON_AddNumberToObject(obj, "uptime_s", (double)(esp_timer_get_time() / 1000000));
     int batMv = battery_read_mv();
+    cJSON_AddBoolToObject(obj, "batterySense", batMv >= 0);
     if (batMv >= 0) {
         cJSON_AddNumberToObject(obj, "batteryMv", batMv);
         cJSON_AddNumberToObject(obj, "batteryPercent", battery_soc_from_mv(batMv));
@@ -464,7 +479,20 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (wifi_sta_is_connected() && !keep_live) {
         mqtt_start();
     }
-    return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
+    /* Port is independent of transport — surface mismatch so UI can confirm. */
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "code", 0);
+    cJSON_AddStringToObject(resp, "msg", "ok");
+    if (mqtt.transport == MQTT_TRANSPORT_TCP && mqtt.port == 8883) {
+        cJSON_AddStringToObject(resp, "warn", "port 8883 with mqtt (expected mqtts?)");
+    } else if (mqtt.transport == MQTT_TRANSPORT_TLS && mqtt.port == 1883) {
+        cJSON_AddStringToObject(resp, "warn", "port 1883 with mqtts (expected mqtt?)");
+    }
+    char *str = cJSON_PrintUnformatted(resp);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(resp);
+    return res;
 }
 
 static void softap_close_deferred_task(void *arg)
@@ -998,15 +1026,18 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
                  img_quality_str(p.imageQuality));
 
     bool sleepSoon = false;
+    const char *sleepDeferred = NULL;
     if (p.mode == POWER_MODE_CYCLE) {
         if (wifi_softap_is_up()) {
             ESP_LOGW(TAG, "SoftAP up — sleep schedule deferred until AP closes");
             sleep_cancel();
+            sleepDeferred = "softap";
         } else if (wifi_sta_is_connected()) {
             sleep_arm_from_config();
         } else {
             ESP_LOGW(TAG, "not online — sleep schedule deferred until GOT_IP");
             sleep_cancel();
+            sleepDeferred = "no_sta";
         }
     } else if (p.mode == POWER_MODE_HIBERNATE) {
         sleep_cancel();
@@ -1021,7 +1052,18 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
         sleep_now();
         return res;
     }
-    return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "code", 0);
+    cJSON_AddStringToObject(resp, "msg", sleepDeferred ? "saved — sleep deferred" : "ok");
+    cJSON_AddBoolToObject(resp, "sleepArmed", sleep_is_armed());
+    if (sleepDeferred) {
+        cJSON_AddStringToObject(resp, "sleepDeferred", sleepDeferred);
+    }
+    char *str = cJSON_PrintUnformatted(resp);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(resp);
+    return res;
 }
 
 static esp_err_t sleep_now_handle(httpd_req_t *req)

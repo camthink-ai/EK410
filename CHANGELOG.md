@@ -26,6 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - `cfg_set_mqtt_ca_pem` / `cfg_set_mqtt_attr` return NVS errors; CA write rolls back RAM on failure; Web reports `mqtt CA save failed` / `mqtt config save failed` instead of false OK.
 - QA gate: `tools/qa_gate.py` + `qa_lib` (smoke/candidate/soak, JSON statuses); plan in `docs/qa_automation.md`.
 - LAN Web: embed gzip `INDEX_HTML` (~63KB wire), chunked send, `max_open_sockets=3`; cold boot uses lean Wi‑Fi buffers; MQTT requires `largest_int≥10KB`; defer httpd until STA online so opening the device IP no longer triggers `wifi:mem fail` / `phy_track_pll` NO_MEM abort.
+- Product loops: `mqttReason` / `provError` / `displayBusy` / `sleepDeferred` / batterySense; SoftAP+BLE Web entry; port↔transport warn; OTA confirm on GOT_IP/httpd; sleep/MQTT-busy/display completion surfaced in SPA (SoftAP still pauses permanent MQTT by design).
 
 ### 中文
 
@@ -36,6 +37,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - MQTT CA / broker 持久化失败会返回错误；CA 写失败时回滚内存中的 PEM。
 - 自动化验收入口 `qa_gate.py`（smoke / candidate / soak）与方案文档。
 - 局域网打开设备 IP 不再因首页过大 / 内部堆过紧而重启：gzip 首页、lean Wi‑Fi、MQTT 堆门槛、STA 未上线时推迟 httpd。
+- 产品闭环：MQTT/配网失败原因、刷屏忙闲、睡眠推迟、端口协议告警、SPA 开 BLE；SoftAP 下常驻 MQTT 仍暂停（C61 堆限制）。
 
 ---
 
