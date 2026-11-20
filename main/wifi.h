@@ -64,6 +64,8 @@ void wifi_ble_prov_open(void);   /* start BLE CT-Prov in-process (or refresh idl
 void wifi_ble_prov_enter(void);  /* same as open; kept for call-site clarity */
 void wifi_ble_prov_close(void);  /* stop NimBLE; restore httpd/mqtt; SoftAP if pending */
 bool wifi_ble_prov_is_up(void);
+/** True while BLE CT-Prov is up or wifi_ble_prov_enter() teardown is in flight. */
+bool wifi_ble_prov_busy(void);
 void wifi_ble_prov_touch(void);
 
 /* Back-compat names used by button/main. */
@@ -92,13 +94,18 @@ void wifi_network_services_restore(bool want_mqtt);
  * Pause httpd (SoftAP radio stays up) → mqtt_start → resume lean httpd.
  *
  * wifi_httpd_pause_for_mqtt() return:
- *   1  — this call stopped httpd; caller MUST resume after MQTT start
- *   0  — httpd already down / nothing to pause; do not resume for our sake
+ *   1  — pause window owned (stopped httpd, or SoftAP with httpd already down);
+ *        caller MUST resume after MQTT start so watchdog cannot steal heap
+ *   0  — BLE owns radio / nothing to claim
  *  -1  — stop did not finish in time; do not start MQTT on this attempt
  */
 int wifi_httpd_pause_for_mqtt(void);
 void wifi_httpd_resume_after_mqtt(void);
 void wifi_coalesce_for_mqtt(void);
+/** SoftAP web-first: cancel deferred MQTT restore before user mqtt_start. */
+void wifi_softap_mqtt_user_start(void);
+/** True while SoftAP is holding MQTT off so 192.168.4.1 can bind. */
+bool wifi_softap_mqtt_defer_pending(void);
 
 /** Last SoftAP/BLE enter failure token for Web ("" when clear). */
 const char *wifi_last_error(void);

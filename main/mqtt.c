@@ -114,18 +114,22 @@ static int mqtt_task_stack_for(int transport)
     return (transport == MQTT_TRANSPORT_TLS) ? MQTT_TASK_STACK_TLS : MQTT_TASK_STACK_TCP;
 }
 
+static size_t mqtt_internal_need(int stack_bytes)
+{
+    /* Stack alone is not enough: after client_start, DNS/lwIP/phy need more
+     * contiguous internal RAM. ~4KB historically aborted; ~8.7KB with httpd
+     * up used to defer forever under a 10KB floor. 8KB is the practical floor. */
+    size_t need = (size_t)stack_bytes + (size_t)MQTT_TASK_STACK_SLACK;
+    if (need < 8192) {
+        need = 8192;
+    }
+    return need;
+}
+
 static bool internal_heap_ready_for(int stack_bytes)
 {
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    /* Stack alone is not enough: after client_start, DNS/lwIP sems and
-     * phy_track_pll_init also need internal RAM. With largest≈4KB the MQTT
-     * task creates then ESP_ERROR_CHECK(NO_MEM) aborts the chip — which
-     * looks like "open LAN IP → reboot". Keep a hard floor above the stack. */
-    size_t need = (size_t)stack_bytes + (size_t)MQTT_TASK_STACK_SLACK;
-    if (need < 10240) {
-        need = 10240;
-    }
-    return largest >= need;
+    return largest >= mqtt_internal_need(stack_bytes);
 }
 
 static void build_broker_uri(char *uri, size_t uri_len, const mqttAttr_t *mqtt)
@@ -430,9 +434,13 @@ static void handle_command(const char *raw, int len)
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
     } else if (!strcasecmp(cmd, "sleep_now") || !strcasecmp(cmd, "sleep")) {
-        mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
-        vTaskDelay(pdMS_TO_TICKS(400));
-        sleep_now();
+        if (wifi_softap_is_up()) {
+            mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
+        } else {
+            mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
+            vTaskDelay(pdMS_TO_TICKS(400));
+            sleep_now();
+        }
     } else if (!strcasecmp(cmd, "set_power")) {
         powerAttr_t pwr;
         cfg_get_power_attr(&pwr);
@@ -468,9 +476,13 @@ static void handle_command(const char *raw, int len)
             }
             mqtt_publish_cmd_ack(cmd, "ok", power_mode_str(pwr.mode));
         } else if (pwr.mode == POWER_MODE_HIBERNATE) {
-            mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
-            vTaskDelay(pdMS_TO_TICKS(400));
-            sleep_now();
+            if (wifi_softap_is_up()) {
+                mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
+            } else {
+                mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
+                vTaskDelay(pdMS_TO_TICKS(400));
+                sleep_now();
+            }
         } else {
             sleep_cancel();
             mqtt_publish_cmd_ack(cmd, "ok", "always");
@@ -695,25 +707,66 @@ const char *mqtt_last_error(void)
     return s_lastFail;
 }
 
+static void mqtt_open_teardown(TaskHandle_t cmd_h, TaskHandle_t up_h)
+{
+    if (up_h) {
+        vTaskDelete(up_h);
+    }
+    if (cmd_h) {
+        vTaskDelete(cmd_h);
+    }
+    if (s_startRetryTimer) {
+        esp_timer_stop(s_startRetryTimer);
+        esp_timer_delete(s_startRetryTimer);
+        s_startRetryTimer = NULL;
+    }
+    if (s_telemetryTimer) {
+        esp_timer_stop(s_telemetryTimer);
+        esp_timer_delete(s_telemetryTimer);
+        s_telemetryTimer = NULL;
+    }
+    if (s_bringupSem) {
+        vSemaphoreDelete(s_bringupSem);
+        s_bringupSem = NULL;
+    }
+    if (g_MQ.cmdQueue) {
+        vQueueDelete(g_MQ.cmdQueue);
+        g_MQ.cmdQueue = NULL;
+    }
+    if (g_MQ.mutex) {
+        vSemaphoreDelete(g_MQ.mutex);
+        g_MQ.mutex = NULL;
+    }
+}
+
 void mqtt_open(void)
 {
     memset(&g_MQ, 0, sizeof(mdMqtt_t));
     s_mqttInfraOk = false;
+    s_telemetryTimer = NULL;
+    s_startRetryTimer = NULL;
+    s_bringupSem = NULL;
+
     g_MQ.mutex = xSemaphoreCreateMutex();
     g_MQ.cmdQueue = xQueueCreate(CMD_QUEUE_LEN, sizeof(char *));
     s_bringupSem = xSemaphoreCreateBinary();
     if (!g_MQ.mutex || !g_MQ.cmdQueue || !s_bringupSem) {
         ESP_LOGE(TAG, "mqtt_open: mutex/queue/sem alloc failed");
+        mqtt_open_teardown(NULL, NULL);
         return;
     }
     /* Keep lean — created at boot while internal heap is whole.
      * Spawning 6KB mqtt_up later (SoftAP/test) hits NO_MEM and testMqtt hangs. */
-    if (xTaskCreate(cmd_task, "mqtt_cmd", 5120, NULL, 5, NULL) != pdPASS) {
+    TaskHandle_t cmd_h = NULL;
+    TaskHandle_t up_h = NULL;
+    if (xTaskCreate(cmd_task, "mqtt_cmd", 5120, NULL, 5, &cmd_h) != pdPASS) {
         ESP_LOGE(TAG, "mqtt_open: mqtt_cmd task create failed");
+        mqtt_open_teardown(NULL, NULL);
         return;
     }
-    if (xTaskCreate(mqtt_bringup_task, "mqtt_up", 6144, NULL, 5, NULL) != pdPASS) {
+    if (xTaskCreate(mqtt_bringup_task, "mqtt_up", 6144, NULL, 5, &up_h) != pdPASS) {
         ESP_LOGE(TAG, "mqtt_open: mqtt_up task create failed");
+        mqtt_open_teardown(cmd_h, NULL);
         return;
     }
 
@@ -723,9 +776,14 @@ void mqtt_open(void)
     const esp_timer_create_args_t retryArgs = {
         .name = "mqtt_start", .callback = mqtt_start_retry_cb,
     };
-    if (esp_timer_create(&timerArgs, &s_telemetryTimer) != ESP_OK ||
-        esp_timer_create(&retryArgs, &s_startRetryTimer) != ESP_OK) {
-        ESP_LOGE(TAG, "mqtt_open: timer create failed");
+    if (esp_timer_create(&timerArgs, &s_telemetryTimer) != ESP_OK) {
+        ESP_LOGE(TAG, "mqtt_open: telemetry timer create failed");
+        mqtt_open_teardown(cmd_h, up_h);
+        return;
+    }
+    if (esp_timer_create(&retryArgs, &s_startRetryTimer) != ESP_OK) {
+        ESP_LOGE(TAG, "mqtt_open: start-retry timer create failed");
+        mqtt_open_teardown(cmd_h, up_h);
         return;
     }
     s_mqttInfraOk = true;
@@ -868,7 +926,7 @@ static void mqtt_bringup_task(void *arg)
         }
         s_bringupPending = false;
 
-        if (wifi_ble_prov_is_up()) {
+        if (wifi_ble_prov_busy()) {
             continue;
         }
 
@@ -879,11 +937,12 @@ static void mqtt_bringup_task(void *arg)
         bool paused_httpd = false;
 
         /*
-         * SoftAP+httpd fragment internal RAM. Pause SoftAP web (radio stays),
-         * start MQTT, then resume lean httpd so customers can stay on AP and
-         * still see mqttConnected before closing the hotspot.
+         * httpd fragments internal RAM (SoftAP or STA). Pause web briefly,
+         * start MQTT, then resume — otherwise largest_int can sit at ~8.7KB
+         * forever under a higher floor and MQTT never connects.
          */
-        if (softap && peek.host[0]) {
+        if (peek.host[0] &&
+            (softap || !internal_heap_ready_for(need_stack))) {
             int pr = wifi_httpd_pause_for_mqtt();
             if (pr < 0) {
                 ESP_LOGW(TAG, "defer start — httpd pause incomplete");
@@ -894,17 +953,38 @@ static void mqtt_bringup_task(void *arg)
                 }
                 continue;
             }
+            if (pr == 0 && wifi_ble_prov_busy()) {
+                continue;
+            }
             paused_httpd = (pr == 1);
             for (int i = 0; i < 40 && !internal_heap_ready_for(need_stack); i++) {
+                if (wifi_ble_prov_busy()) {
+                    break;
+                }
                 vTaskDelay(pdMS_TO_TICKS(50));
             }
         } else {
             for (int i = 0; i < 30 && peek.host[0] && !internal_heap_ready_for(need_stack); i++) {
+                if (wifi_ble_prov_busy()) {
+                    break;
+                }
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
         }
 
         xSemaphoreTake(g_MQ.mutex, portMAX_DELAY);
+        /*
+         * BLE enter can win mqtt_stop_wait() while we were coalescing heap
+         * outside this lock — re-check before allocating a client.
+         */
+        if (wifi_ble_prov_busy()) {
+            xSemaphoreGive(g_MQ.mutex);
+            if (paused_httpd) {
+                wifi_httpd_resume_after_mqtt();
+            }
+            ESP_LOGW(TAG, "skip start — BLE owns radio after heap wait");
+            continue;
+        }
         if (g_MQ.client) {
             xSemaphoreGive(g_MQ.mutex);
             if (paused_httpd) {
@@ -954,8 +1034,8 @@ static void mqtt_start_retry_cb(void *arg)
 void mqtt_start(void)
 {
     /* SoftAP XOR BLE: never recreate the client while NimBLE owns the radio. */
-    if (wifi_ble_prov_is_up()) {
-        ESP_LOGW(TAG, "skip start — BLE CT-Prov is up");
+    if (wifi_ble_prov_busy()) {
+        ESP_LOGW(TAG, "skip start — BLE CT-Prov is up/entering");
         if (s_startRetryTimer) {
             esp_timer_stop(s_startRetryTimer);
         }
@@ -1085,8 +1165,14 @@ void mqtt_status_detail(char *buf, size_t len)
         snprintf(buf, len, "connecting");
         return;
     }
+    /* SoftAP intentionally delayed MQTT so 192.168.4.1 could bind first. */
+    if (wifi_softap_mqtt_defer_pending()) {
+        snprintf(buf, len, "softap_web_first");
+        return;
+    }
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    if (largest < 10240 || (s_lastFail[0] && strcmp(s_lastFail, "deferred_heap") == 0)) {
+    if (largest < mqtt_internal_need(mqtt_task_stack_for(mqtt.transport)) ||
+        (s_lastFail[0] && strcmp(s_lastFail, "deferred_heap") == 0)) {
         snprintf(buf, len, "deferred_heap");
         return;
     }
@@ -1127,6 +1213,7 @@ int mqtt_test_ping(int timeout_ms, char *errBuf, int errLen)
     /* Transport is explicit (mqtt | mqtts) — never infer from port. */
     const bool softap = wifi_softap_is_up();
     mqtt_clear_fail();
+    wifi_softap_mqtt_user_start(); /* SoftAP web-first defer must yield to test */
     mqtt_start();
     int waited = 0;
     while (!g_MQ.isConnected && waited < timeout_ms) {

@@ -274,13 +274,15 @@ void sleep_kick(void)
 
 void sleep_now(void)
 {
+    /* SoftAP-first: never tear down the provisioning hotspot for sleep. */
+    if (wifi_softap_is_up()) {
+        ESP_LOGW(TAG, "sleep_now ignored — SoftAP provisioning is up");
+        evtlog_event("SLP", "ignored — softap up");
+        return;
+    }
     if (wifi_ble_prov_is_up()) {
         ESP_LOGW(TAG, "sleep_now: closing BLE first");
         wifi_ble_prov_close();
-    }
-    if (wifi_softap_is_up()) {
-        ESP_LOGW(TAG, "sleep_now: closing SoftAP first");
-        wifi_softap_close();
     }
     sleep_cancel();
     if (s_entering) {

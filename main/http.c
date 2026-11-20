@@ -490,7 +490,11 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     const bool will_start = wifi_sta_is_connected() && !keep_live;
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "code", 0);
-    if (softap && will_start) {
+    if (softap && keep_live) {
+        /* Already online — SoftAP UI must not fall through to blocking testMqtt. */
+        cJSON_AddStringToObject(resp, "msg", "ok — MQTT session already up");
+        cJSON_AddBoolToObject(resp, "mqttSoftApSession", true);
+    } else if (softap && will_start) {
         cJSON_AddStringToObject(resp, "msg", "ok — connecting MQTT over SoftAP (brief web pause)");
         cJSON_AddBoolToObject(resp, "mqttSoftApConnect", true);
     } else if (softap && !wifi_sta_is_connected()) {
@@ -509,6 +513,8 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     cJSON_free(str);
     cJSON_Delete(resp);
     if (will_start) {
+        /* SoftAP web-first defer must not block an explicit save/test. */
+        wifi_softap_mqtt_user_start();
         /* Let the SoftAP TCP stack flush the response before pause. */
         vTaskDelay(pdMS_TO_TICKS(80));
         mqtt_start();
@@ -615,11 +621,53 @@ static esp_err_t close_ble_handle(httpd_req_t *req)
     return res;
 }
 
+/*
+ * SoftAP + mqtt_test_ping must not run on an httpd worker: bringup pauses
+ * httpd to free internal heap, but stop cannot finish while this handler
+ * holds the worker → "httpd pause incomplete" deadlock. Respond first, then
+ * probe from a deferred task after the TCP reply has flushed.
+ */
+static void softap_mqtt_test_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(120));
+    char err[96];
+    int rc = mqtt_test_ping(12000, err, sizeof(err));
+    ESP_LOGI(TAG, "SoftAP deferred MQTT test rc=%d %s", rc, err[0] ? err : "");
+    vTaskDelete(NULL);
+}
+
 static esp_err_t test_mqtt_handle(httpd_req_t *req)
 {
+    softap_touch();
     char err[96];
-    /* Cap wait — httpd worker must not sit in mqtt_test_ping for long or the
-     * SoftAP/LAN UI looks frozen on "Testing MQTT…". */
+    err[0] = '\0';
+
+    if (wifi_softap_is_up()) {
+        if (!wifi_sta_is_connected()) {
+            return send_json(req,
+                "{\"code\":1,\"ok\":false,\"connected\":false,"
+                "\"msg\":\"need home Wi-Fi (STA) — SoftAP alone cannot reach broker\"}");
+        }
+        if (mqtt_is_connected()) {
+            return send_json(req,
+                "{\"code\":0,\"ok\":true,\"connected\":true,\"softapAsync\":false,"
+                "\"msg\":\"ok — MQTT session already up\"}");
+        }
+        /* Kick bringup after the HTTP response leaves this worker. */
+        esp_err_t res = send_json(req,
+            "{\"code\":0,\"ok\":false,\"connected\":false,\"connecting\":true,"
+            "\"softapAsync\":true,"
+            "\"msg\":\"SoftAP MQTT starting — poll getDevInfo (httpd must release first)\"}");
+        if (xTaskCreate(softap_mqtt_test_task, "ap_mqtt_t", 4096, NULL, 5, NULL) != pdPASS) {
+            wifi_softap_mqtt_user_start();
+            mqtt_start();
+            ESP_LOGW(TAG, "SoftAP MQTT test task create failed — mqtt_start only");
+        }
+        return res;
+    }
+
+    /* LAN: short sync probe is safe (no SoftAP httpd pause). */
     int rc = mqtt_test_ping(5000, err, sizeof(err));
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddNumberToObject(obj, "code", rc == 0 ? 0 : 1);
@@ -1248,6 +1296,7 @@ static const httpd_uri_t g_handlers[] = {
 
 static httpd_handle_t s_httpd;
 static volatile bool s_httpdStopping;
+static volatile bool s_httpdStopOk;
 static SemaphoreHandle_t s_httpdStopDone;
 
 bool http_server_is_up(void)
@@ -1269,12 +1318,30 @@ static void httpd_stop_done_ensure(void)
 
 static void httpd_stop_task(void *arg)
 {
-    httpd_handle_t h = (httpd_handle_t)arg;
+    (void)arg;
+    /*
+     * Keep s_httpd until httpd_stop() commits. IDF returns ESP_FAIL if the
+     * shutdown ctrl msg fails — the server is still running; restore nothing,
+     * just leave the handle so callers can retry.
+     */
+    httpd_handle_t h = s_httpd;
+    if (!h) {
+        s_httpdStopOk = true;
+        s_httpdStopping = false;
+        if (s_httpdStopDone) {
+            xSemaphoreGive(s_httpdStopDone);
+        }
+        vTaskDelete(NULL);
+        return;
+    }
     esp_err_t err = httpd_stop(h);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "httpd_stop: %s", esp_err_to_name(err));
-    } else {
+    if (err == ESP_OK) {
+        s_httpd = NULL;
+        s_httpdStopOk = true;
         ESP_LOGI(TAG, "web server stopped");
+    } else {
+        s_httpdStopOk = false;
+        ESP_LOGW(TAG, "httpd_stop: %s — handle kept", esp_err_to_name(err));
     }
     s_httpdStopping = false;
     if (s_httpdStopDone) {
@@ -1295,23 +1362,23 @@ void http_server_stop(void)
     if (s_httpdStopDone) {
         xSemaphoreTake(s_httpdStopDone, 0); /* clear stale */
     }
-    httpd_handle_t h = s_httpd;
-    s_httpd = NULL;
     s_httpdStopping = true;
+    s_httpdStopOk = false;
     /*
      * httpd_stop() can block forever on lingering TCP sessions — never call it
-     * synchronously on the BLE/SoftAP toggle path. Retry task create briefly
-     * so SoftAP close can wait for a real teardown before restarting.
+     * synchronously. Do not clear s_httpd here; only httpd_stop_task may, and
+     * only after a successful SDK stop.
      */
     for (int i = 0; i < 8; i++) {
-        if (xTaskCreate(httpd_stop_task, "httpd_off", 2048, h, 6, NULL) == pdPASS) {
+        if (xTaskCreate(httpd_stop_task, "httpd_off", 2048, NULL, 6, NULL) == pdPASS) {
             ESP_LOGI(TAG, "web server stop armed");
             return;
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
-    ESP_LOGW(TAG, "httpd_off task NO_MEM — abandon handle (no sync stop)");
+    ESP_LOGW(TAG, "httpd_off task create failed — handle kept");
     s_httpdStopping = false;
+    s_httpdStopOk = false;
     if (s_httpdStopDone) {
         xSemaphoreGive(s_httpdStopDone);
     }
@@ -1319,25 +1386,34 @@ void http_server_stop(void)
 
 int http_server_stop_wait(int budget_ms)
 {
+    /* Cleared handle + not stopping ⇒ a prior stop succeeded (or never started). */
     if (!s_httpd && !s_httpdStopping) {
         return 0;
     }
     if (s_httpd && !s_httpdStopping) {
         http_server_stop();
     }
+    /* Create failed or SDK stop failed → handle still owned, not stopping. */
+    if (s_httpd && !s_httpdStopping) {
+        return -1;
+    }
     if (!s_httpdStopping) {
-        return 0;
+        /* Stop finished before wait — only success clears the handle. */
+        return (!s_httpd && s_httpdStopOk) ? 0 : -1;
     }
     httpd_stop_done_ensure();
     if (!s_httpdStopDone) {
         vTaskDelay(pdMS_TO_TICKS(budget_ms > 0 ? budget_ms : 200));
-        return s_httpdStopping ? -1 : 0;
+        if (s_httpdStopping) {
+            return -1;
+        }
+        return (!s_httpd && s_httpdStopOk) ? 0 : -1;
     }
     TickType_t ticks = pdMS_TO_TICKS(budget_ms > 0 ? budget_ms : 1);
     if (xSemaphoreTake(s_httpdStopDone, ticks) == pdTRUE) {
-        return 0;
+        return (!s_httpd && s_httpdStopOk) ? 0 : -1;
     }
-    return s_httpdStopping ? -1 : 0;
+    return -1;
 }
 
 void http_server_start(void)

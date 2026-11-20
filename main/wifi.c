@@ -43,6 +43,10 @@
 #define STA_CONNECT_TIMEOUT_MS 20000
 #define SOFTAP_IDLE_MS         (2 * 60 * 1000)
 #define BLE_PROV_IDLE_MS       (2 * 60 * 1000) /* also PAGE / session.close / SoftAP */
+/* SoftAP open stops MQTT then must bind httpd before mqtt_start (which pauses
+ * httpd). Without this window phones join SoftAP into a dark 192.168.4.1. */
+#define SOFTAP_MQTT_DEFER_US   (2000000ULL) /* SoftAP web bind, then restore MQTT */
+#define SOFTAP_OPEN_KEEP_MQTT_INT 24576     /* skip mqtt_stop when largest_int already OK */
 #define RECONNECT_MIN_MS       1000
 #define RECONNECT_MAX_MS       60000
 
@@ -54,6 +58,8 @@ static esp_timer_handle_t s_bleIdleTimer;
 static esp_timer_handle_t s_reconnectTimer;
 static esp_timer_handle_t s_httpdRetryTimer;
 static esp_timer_handle_t s_httpdWatchdogTimer;
+static esp_timer_handle_t s_softapMqttDeferTimer;
+static volatile bool s_softapMqttDeferPending;
 static int s_httpdRetryLeft;
 static bool s_staStarted;
 static bool s_wifiStarted;
@@ -95,6 +101,67 @@ static wifi_sta_state_t s_staState;
 static int s_reconnectDelayMs = RECONNECT_MIN_MS;
 static bool s_userConnectInFlight; /* suppress auto-reconnect during try */
 
+static void httpd_arm_retry(int left);
+static void httpd_wait_heap_for_start(void);
+static void wifi_led_apply_idle_state(void);
+
+static void softap_mqtt_defer_cb(void *arg)
+{
+    (void)arg;
+    s_softapMqttDeferPending = false;
+    if (s_bleProvUp || s_bleEntering || wifi_ble_prov_is_up()) {
+        return;
+    }
+    if (!s_softapUp) {
+        return;
+    }
+    if (!wifi_sta_is_connected()) {
+        ESP_LOGI(TAG, "SoftAP MQTT defer — STA offline, skip");
+        return;
+    }
+    if (!http_server_is_up()) {
+        httpd_wait_heap_for_start();
+        http_server_start();
+        if (!http_server_is_up()) {
+            ESP_LOGW(TAG, "SoftAP MQTT defer — httpd still down");
+            httpd_arm_retry(20);
+            return;
+        }
+    }
+    ESP_LOGI(TAG, "SoftAP MQTT defer fired — start MQTT (web already bound)");
+    mqtt_start();
+}
+
+static void softap_arm_mqtt_defer(void)
+{
+    if (!s_softapMqttDeferTimer) {
+        return;
+    }
+    s_softapMqttDeferPending = true;
+    esp_timer_stop(s_softapMqttDeferTimer);
+    esp_timer_start_once(s_softapMqttDeferTimer, SOFTAP_MQTT_DEFER_US);
+    ESP_LOGI(TAG, "SoftAP — MQTT deferred %u ms so SoftAP web can bind",
+             (unsigned)(SOFTAP_MQTT_DEFER_US / 1000ULL));
+}
+
+static void softap_cancel_mqtt_defer(void)
+{
+    s_softapMqttDeferPending = false;
+    if (s_softapMqttDeferTimer) {
+        esp_timer_stop(s_softapMqttDeferTimer);
+    }
+}
+
+void wifi_softap_mqtt_user_start(void)
+{
+    softap_cancel_mqtt_defer();
+}
+
+bool wifi_softap_mqtt_defer_pending(void)
+{
+    return s_softapMqttDeferPending && s_softapUp;
+}
+
 static void httpd_arm_retry(int left)
 {
     if (!s_httpdRetryTimer) {
@@ -123,19 +190,40 @@ int wifi_httpd_pause_for_mqtt(void)
     if (s_bleProvUp || s_bleEntering || wifi_ble_prov_is_up()) {
         return 0;
     }
+    /*
+     * Claim the SoftAP MQTT window even when httpd is already down — otherwise
+     * watchdog/retry can start the web UI while MQTT waits for internal heap.
+     */
     if (!http_server_is_up() && !http_server_is_stopping()) {
-        return 0;
+        s_httpdPausedForMqtt = true;
+        ESP_LOGI(TAG, "httpd already down — hold pause for MQTT (softap=%d largest_int=%u)",
+                 s_softapUp ? 1 : 0,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        return 1;
     }
     ESP_LOGI(TAG, "pause httpd for MQTT (softap=%d largest_int=%u)",
              s_softapUp ? 1 : 0,
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    http_server_stop();
-    if (http_server_stop_wait(2000) != 0 || http_server_is_stopping()) {
-        ESP_LOGW(TAG, "httpd pause incomplete — still stopping");
-        s_httpdPausedForMqtt = false;
-        return -1;
-    }
+    /* Mark BEFORE arming stop so retry/watchdog cannot restart mid-pause. */
     s_httpdPausedForMqtt = true;
+    http_server_stop();
+    if (http_server_stop_wait(2000) != 0 || http_server_is_stopping() ||
+        http_server_is_up()) {
+        /* One more beat — SoftAP clients / lagging workers often release then. */
+        vTaskDelay(pdMS_TO_TICKS(200));
+        if (http_server_is_up() || http_server_is_stopping()) {
+            http_server_stop();
+        }
+        if (http_server_stop_wait(2500) != 0 || http_server_is_stopping() ||
+            http_server_is_up()) {
+            /*
+             * Keep the pause claim so watchdog cannot bounce httpd while MQTT
+             * retries. Clearing the flag raced SoftAP UI back into the heap.
+             */
+            ESP_LOGW(TAG, "httpd pause incomplete — keep pause claim for retry");
+            return -1;
+        }
+    }
     vTaskDelay(pdMS_TO_TICKS(150));
     ESP_LOGI(TAG, "httpd paused largest_int=%u",
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
@@ -149,10 +237,12 @@ void wifi_httpd_resume_after_mqtt(void)
         return;
     }
     if (!s_httpdPausedForMqtt && http_server_is_up()) {
+        wifi_led_apply_idle_state();
         return;
     }
     s_httpdPausedForMqtt = false;
     if (http_server_is_up()) {
+        wifi_led_apply_idle_state();
         return;
     }
     httpd_wait_heap_for_start();
@@ -163,6 +253,8 @@ void wifi_httpd_resume_after_mqtt(void)
     if (!http_server_is_up()) {
         httpd_arm_retry(20);
     }
+    /* Pause/resume must not leave the status LED stuck off. */
+    wifi_led_apply_idle_state();
 }
 
 void wifi_coalesce_for_mqtt(void)
@@ -407,6 +499,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         ESP_LOGI(TAG, "SoftAP client +1 (now %d)", s_apClients);
         softap_arm_idle();
         led_set(LEDC_NET_R, LED_BLINK);
+        /* Phone joined SoftAP — ensure web is up; restore MQTT after bind. */
+        if (!http_server_is_up()) {
+            http_server_start();
+            if (!http_server_is_up()) {
+                httpd_arm_retry(20);
+            }
+        }
+        if (wifi_sta_is_connected() && !mqtt_is_started()) {
+            softap_arm_mqtt_defer();
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
         if (s_apClients > 0) {
             s_apClients--;
@@ -443,7 +545,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
              * timer; httpd used to lose SoftAP-close / cold-boot races and leave
              * LAN Web dead while the cloud still looked online.
              */
-            if (!s_softapUp && !http_server_is_up()) {
+            if (!http_server_is_up()) {
                 size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
                 if (largest >= 7168) {
                     http_server_start();
@@ -456,8 +558,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
                 /* Confirm OTA once LAN web is up (covers headless / late IP). */
                 ota_confirm_running();
             }
-            if (http_server_is_up() || s_softapUp) {
-                /* SoftAP: mqtt_bringup pauses httpd, starts MQTT, resumes lean. */
+            if (s_softapUp) {
+                /* SoftAP web first — mqtt_start pauses httpd; defer restore. */
+                if (!http_server_is_up()) {
+                    httpd_arm_retry(20);
+                }
+                softap_arm_mqtt_defer();
+            } else if (http_server_is_up()) {
                 mqtt_start();
             } else {
                 ESP_LOGW(TAG, "httpd not up after GOT_IP — retry, defer mqtt");
@@ -474,6 +581,13 @@ static void httpd_retry_timer_cb(void *arg)
     if (s_bleProvUp || s_bleEntering || wifi_ble_prov_is_up()) {
         return;
     }
+    if (s_httpdPausedForMqtt) {
+        /* MQTT owns the pause window — do not fight for port 80. */
+        if (s_httpdRetryTimer && s_httpdRetryLeft > 0) {
+            esp_timer_start_once(s_httpdRetryTimer, 500000ULL);
+        }
+        return;
+    }
     if (http_server_is_stopping()) {
         if (s_httpdRetryTimer) {
             esp_timer_start_once(s_httpdRetryTimer, 300000ULL);
@@ -485,14 +599,19 @@ static void httpd_retry_timer_cb(void *arg)
         if (largest < 7168) {
             ESP_LOGW(TAG, "httpd retry wait coalesce largest_int=%u left=%d",
                      (unsigned)largest, s_httpdRetryLeft);
-        } else {
+        } else if (!s_httpdPausedForMqtt &&
+                   !s_bleProvUp && !s_bleEntering && !wifi_ble_prov_is_up()) {
             http_server_start();
         }
     }
     if (http_server_is_up()) {
         ota_confirm_running();
         if (wifi_sta_is_connected()) {
-            mqtt_start();
+            if (s_softapUp) {
+                softap_arm_mqtt_defer();
+            } else {
+                mqtt_start();
+            }
         }
         return;
     }
@@ -514,6 +633,9 @@ static void httpd_watchdog_timer_cb(void *arg)
     if (s_softapOpening || s_softapClosing) {
         return;
     }
+    if (s_httpdPausedForMqtt) {
+        return;
+    }
     /* SoftAP UI and STA LAN Web both need port 80. */
     if (!s_softapUp && !wifi_sta_is_connected()) {
         return;
@@ -526,13 +648,22 @@ static void httpd_watchdog_timer_cb(void *arg)
     evtlog_event("HTTP", "watchdog restart softap=%d sta=%d",
                  s_softapUp ? 1 : 0, wifi_sta_is_connected() ? 1 : 0);
     httpd_wait_heap_for_start();
+    /* Re-check after heap wait — MQTT pause / BLE may have claimed the window. */
+    if (s_bleProvUp || s_bleEntering || wifi_ble_prov_is_up() ||
+        s_httpdPausedForMqtt || http_server_is_up() || http_server_is_stopping()) {
+        return;
+    }
     http_server_start();
     if (!http_server_is_up()) {
         httpd_arm_retry(20);
     } else {
         ota_confirm_running();
         if (wifi_sta_is_connected() && !mqtt_is_started()) {
-            mqtt_start();
+            if (s_softapUp) {
+                softap_arm_mqtt_defer();
+            } else {
+                mqtt_start();
+            }
         }
     }
 }
@@ -656,6 +787,12 @@ void wifi_open(void)
     ESP_ERROR_CHECK(esp_timer_create(&httpd_wd_args, &s_httpdWatchdogTimer));
     /* 30s: catch SoftAP-close / OOM races that left port 80 down permanently. */
     ESP_ERROR_CHECK(esp_timer_start_periodic(s_httpdWatchdogTimer, 30000000ULL));
+
+    const esp_timer_create_args_t softap_mqtt_args = {
+        .callback = softap_mqtt_defer_cb,
+        .name = "ap_mqtt",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&softap_mqtt_args, &s_softapMqttDeferTimer));
 
     /* Init Wi-Fi before httpd so STA buffers allocate while largest_int is high. */
     ESP_ERROR_CHECK(wifi_driver_ensure());
@@ -941,27 +1078,40 @@ void wifi_softap_open(void)
     if (s_reconnectTimer) {
         esp_timer_stop(s_reconnectTimer);
     }
-    /* SoftAP beacon needs a contiguous internal block (IDF min 752B). MQTT
-     * task/stack sit in internal RAM — stop it first and let frees settle. */
-    if (mqtt_stop_wait(5000) != 0) {
-        ESP_LOGE(TAG, "SoftAP open aborted — mqtt_stop busy");
-        evtlog_event("WIFI", "SoftAP open aborted mqtt busy");
-        wifi_set_last_error("mqtt_busy");
-        s_softapOpening = false;
-        wifi_led_apply_idle_state();
-        led_pulse(LEDC_ERR_R, 1200);
-        return;
+    /*
+     * SoftAP beacon needs contiguous internal RAM. Stop MQTT only when the
+     * heap is already tight — SoftAP-first UX should not force "MQTT 未连接"
+     * every time the hotspot opens if memory already allows APSTA.
+     */
+    size_t largest_before =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    const bool stopped_mqtt =
+        mqtt_is_started() && largest_before < SOFTAP_OPEN_KEEP_MQTT_INT;
+    if (stopped_mqtt) {
+        if (mqtt_stop_wait(5000) != 0) {
+            ESP_LOGE(TAG, "SoftAP open aborted — mqtt_stop busy");
+            evtlog_event("WIFI", "SoftAP open aborted mqtt busy");
+            wifi_set_last_error("mqtt_busy");
+            s_softapOpening = false;
+            wifi_led_apply_idle_state();
+            led_pulse(LEDC_ERR_R, 1200);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(150));
+    } else if (mqtt_is_started()) {
+        ESP_LOGI(TAG, "SoftAP open — keep MQTT (largest_int=%u)",
+                 (unsigned)largest_before);
     }
-    vTaskDelay(pdMS_TO_TICKS(150));
     if (wifi_driver_ensure() != ESP_OK) {
         s_softapOpening = false;
         wifi_led_apply_idle_state();
         return;
     }
-    ESP_LOGI(TAG, "SoftAP open — free heap %u int %u largest_int %u",
+    ESP_LOGI(TAG, "SoftAP open — free heap %u int %u largest_int %u stopped_mqtt=%d",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             stopped_mqtt ? 1 : 0);
 
     wifi_mode_t mode = s_staStarted ? WIFI_MODE_APSTA : WIFI_MODE_AP;
     esp_err_t err = esp_wifi_set_mode(mode);
@@ -999,9 +1149,13 @@ void wifi_softap_open(void)
     led_set(LEDC_NET_R, LED_BLINK);
     softap_arm_idle();
 
-    /* mqtt_stop above frees internal RAM — bring SoftAP UI up if boot missed it. */
+    /* mqtt_stop above frees internal RAM — SoftAP UI first, MQTT later. */
     if (!http_server_is_up()) {
         http_server_start();
+        if (!http_server_is_up()) {
+            ESP_LOGW(TAG, "SoftAP up but httpd failed — arm retry");
+            httpd_arm_retry(20);
+        }
     }
 
     /* If APSTA briefly dropped STA, kick one reconnect without backoff thrash. */
@@ -1011,8 +1165,10 @@ void wifi_softap_open(void)
         esp_wifi_connect();
         reconnect_arm();
     } else if (wifi_sta_is_connected()) {
-        /* Customer may already be on home Wi‑Fi — bring MQTT up via pause/resume. */
-        mqtt_start();
+        /* Restore MQTT only if we stopped it; never pause SoftAP web first. */
+        if (stopped_mqtt || !mqtt_is_started()) {
+            softap_arm_mqtt_defer();
+        }
     }
 
     char ssid[32];
@@ -1029,6 +1185,7 @@ static void softap_close_internal(void)
         return;
     }
     esp_timer_stop(s_apIdleTimer);
+    softap_cancel_mqtt_defer();
     s_softapClosing = true;
     s_softapUp = false;
     s_apClients = 0;
@@ -1148,6 +1305,7 @@ void wifi_ble_prov_enter(void)
 
     /* Lock cyan before teardown — STA_DISCONNECTED must not flash blue. */
     s_bleEntering = true;
+    s_httpdPausedForMqtt = false; /* release MQTT pause so restore can restart httpd */
     led_set(LEDC_BLE_R, LED_BLINK);
     sleep_cancel();
     cfg_softap_pending_set(false);
@@ -1315,6 +1473,11 @@ void wifi_ble_prov_close(void)
 bool wifi_ble_prov_is_up(void)
 {
     return s_bleProvUp;
+}
+
+bool wifi_ble_prov_busy(void)
+{
+    return s_bleProvUp || s_bleEntering;
 }
 
 void wifi_ble_prov_touch(void)
