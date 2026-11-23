@@ -45,8 +45,9 @@ esp_get_free_heap_size()                         // 含 PSRAM，易误导
 
 1. `setMqttParam` **先发 HTTP 响应**，再 `mqtt_start()`（短 delay 冲刷 TCP）
 2. `mqttDeferred` → 前端结束，**不**发 `testMqtt`
-3. `mqttSoftApConnect` → 有界轮询 `getDevInfo`（允许短暂断页重试），**不**再 POST `testMqtt`
-4. `wifi_httpd_pause_for_mqtt()` 返回是否真正停住；停不完则 defer，不假称已 pause
+3. `mqttSoftApConnect` / `mqttSoftApSession` → 有界轮询 `getDevInfo`（允许短暂断页重试），**不**再 POST `testMqtt`
+4. SoftAP 下 save 回包丢失时同样只轮询 `getDevInfo`，**禁止**边缘回退到 `testMqtt`
+5. `wifi_httpd_pause_for_mqtt()` 返回是否真正停住；停不完则 defer，不假称已 pause
 
 ---
 

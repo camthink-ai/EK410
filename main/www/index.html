@@ -4601,24 +4601,9 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
           loadInfo();
           return;
         }
-        /* Clean form, reply lost — probe existing NVS session only. */
-        try{
-          const bT=budgetSignal(deadline);
-          try{
-            const opt={method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store',signal:bT.signal};
-            const res=await fetch('/api/v1/network/testMqtt',opt);
-            let r=null; try{r=await res.json()}catch(e){}
-            if(r&&r.ok&&r.connected){
-              toast(t('toast.mqtt_ok'), 4000);
-              loadInfo(); loadCfg();
-              return;
-            }
-            if(r&&(r.softapAsync||r.connecting)) kicked=true;
-          }finally{ bT.clear(); }
-        }catch(e){
-          if(!(isTransportFail(e)||isAbort(e))) throw e;
-          kicked=true;
-        }
+        /* Clean form, reply lost — SoftAP: never POST testMqtt (httpd pause).
+         * Poll getDevInfo only; kick was already implied by save attempt. */
+        kicked=true;
         toast(t('toast.mqtt_softap_pause'), 4500);
       }
 

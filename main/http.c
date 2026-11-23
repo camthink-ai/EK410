@@ -1226,12 +1226,12 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
         sleep_cancel();
     }
     if (sleepSoon) {
-        /* Respond first, then enter hibernate so the client gets HTTP 200.
-         * SoftAP already gated above; spawn failure is rare after that. */
-        esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"hibernating\"}");
-        vTaskDelay(pdMS_TO_TICKS(300));
-        (void)sleep_now();
-        return res;
+        /* Spawn first so spawn failure is not reported as success; sleep_go
+         * still waits on the panel before tearing down Wi‑Fi / MQTT. */
+        if (!sleep_now()) {
+            return send_err(req, "sleep failed");
+        }
+        return send_json(req, "{\"code\":0,\"msg\":\"hibernating\"}");
     }
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "code", 0);
@@ -1253,12 +1253,12 @@ static esp_err_t sleep_now_handle(httpd_req_t *req)
     if (wifi_softap_is_up()) {
         return send_err(req, "softap busy — close hotspot first");
     }
-    /* Respond first so the client gets 200 before the radio drops; SoftAP
-     * already gated — remaining failures are rare (already entering / OOM). */
-    esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"sleeping\"}");
-    vTaskDelay(pdMS_TO_TICKS(300));
-    (void)sleep_now();
-    return res;
+    /* Spawn first so spawn failure is not reported as success; sleep_go
+     * still waits on the panel before tearing down Wi‑Fi / MQTT. */
+    if (!sleep_now()) {
+        return send_err(req, "sleep failed");
+    }
+    return send_json(req, "{\"code\":0,\"msg\":\"sleeping\"}");
 }
 
 static esp_err_t get_event_log_meta_handle(httpd_req_t *req)

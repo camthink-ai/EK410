@@ -1275,9 +1275,12 @@ void epd_text_screen(const char *const *lines, int line_count,
     canvas_t *cv = calloc(1, sizeof(*cv));
     if (!cv) {
         ESP_LOGE(TAG, "text screen OOM");
+        s_lastDisplayOk = false;
         return;
     }
     if (canvas_fill_text_screen(cv, lines, line_count, fg_code, bg_code, scale) != 0) {
+        ESP_LOGE(TAG, "text screen fill failed");
+        s_lastDisplayOk = false;
         free(cv);
         return;
     }
@@ -1294,6 +1297,7 @@ void epd_text_paragraph(const char *text, unsigned char fg_code,
     char (*lines)[CANVAS_TEXT_MAX] = calloc((size_t)EPD_TEXT_MAX_LINES, CANVAS_TEXT_MAX);
     if (!lines) {
         ESP_LOGE(TAG, "paragraph wrap OOM");
+        s_lastDisplayOk = false;
         return;
     }
     int scale = scale_req;

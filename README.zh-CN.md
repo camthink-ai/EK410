@@ -2,7 +2,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
-[![Version](https://img.shields.io/badge/version-1.3.5-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.3.6-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Dual--License-red)](LICENSE)
 
 **CamThink** 7.09″ Spectra 6 电子墨水屏固件。
@@ -14,7 +14,7 @@
 | **产品** | EK410 · CamThink 电子墨水屏 |
 | **主控** | ESP32-C61HR2 · 16MB Flash · 2MB PSRAM |
 | **面板** | Spectra 6 · 逻辑 1600×1200 · 六色 |
-| **固件** | [`VERSION`](VERSION) → **1.3.5** |
+| **固件** | [`VERSION`](VERSION) → **1.3.6** |
 | **平台** | [NeoMind](https://wiki.camthink.ai) · 设备类型 `ek410_Eink` |
 
 ---
@@ -137,12 +137,12 @@ EK410/
 | [`VERSION`](VERSION) | 权威版本号 |
 | [`main/version.h`](main/version.h) | 固件内嵌 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 发布说明 |
-| Git tag | `v1.3.5` |
+| Git tag | `v1.3.6` |
 
 ```bash
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.5
-git tag -a v1.3.5 -m "EK410 v1.3.5"
+python3 tools/bump_version.py 1.3.6
+git tag -a v1.3.6 -m "EK410 v1.3.6"
 ```
 
 ---

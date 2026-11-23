@@ -10,6 +10,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.6] — 2026-11-23
+
+### Fixed
+
+- MQTT SUBSCRIBE failure tears down the client (no zombie `mqtt_is_started` session).
+- `rx_reset` no longer frees `rxBuf` without the client mutex (DISCONNECT vs stop race).
+- MQTT/HTTP `sleep_now` / hibernate report error when spawn fails (no false success ack).
+- Deep-sleep waits longer for `mqtt_stop` before forcing Wi‑Fi off.
+- `render_text` OOM / fill failure clears `lastDisplayOk` so completion `cmd_ack` is honest.
+- SoftAP MQTT save reply-loss path no longer POSTs `testMqtt` (poll `getDevInfo` only).
+- MQTT uplink publish retries mutex take and logs `evtlog` on final drop (no silent ack loss).
+
+### 中文
+
+- SUBSCRIBE 失败销毁会话；rx_reset 不再无锁释放；休眠/休眠 ack 诚实；深睡延长 mqtt_stop 等待；文本 OOM 刷新 lastDisplayOk；SoftAP 边缘禁止 testMqtt；publish 互斥重试并记日志。
+
 ## [1.3.5] — 2026-11-23
 
 ### Fixed

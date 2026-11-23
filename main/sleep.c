@@ -143,10 +143,18 @@ static void sleep_go_task(void *arg)
     evtlog_event("SLP", "deep sleep mode=%s timed=%d",
                  power_mode_str(p.mode), timed ? 1 : 0);
 
-    if (mqtt_is_connected()) {
-        mqtt_publish_telemetry();
-        if (mqtt_stop_wait(4000) != 0) {
-            ESP_LOGW(TAG, "mqtt_stop busy before sleep — continuing power-down");
+    if (mqtt_is_connected() || mqtt_is_started()) {
+        if (mqtt_is_connected()) {
+            mqtt_publish_telemetry();
+        }
+        /* Longer budget: large preview publish can hold the client mutex. */
+        if (mqtt_stop_wait(10000) != 0) {
+            ESP_LOGW(TAG, "mqtt_stop still busy — one more try after delay");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            if (mqtt_stop_wait(5000) != 0) {
+                ESP_LOGE(TAG, "mqtt_stop failed before sleep — powering down anyway");
+                evtlog_event("SLP", "mqtt_stop busy — force wifi off");
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(200));
     }

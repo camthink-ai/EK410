@@ -169,16 +169,27 @@ static void publish_up_unlocked(const char *json, int retain)
     publish_raw_unlocked(g_MQ.topicUp, json, qos, retain);
 }
 
-/** Publish uplink under mutex so mqtt_stop cannot destroy the client mid-send. */
-static void publish_up(const char *json, int retain)
+/** Publish uplink under mutex so mqtt_stop cannot destroy the client mid-send.
+ * Returns false if the mutex could not be taken (payload not sent). */
+static bool publish_up(const char *json, int retain)
 {
-    if (!g_MQ.mutex ||
-        xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
-        ESP_LOGW(TAG, "publish_up: mutex busy — drop");
-        return;
+    if (!g_MQ.mutex) {
+        ESP_LOGW(TAG, "publish_up: no mutex — drop");
+        return false;
+    }
+    /* cmd_ack / status need a longer wait than telemetry — stop contends here. */
+    if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(800)) != pdTRUE) {
+        ESP_LOGW(TAG, "publish_up: mutex busy — retry");
+        if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(1200)) != pdTRUE) {
+            ESP_LOGE(TAG, "publish_up: mutex busy — drop (%u bytes)",
+                     json ? (unsigned)strlen(json) : 0);
+            evtlog_event("MQTT", "publish drop (mutex busy)");
+            return false;
+        }
     }
     publish_up_unlocked(json, retain);
     xSemaphoreGive(g_MQ.mutex);
+    return true;
 }
 
 static void publish_status(const char *state, int retain)
@@ -355,7 +366,10 @@ void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detai
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (json) {
-        publish_up(json, 0);
+        if (!publish_up(json, 0)) {
+            ESP_LOGW(TAG, "cmd_ack not sent (%s/%s)",
+                     cmd ? cmd : "", status ? status : "");
+        }
         free(json);
     }
 }
@@ -472,11 +486,11 @@ static void handle_command(const char *raw, int len)
     } else if (!strcasecmp(cmd, "sleep_now") || !strcasecmp(cmd, "sleep")) {
         if (wifi_softap_is_up()) {
             mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
+        } else if (!sleep_now()) {
+            mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
         } else {
-            /* Ack before radio drops so the cloud receives the response. */
+            /* sleep_go waits on the panel first — MQTT still up for this ack. */
             mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
-            vTaskDelay(pdMS_TO_TICKS(400));
-            (void)sleep_now();
         }
     } else if (!strcasecmp(cmd, "set_power")) {
         powerAttr_t pwr;
@@ -515,10 +529,10 @@ static void handle_command(const char *raw, int len)
         } else if (pwr.mode == POWER_MODE_HIBERNATE) {
             if (wifi_softap_is_up()) {
                 mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
+            } else if (!sleep_now()) {
+                mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
             } else {
                 mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
-                vTaskDelay(pdMS_TO_TICKS(400));
-                (void)sleep_now();
             }
         } else {
             sleep_cancel();
@@ -596,9 +610,9 @@ static void rx_reset(void)
         rx_reset_unlocked();
         return;
     }
-    if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
-        ESP_LOGW(TAG, "rx_reset: mutex busy — force drop buffer");
-        rx_reset_unlocked();
+    if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        /* Never free rxBuf without the lock — mqtt_stop / fragment path own it. */
+        ESP_LOGW(TAG, "rx_reset: mutex busy — skip (stop path will clear)");
         return;
     }
     rx_reset_unlocked();
@@ -680,6 +694,15 @@ static void handle_data_event(esp_mqtt_event_handle_t event)
     }
 }
 
+/* Destroy client outside the MQTT event callback (unsafe to destroy in-handler). */
+static void mqtt_zombie_stop_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGW(TAG, "tearing down MQTT session after subscribe failure");
+    (void)mqtt_stop_wait(5000);
+    vTaskDelete(NULL);
+}
+
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *data)
 {
     esp_mqtt_event_handle_t event = data;
@@ -691,9 +714,17 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(TAG, "connected — sub %s (qos %d)", g_MQ.topicDown, qos);
         int sub = esp_mqtt_client_subscribe(g_MQ.client, g_MQ.topicDown, qos);
         if (sub < 0) {
-            ESP_LOGE(TAG, "subscribe failed (down=%d) — not marking online", sub);
+            ESP_LOGE(TAG, "subscribe failed (down=%d) — destroy session", sub);
             evtlog_event("MQTT", "subscribe fail rc=%d", sub);
+            mqtt_set_fail("subscribe failed");
             g_MQ.isConnected = false;
+            /* Disconnect now; deferred stop clears client so mqtt_is_started is false. */
+            if (g_MQ.client) {
+                (void)esp_mqtt_client_disconnect(g_MQ.client);
+            }
+            if (xTaskCreate(mqtt_zombie_stop_task, "mqtt_zomb", 3072, NULL, 5, NULL) != pdPASS) {
+                ESP_LOGE(TAG, "zombie stop task create failed — client may linger");
+            }
             break;
         }
         g_MQ.isConnected = true;

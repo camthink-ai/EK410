@@ -24,8 +24,8 @@ Companion: [API（中文）](zh/api.md)
 |--------|------|--------|
 | GET/POST | `/api/v1/network/getWifiParam` / `setWifiParam` | `{ssid,password}` |
 | GET | `/api/v1/network/scanWifi` | AP list |
-| GET/POST | `/api/v1/network/getMqttParam` / `setMqttParam` | host, port, transport (`mqtt`\|`mqtts`), credentials; MQTTS: `tlsVerify` (default true), optional `caPem` (custom CA; empty = system CRT bundle) |
-| POST | `/api/v1/network/testMqtt` | probe |
+| GET/POST | `/api/v1/network/getMqttParam` / `setMqttParam` | host, port, transport (`mqtt`\|`mqtts`), credentials; MQTTS: `tlsVerify` (default true), optional `caPem` (custom CA; empty = system CRT bundle). SoftAP replies may include `mqttSoftApConnect` / `mqttSoftApSession` / `mqttDeferred` — SPA polls `getDevInfo`, does not call `testMqtt` |
+| POST | `/api/v1/network/testMqtt` | probe (`connected` requires STA). SoftAP: async / already-up only — prefer polling `getDevInfo` |
 | POST | `/api/v1/network/openSoftAp` / `closeSoftAp` | SoftAP control |
 | POST | `/api/v1/ctprov` | [NeoLinker](https://github.com/camthink-ai/NeoLinker) **CT-Prov/1** SoftAP binding (whole JSON envelope; see `docs/ct_prov.md`) |
 
