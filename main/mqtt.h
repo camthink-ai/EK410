@@ -27,6 +27,12 @@ void mqtt_start(void);   /* no-op if host empty or already started */
 /** Arm oneshot bring-up retry after stop/defer (survives cancelled timers). */
 void mqtt_kick_start_retry(int delay_ms);
 /**
+ * After a temporary mqtt_stop (URL TLS / OTA / failed config save): try
+ * mqtt_start a few times, then kick the retry timer. No-op if BLE owns the
+ * radio or STA is down. SoftAP+STA is allowed (bringup pauses httpd).
+ */
+void mqtt_restore_after_temp_stop(void);
+/**
  * Stop MQTT client under the module mutex.
  * Returns 0 if stopped (or already idle), -1 if mutex timed out — client
  * may still be running (e.g. large telemetry publish). Callers that tear

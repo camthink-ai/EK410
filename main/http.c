@@ -483,7 +483,7 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
         if (cfg_set_mqtt_ca_pem(caPem->valuestring) != ESP_OK) {
             cJSON_Delete(root);
             if (stopped_for_save) {
-                mqtt_start(); /* restore session after stop; NVS host unchanged */
+                mqtt_restore_after_temp_stop(); /* NVS host unchanged */
             }
             return send_err(req, "mqtt CA save failed");
         }
@@ -491,7 +491,7 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (cfg_set_mqtt_attr(&mqtt) != ESP_OK) {
         cJSON_Delete(root);
         if (stopped_for_save) {
-            mqtt_start(); /* bring back prior NVS broker */
+            mqtt_restore_after_temp_stop(); /* prior NVS broker */
         }
         return send_err(req, "mqtt config save failed");
     }
@@ -994,9 +994,7 @@ static esp_err_t display_last_frame_handle(httpd_req_t *req)
 static void ota_upload_restore_runtime(void)
 {
     wifi_led_refresh();
-    if (wifi_sta_is_connected() && !wifi_ble_prov_is_up()) {
-        mqtt_start();
-    }
+    mqtt_restore_after_temp_stop();
     sleep_kick();
 }
 

@@ -2,7 +2,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
-[![Version](https://img.shields.io/badge/version-1.3.8-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.3.9-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Dual--License-red)](LICENSE)
 
 **CamThink** 7.09″ Spectra 6 e-ink display firmware.
@@ -14,7 +14,7 @@
 | **Product** | EK410 · CamThink E-Ink Display |
 | **SoC** | ESP32-C61HR2 · 16MB flash · 2MB PSRAM |
 | **Panel** | E Ink Spectra 6 · logical 1600×1200 · 6 colors |
-| **Firmware** | [`VERSION`](VERSION) → **1.3.8** |
+| **Firmware** | [`VERSION`](VERSION) → **1.3.9** |
 | **Platform** | [NeoMind](https://wiki.camthink.ai) · device type `ek410_Eink` |
 
 ---
@@ -137,12 +137,12 @@ EK410/
 | [`VERSION`](VERSION) | Canonical SemVer |
 | [`main/version.h`](main/version.h) | Embedded string |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release notes |
-| Git tag | `v1.3.8` |
+| Git tag | `v1.3.9` |
 
 ```bash
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.8
-git tag -a v1.3.8 -m "EK410 v1.3.8"
+python3 tools/bump_version.py 1.3.9
+git tag -a v1.3.9 -m "EK410 v1.3.9"
 ```
 
 ---

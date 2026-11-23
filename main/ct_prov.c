@@ -311,6 +311,8 @@ static int apply_mqtt_section(cJSON *mqtt, char *err, size_t errlen)
         cfg_get_mqtt_attr(&m);
         m.host[0] = '\0';
         if (cfg_set_mqtt_attr(&m) != ESP_OK) {
+            /* NVS still has the old host — bring the session back. */
+            mqtt_restore_after_temp_stop();
             snprintf(err, errlen, "mqtt config save failed");
             return -3;
         }
@@ -362,18 +364,22 @@ static int apply_mqtt_section(cJSON *mqtt, char *err, size_t errlen)
     }
     /* Same order as enable:false — stop first, then persist, then start.
      * Busy stop keeps old broker in NVS and on the wire. */
-    if (wifi_sta_is_connected()) {
+    const bool stopped = wifi_sta_is_connected();
+    if (stopped) {
         if (mqtt_stop_wait(4000) != 0) {
             snprintf(err, errlen, "mqtt stop busy");
             return -4;
         }
     }
     if (cfg_set_mqtt_attr(&m) != ESP_OK) {
+        if (stopped) {
+            mqtt_restore_after_temp_stop(); /* prior NVS broker */
+        }
         snprintf(err, errlen, "mqtt config save failed");
         return -3;
     }
-    if (wifi_sta_is_connected()) {
-        mqtt_start();
+    if (stopped) {
+        mqtt_restore_after_temp_stop();
     }
     return 0;
 }

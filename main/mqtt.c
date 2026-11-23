@@ -1078,6 +1078,7 @@ static void mqtt_bringup_task(void *arg)
         s_bringupPending = false;
 
         if (wifi_ble_prov_busy()) {
+            /* Kick was consumed; BLE exit restores MQTT. No timer while busy. */
             continue;
         }
 
@@ -1137,6 +1138,8 @@ static void mqtt_bringup_task(void *arg)
                 wifi_httpd_resume_after_mqtt();
             }
             ESP_LOGW(TAG, "skip start — BLE owns radio after heap wait");
+            /* BLE exit calls mqtt_start; also arm a delayed retry as belt/suspenders. */
+            mqtt_arm_start_retry_us(5000000ULL);
             continue;
         }
         if (g_MQ.client) {
@@ -1209,6 +1212,27 @@ void mqtt_kick_start_retry(int delay_ms)
     mqtt_arm_start_retry_us((uint64_t)delay_ms * 1000ULL);
 }
 
+void mqtt_restore_after_temp_stop(void)
+{
+    if (!wifi_sta_is_connected() || wifi_ble_prov_busy()) {
+        return;
+    }
+    if (mqtt_is_started()) {
+        return;
+    }
+    for (int i = 0; i < 5; i++) {
+        mqtt_start();
+        /* Give bringup a slice to clear deferred_heap / SoftAP pause. */
+        vTaskDelay(pdMS_TO_TICKS(1200));
+        if (mqtt_is_started()) {
+            return;
+        }
+        ESP_LOGW(TAG, "restore after temp stop: attempt %d/5", i + 1);
+    }
+    mqtt_kick_start_retry(2000);
+    ESP_LOGE(TAG, "restore after temp stop: still down — kicked start-retry");
+}
+
 void mqtt_start(void)
 {
     /* SoftAP XOR BLE: never recreate the client while NimBLE owns the radio. */
@@ -1240,17 +1264,15 @@ int mqtt_stop(void)
     if (!g_MQ.mutex) {
         return 0; /* mqtt_open not called yet */
     }
-    /* Cancel deferred starts before waiting — otherwise a pending
-     * mqtt_start_retry can recreate the client during BLE enter. */
-    if (s_startRetryTimer) {
-        esp_timer_stop(s_startRetryTimer);
-    }
-    /* Bounded wait — SoftAP↔BLE XOR must not hang on a large telemetry outbox.
-     * Do NOT stop the telemetry timer before the lock: a failed take would leave
-     * the client running with periodic telemetry permanently disabled. */
+    /* Take the lock BEFORE cancelling retry — a busy return must not strand a
+     * deferred_heap oneshot that was the only recovery path. */
     if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(1500)) != pdTRUE) {
         ESP_LOGW(TAG, "mqtt_stop: mutex busy — client may still be running");
         return -1;
+    }
+    /* Cancel deferred starts under the lock so bringup cannot recreate mid-stop. */
+    if (s_startRetryTimer) {
+        esp_timer_stop(s_startRetryTimer);
     }
     if (s_telemetryTimer) {
         esp_timer_stop(s_telemetryTimer);
@@ -1268,9 +1290,9 @@ int mqtt_stop(void)
     xSemaphoreGive(g_MQ.mutex);
     /*
      * Temporary stops (URL TLS / OTA) cancel the retry timer above. Re-arm a
-     * delayed bring-up unless provisioning owns the radio — SoftAP/BLE callers
-     * that need a quiet window still win for ~3s, then self-heal if they forget
-     * mqtt_start. SoftAP open / BLE enter call mqtt_start themselves on success.
+     * delayed bring-up on STA — SoftAP callers that need a quiet bind window
+     * should use mqtt_restore_after_temp_stop / softap defer themselves.
+     * SoftAP open / BLE enter call mqtt_start on their success paths.
      */
     if (!wifi_ble_prov_busy() && !wifi_softap_is_up() && wifi_sta_is_connected()) {
         mqtt_arm_start_retry_us(3000000ULL);

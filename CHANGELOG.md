@@ -10,6 +10,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.9] — 2026-11-23
+
+### Fixed
+
+- Add `mqtt_restore_after_temp_stop()` and use it for URL TLS (incl. SoftAP+STA), OTA fail restore, HTTP/CT-Prov MQTT save-fail after stop.
+- `mqtt_stop` takes the mutex before cancelling the start-retry timer (busy return no longer strands deferred_heap recovery).
+
+### 中文
+
+- 统一临时 stop 后恢复；SoftAP 下 URL/OTA 也会拉回 MQTT；stop busy 不再误掐重试定时器。
+
 ## [1.3.8] — 2026-11-23
 
 ### Fixed

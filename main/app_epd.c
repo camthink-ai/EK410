@@ -60,25 +60,16 @@ static void url_tls_release(void)
 {
     wifi_throughput_boost(false);
     /* Large HTTPS can leave httpd down and MQTT stopped. Restore LAN Web
-     * first, then MQTT — same policy as SoftAP close. */
-    if (!wifi_sta_is_connected() || wifi_softap_is_up() || wifi_ble_prov_is_up()) {
+     * first (non-SoftAP), then MQTT — SoftAP+STA must also restart MQTT
+     * (bringup pauses httpd briefly); BLE exit restores itself. */
+    if (!wifi_sta_is_connected() || wifi_ble_prov_is_up()) {
         return;
     }
     vTaskDelay(pdMS_TO_TICKS(800));
-    wifi_network_services_restore(true);
-    if (!mqtt_is_started()) {
-        for (int i = 0; i < 7; i++) {
-            vTaskDelay(pdMS_TO_TICKS(1500));
-            mqtt_start();
-            if (mqtt_is_started()) {
-                return;
-            }
-            ESP_LOGW(TAG, "mqtt restart attempt %d/7 — waiting for heap", i + 1);
-        }
-        /* mqtt_stop cancelled any prior retry timer — force a fresh oneshot. */
-        mqtt_kick_start_retry(2000);
-        ESP_LOGE(TAG, "mqtt restart failed after URL job — kicked start-retry timer");
+    if (!wifi_softap_is_up()) {
+        wifi_network_services_restore(true);
     }
+    mqtt_restore_after_temp_stop();
 }
 
 static int lf_to_upload_writer(const uint8_t *data, size_t len, void *ctx)
