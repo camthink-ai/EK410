@@ -4938,8 +4938,6 @@ async function pushEditorToDevice(){
   else if(ok===false) toast(t('toast.display_fail'), 4500);
   else toast(lang==='zh'?'仍在刷屏或超时，请稍后看屏':'Still refreshing or timed out — check panel');
   scheduleOverviewPanelRefresh();
-  toast(lang==='zh'?'已提交刷屏':'Pushed to screen',4000);
-  scheduleOverviewPanelRefresh();
 }
 async function pushMdToDevice(){
   const items=mdToCanvasItems($('mdText')?$('mdText').value:'');
@@ -4952,7 +4950,11 @@ async function pushMdToDevice(){
   });
   await post('/api/v1/display/renderCanvas',{bg:mdCanvasBg||'white',items});
   if(_mdLastMeta && _mdLastMeta.truncated) toast(t('toast.md_trunc'), 4000);
-  else toast(lang==='zh'?'已提交刷屏':'Pushed to screen',4000);
+  toast(lang==='zh'?'已提交刷屏，等待完成…':'Queued — waiting for panel…');
+  const ok=await waitDisplayIdle(90000);
+  if(ok===true) toast(t('toast.display_done'), 3500);
+  else if(ok===false) toast(t('toast.display_fail'), 4500);
+  else toast(lang==='zh'?'仍在刷屏或超时，请稍后看屏':'Still refreshing or timed out — check panel');
   scheduleOverviewPanelRefresh();
 }
 

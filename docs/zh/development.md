@@ -49,9 +49,9 @@ python3 tools/gen_www.py
 
 ```bash
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.1
+python3 tools/bump_version.py 1.3.5
 # 填写 CHANGELOG → commit →
-git tag -a v1.3.1 -m "EK410 v1.3.1"
+git tag -a v1.3.5 -m "EK410 v1.3.5"
 ```
 
 - **MAJOR** 破坏协议；**MINOR** 兼容新功能；**PATCH** 修复

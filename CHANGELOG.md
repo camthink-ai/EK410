@@ -10,6 +10,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.5] — 2026-11-23
+
+### Fixed
+
+- MQTT fragment reassembly holds the client mutex so `mqtt_stop` cannot free `rxBuf` mid-copy.
+- Panel stream/URL paths honor `epd_commit_display` failure (no false lastfrm / displayed).
+- SoftAP open restores MQTT if Wi-Fi bringup fails after `mqtt_stop`.
+- SoftAP/BLE close re-enters `sleep_on_sta_online` so CYCLE `wakeUrl` is not skipped.
+- MQTT `clear` / `render_text` / `render_canvas` publish completion `cmd_ack` after the panel job.
+- SPA editor no longer double-toasts success; Markdown push waits for `displayBusy` like the editor.
+- `testMqtt` / SoftAP keep_live / session paths require STA for `connected`.
+
+### Changed
+
+- `CMakeLists.txt` sets `PROJECT_VER` from `VERSION` so `esp_app_desc` matches `fwVersion`.
+
+### 中文
+
+- 分片重组与 stop 互斥；刷屏 commit 失败如实上报；SoftAP 半开失败恢复 MQTT；配网关闭补跑 wakeUrl；MQTT 刷屏完成 ack；SPA 推屏 toast/等待修正；connected 统一要求 STA；镜像版本绑定 VERSION。
+
 ## [1.3.4] — 2026-11-23
 
 ### Fixed

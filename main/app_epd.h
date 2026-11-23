@@ -117,6 +117,9 @@ int app_epd_test_frame_async(void);
 /* Queue a full-panel color fill. */
 int app_epd_fill_async(unsigned char color_code);
 
+/** Next queued job publishes MQTT cmd_ack on completion (cmd name). */
+void app_epd_mqtt_ack_next(const char *cmd);
+
 /* Queue a raw-frame fetch+render from an HTTP URL (max 511 chars).
  * Returns 0 queued, -1 queue full, -2 sleep pending, -3 other. */
 int app_epd_url_async(const char *url);

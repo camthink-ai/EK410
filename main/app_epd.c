@@ -154,6 +154,7 @@ static unsigned char *s_chunk; /* DMA-capable staging (also used per-line) */
 typedef struct {
     int kind; /* 0 text … 8 splash, 9 SoftAP proxyImage, 10 lastfrm replay */
     bool persist_frame; /* save lastfrm after this job (user content only) */
+    char mqtt_ack_cmd[24]; /* non-empty → completion cmd_ack after job */
     espd_render_t render;
     canvas_t canvas;
     unsigned char fillColor;
@@ -162,6 +163,9 @@ typedef struct {
     epd_proxy_job_t *proxy;       /* kind 9 */
     SemaphoreHandle_t proxy_done; /* kind 9 */
 } render_msg_t;
+
+/* Sticky: next queue_render_owned copies into msg->mqtt_ack_cmd (MQTT path). */
+static char s_mqtt_ack_next[24];
 
 static QueueHandle_t s_renderQueue;
 
@@ -236,7 +240,7 @@ void app_epd_mark_frame_capture(const char *source)
     }
 }
 
-static void stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void *ctx), void *ctx)
+static bool stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void *ctx), void *ctx)
 {
     const bool cap = last_frame_capturing();
     /* CS0 = left nx[0..599], CS1 = right nx[600..1199]; each 1600 x 300B. */
@@ -265,7 +269,7 @@ static void stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void 
         }
         stream_end(csx);
     }
-    (void)epd_commit_display();
+    return epd_commit_display() != 0;
 }
 
 void epd_stream_render(unsigned char (*pixel_fn)(int x, int y, void *ctx), void *ctx)
@@ -278,9 +282,13 @@ void epd_stream_render(unsigned char (*pixel_fn)(int x, int y, void *ctx), void 
         }
         s_stream_cap_src[0] = '\0';
     }
-    stream_render_unlocked(pixel_fn, ctx);
+    bool ok = stream_render_unlocked(pixel_fn, ctx);
     if (do_cap) {
-        last_frame_capture_commit();
+        if (ok) {
+            last_frame_capture_commit();
+        } else {
+            last_frame_capture_abort();
+        }
     }
     epd_unlock();
 }
@@ -432,6 +440,12 @@ static void render_task(void *arg)
             break;
         }
         }
+        /* MQTT completion ack for clear/render_* (display_url already acked). */
+        if (msg->kind != 5 && msg->mqtt_ack_cmd[0]) {
+            mqtt_publish_cmd_ack(msg->mqtt_ack_cmd,
+                                 s_lastDisplayOk ? "ok" : "error",
+                                 s_lastDisplayOk ? "displayed" : "display failed");
+        }
         free(msg);
         msg = NULL;
         s_displayBusy = false;
@@ -452,6 +466,15 @@ bool app_epd_last_display_ok(void)
 /* Build queue items on the heap — render_msg_t embeds canvas_t (~12KB with
  * 48 items) and must never be a stack local on mqtt_cmd / HTTP paths.
  * Ownership transfers to render_task (pointer queue). */
+void app_epd_mqtt_ack_next(const char *cmd)
+{
+    if (cmd && cmd[0]) {
+        strlcpy(s_mqtt_ack_next, cmd, sizeof(s_mqtt_ack_next));
+    } else {
+        s_mqtt_ack_next[0] = '\0';
+    }
+}
+
 static render_msg_t *alloc_render_msg(int kind)
 {
     render_msg_t *msg = calloc(1, sizeof(*msg));
@@ -466,6 +489,10 @@ static int queue_render_owned(render_msg_t *msg, TickType_t wait)
 {
     if (!msg) {
         return -3;
+    }
+    if (s_mqtt_ack_next[0]) {
+        strlcpy(msg->mqtt_ack_cmd, s_mqtt_ack_next, sizeof(msg->mqtt_ack_cmd));
+        s_mqtt_ack_next[0] = '\0';
     }
     if (!s_acceptJobs) {
         ESP_LOGW(TAG, "render rejected — sleep pending");
@@ -1594,14 +1621,18 @@ int epd_url_frame(const char *url)
                 }
                 epd_lock();
                 last_frame_capture_begin("url");
-                stream_render_unlocked(codes_cover_pixel, &cctx);
-                last_frame_capture_commit();
+                if (stream_render_unlocked(codes_cover_pixel, &cctx)) {
+                    last_frame_capture_commit();
+                    ret = 0;
+                    url_heap_log("done");
+                    ESP_LOGI(TAG, "decoded image frame OK (%s)",
+                             fmt == IMG_FMT_JPEG ? "JPEG" : "PNG");
+                } else {
+                    last_frame_capture_abort();
+                    url_fail("display incomplete");
+                }
                 epd_unlock();
                 free(codes);
-                ret = 0;
-                url_heap_log("done");
-                ESP_LOGI(TAG, "decoded image frame OK (%s)",
-                         fmt == IMG_FMT_JPEG ? "JPEG" : "PNG");
             }
         }
     } else if (fmt == IMG_FMT_WEBP) {

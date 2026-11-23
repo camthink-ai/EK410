@@ -466,7 +466,8 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     const bool ca_touch = cJSON_IsString(caPem) && caPem->valuestring[0] != '\0';
     /* Test button always POSTs setMqttParam first. If nothing changed and we
      * are already online, skip stop/restart. */
-    const bool keep_live = same_broker && !ca_touch && mqtt_is_connected();
+    const bool keep_live = same_broker && !ca_touch && mqtt_is_connected() &&
+                           wifi_sta_is_connected();
 
     if (wifi_sta_is_connected() && !keep_live) {
         /* Stop old client BEFORE persist — otherwise a busy restart leaves NVS
@@ -653,7 +654,7 @@ static esp_err_t test_mqtt_handle(httpd_req_t *req)
                 "{\"code\":1,\"ok\":false,\"connected\":false,"
                 "\"msg\":\"need home Wi-Fi (STA) — SoftAP alone cannot reach broker\"}");
         }
-        if (mqtt_is_connected()) {
+        if (mqtt_is_connected() && wifi_sta_is_connected()) {
             return send_json(req,
                 "{\"code\":0,\"ok\":true,\"connected\":true,\"softapAsync\":false,"
                 "\"msg\":\"ok — MQTT session already up\"}");
@@ -677,7 +678,8 @@ static esp_err_t test_mqtt_handle(httpd_req_t *req)
     cJSON_AddNumberToObject(obj, "code", rc == 0 ? 0 : 1);
     cJSON_AddStringToObject(obj, "msg", err[0] ? err : (rc == 0 ? "ok" : "failed"));
     cJSON_AddBoolToObject(obj, "ok", rc == 0);
-    cJSON_AddBoolToObject(obj, "connected", mqtt_is_connected());
+    cJSON_AddBoolToObject(obj, "connected",
+                          mqtt_is_connected() && wifi_sta_is_connected());
     char *str = cJSON_PrintUnformatted(obj);
     esp_err_t res = send_json(req, str);
     cJSON_free(str);
@@ -1251,11 +1253,11 @@ static esp_err_t sleep_now_handle(httpd_req_t *req)
     if (wifi_softap_is_up()) {
         return send_err(req, "softap busy — close hotspot first");
     }
+    /* Respond first so the client gets 200 before the radio drops; SoftAP
+     * already gated — remaining failures are rare (already entering / OOM). */
     esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"sleeping\"}");
     vTaskDelay(pdMS_TO_TICKS(300));
-    if (!sleep_now()) {
-        return send_err(req, "sleep refused");
-    }
+    (void)sleep_now();
     return res;
 }
 

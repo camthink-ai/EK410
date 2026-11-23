@@ -1197,6 +1197,9 @@ void wifi_softap_open(void)
     if (wifi_driver_ensure() != ESP_OK) {
         s_softapOpening = false;
         wifi_led_apply_idle_state();
+        if (stopped_mqtt) {
+            mqtt_start();
+        }
         return;
     }
     ESP_LOGI(TAG, "SoftAP open — free heap %u int %u largest_int %u stopped_mqtt=%d",
@@ -1212,6 +1215,9 @@ void wifi_softap_open(void)
         s_softapOpening = false;
         wifi_led_apply_idle_state();
         led_pulse(LEDC_ERR_R, 1200);
+        if (stopped_mqtt) {
+            mqtt_start();
+        }
         return;
     }
     err = softap_apply_config();
@@ -1220,6 +1226,9 @@ void wifi_softap_open(void)
         s_softapOpening = false;
         wifi_led_apply_idle_state();
         led_pulse(LEDC_ERR_R, 1200);
+        if (stopped_mqtt) {
+            mqtt_start();
+        }
         return;
     }
     if (!s_wifiStarted) {
@@ -1229,6 +1238,9 @@ void wifi_softap_open(void)
             s_softapOpening = false;
             wifi_led_apply_idle_state();
             led_pulse(LEDC_ERR_R, 1200);
+            if (stopped_mqtt) {
+                mqtt_start();
+            }
             return;
         }
         s_wifiStarted = true;
@@ -1302,6 +1314,8 @@ static void softap_close_internal(void)
             powerAttr_t p;
             cfg_get_power_attr(&p);
             if (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0) {
+                /* May run wakeUrl if CYCLE was never armed (button-wake SoftAP). */
+                sleep_on_sta_online();
                 sleep_arm_from_config();
             }
         } else {
@@ -1555,6 +1569,7 @@ void wifi_ble_prov_close(void)
             powerAttr_t p;
             cfg_get_power_attr(&p);
             if (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0) {
+                sleep_on_sta_online();
                 sleep_arm_from_config();
             }
         }

@@ -385,11 +385,13 @@ static void handle_command(const char *raw, int len)
         mqtt_publish_cmd_ack(cmd, "ok", "pong");
     } else if (!strcasecmp(cmd, "clear")) {
         cJSON *c = cJSON_GetObjectItem(p, "color");
+        app_epd_mqtt_ack_next(cmd);
         int rc = app_epd_fill_async(cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x11);
         /* Match HTTP: accept → status "queued"; failure → "error"+token. */
         if (rc == 0) {
             mqtt_publish_cmd_ack(cmd, "queued", app_epd_queue_err(0));
         } else {
+            app_epd_mqtt_ack_next(NULL);
             mqtt_publish_cmd_ack(cmd, "error", app_epd_queue_err(rc));
         }
     } else if (!strcasecmp(cmd, "render_text")) {
@@ -418,11 +420,13 @@ static void handle_command(const char *raw, int len)
                 ESP_LOGW(TAG, "render_text truncated to %u bytes",
                          (unsigned)sizeof(render->text) - 1);
             }
+            app_epd_mqtt_ack_next(cmd);
             int rc = app_epd_render_async(render);
             free(render);
             if (rc == 0) {
                 mqtt_publish_cmd_ack(cmd, "queued", app_epd_queue_err(0));
             } else {
+                app_epd_mqtt_ack_next(NULL);
                 mqtt_publish_cmd_ack(cmd, "error", app_epd_queue_err(rc));
             }
         }
@@ -435,10 +439,12 @@ static void handle_command(const char *raw, int len)
             mqtt_publish_cmd_ack(cmd, "error", err);
             free(cv);
         } else {
+            app_epd_mqtt_ack_next(cmd);
             int rc = app_epd_canvas_async(cv);
             if (rc == 0) {
                 mqtt_publish_cmd_ack(cmd, "queued", app_epd_queue_err(0));
             } else {
+                app_epd_mqtt_ack_next(NULL);
                 mqtt_publish_cmd_ack(cmd, "error", app_epd_queue_err(rc));
             }
             free(cv);
@@ -467,11 +473,10 @@ static void handle_command(const char *raw, int len)
         if (wifi_softap_is_up()) {
             mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
         } else {
+            /* Ack before radio drops so the cloud receives the response. */
             mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
             vTaskDelay(pdMS_TO_TICKS(400));
-            if (!sleep_now()) {
-                mqtt_publish_cmd_ack(cmd, "error", "sleep refused");
-            }
+            (void)sleep_now();
         }
     } else if (!strcasecmp(cmd, "set_power")) {
         powerAttr_t pwr;
@@ -513,9 +518,7 @@ static void handle_command(const char *raw, int len)
             } else {
                 mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
                 vTaskDelay(pdMS_TO_TICKS(400));
-                if (!sleep_now()) {
-                    mqtt_publish_cmd_ack(cmd, "error", "sleep refused");
-                }
+                (void)sleep_now();
             }
         } else {
             sleep_cancel();
@@ -578,12 +581,28 @@ static void enqueue_command_copy(const char *data, int len)
     enqueue_command_owned(copy, len);
 }
 
-static void rx_reset(void)
+/* Caller must hold g_MQ.mutex (same lock as mqtt_stop → destroy). */
+static void rx_reset_unlocked(void)
 {
     free(g_MQ.rxBuf);
     g_MQ.rxBuf = NULL;
     g_MQ.rxLen = 0;
     g_MQ.rxTotal = 0;
+}
+
+static void rx_reset(void)
+{
+    if (!g_MQ.mutex) {
+        rx_reset_unlocked();
+        return;
+    }
+    if (xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        ESP_LOGW(TAG, "rx_reset: mutex busy — force drop buffer");
+        rx_reset_unlocked();
+        return;
+    }
+    rx_reset_unlocked();
+    xSemaphoreGive(g_MQ.mutex);
 }
 
 static void handle_data_event(esp_mqtt_event_handle_t event)
@@ -596,17 +615,26 @@ static void handle_data_event(esp_mqtt_event_handle_t event)
         return;
     }
 
-    /* Reassemble fragmented payloads; transfer ownership to the cmd queue. */
+    /* Fragment reassembly under mutex — mqtt_stop must not free mid-memcpy. */
+    if (!g_MQ.mutex ||
+        xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        ESP_LOGW(TAG, "fragment: mutex busy — drop chunk");
+        mqtt_publish_cmd_ack("(queue)", "error", "fragment desync");
+        return;
+    }
+
     if (event->current_data_offset == 0) {
-        rx_reset();
+        rx_reset_unlocked();
         if (event->total_data_len <= 0 || event->total_data_len >= CMD_BUF_SIZE) {
             ESP_LOGW(TAG, "command too large (%d)", event->total_data_len);
+            xSemaphoreGive(g_MQ.mutex);
             mqtt_publish_cmd_ack("(queue)", "error", "command too large");
             return;
         }
         g_MQ.rxBuf = malloc((size_t)event->total_data_len + 1);
         if (!g_MQ.rxBuf) {
             ESP_LOGE(TAG, "fragment OOM (%d)", event->total_data_len);
+            xSemaphoreGive(g_MQ.mutex);
             mqtt_publish_cmd_ack("(queue)", "error", "out of memory");
             return;
         }
@@ -614,33 +642,40 @@ static void handle_data_event(esp_mqtt_event_handle_t event)
         g_MQ.rxLen = 0;
     }
     if (!g_MQ.rxBuf || g_MQ.rxTotal <= 0) {
-        /* Mid/late chunk with no open reassembly — tell the cloud. */
         ESP_LOGW(TAG, "chunk with no reassembly (off=%d) — drop",
                  event->current_data_offset);
+        xSemaphoreGive(g_MQ.mutex);
         mqtt_publish_cmd_ack("(queue)", "error", "fragment desync");
         return;
     }
     if (event->current_data_offset != g_MQ.rxLen) {
         ESP_LOGW(TAG, "chunk gap %d!=%d — drop", event->current_data_offset, g_MQ.rxLen);
-        rx_reset();
+        rx_reset_unlocked();
+        xSemaphoreGive(g_MQ.mutex);
         mqtt_publish_cmd_ack("(queue)", "error", "fragment desync");
         return;
     }
     if (g_MQ.rxLen + event->data_len > g_MQ.rxTotal) {
         ESP_LOGW(TAG, "chunk overflow %d+%d>%d — drop",
                  g_MQ.rxLen, event->data_len, g_MQ.rxTotal);
-        rx_reset();
+        rx_reset_unlocked();
+        xSemaphoreGive(g_MQ.mutex);
         mqtt_publish_cmd_ack("(queue)", "error", "fragment desync");
         return;
     }
     memcpy(g_MQ.rxBuf + g_MQ.rxLen, event->data, (size_t)event->data_len);
     g_MQ.rxLen += event->data_len;
+    char *owned = NULL;
+    int total = 0;
     if (g_MQ.rxLen >= g_MQ.rxTotal) {
-        char *owned = g_MQ.rxBuf;
-        int total = g_MQ.rxTotal;
+        owned = g_MQ.rxBuf;
+        total = g_MQ.rxTotal;
         g_MQ.rxBuf = NULL;
         g_MQ.rxLen = 0;
         g_MQ.rxTotal = 0;
+    }
+    xSemaphoreGive(g_MQ.mutex);
+    if (owned) {
         enqueue_command_owned(owned, total);
     }
 }
@@ -1132,7 +1167,7 @@ int mqtt_stop(void)
         g_MQ.started = false;
         ESP_LOGI(TAG, "mqtt stopped");
     }
-    rx_reset();
+    rx_reset_unlocked();
     xSemaphoreGive(g_MQ.mutex);
     return 0;
 }

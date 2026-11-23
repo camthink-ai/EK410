@@ -50,9 +50,9 @@ python3 tools/gen_www.py
 ```bash
 python3 tools/bump_version.py --show
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.0
+python3 tools/bump_version.py 1.3.5
 # edit CHANGELOG.md, commit, then:
-git tag -a v1.3.0 -m "EK410 v1.3.0"
+git tag -a v1.3.5 -m "EK410 v1.3.5"
 git push origin main --tags
 ```
 
@@ -61,7 +61,7 @@ Rules:
 - **MAJOR** — breaking MQTT/HTTP contracts or panel protocol
 - **MINOR** — new features, backward compatible
 - **PATCH** — fixes / polish
-- Git tags: `v` + SemVer (`v1.3.0`)
+- Git tags: `v` + SemVer (`v1.3.5`)
 - Do not change `deviceId` generation lightly — it is the NeoMind identity
 
 ## Tools
