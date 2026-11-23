@@ -49,6 +49,13 @@
 #define SOFTAP_OPEN_KEEP_MQTT_INT 24576     /* skip mqtt_stop when largest_int already OK */
 #define RECONNECT_MIN_MS       1000
 #define RECONNECT_MAX_MS       60000
+/* First STA join on some 11ax APs fails once with ASSOC_FAIL (203). During
+ * wifi_sta_start() s_userConnectInFlight used to suppress reconnect_arm(), so
+ * we waited the full 20s timeout before a second attempt. Quick in-flight
+ * retries cut that to a few hundred ms. */
+#define INFLIGHT_ASSOC_RETRY_MS   300
+#define INFLIGHT_ASSOC_RETRY_MAX  3
+#define STA_CONNECT_SETTLE_MS     250
 
 static EventGroupHandle_t s_wifiEvent;
 static esp_netif_t *s_staNetif;
@@ -100,6 +107,40 @@ static int s_apClients;
 static wifi_sta_state_t s_staState;
 static int s_reconnectDelayMs = RECONNECT_MIN_MS;
 static bool s_userConnectInFlight; /* suppress auto-reconnect during try */
+static bool s_inflightQuickRetry;  /* allow reconnect_timer during try */
+static int s_inflightRetryCount;
+
+static bool sta_reason_inflight_retryable(uint8_t reason)
+{
+    switch (reason) {
+    case WIFI_REASON_ASSOC_FAIL:
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_NO_AP_FOUND:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void inflight_assoc_retry_arm(uint8_t reason)
+{
+    if (!s_reconnectTimer || !s_staStarted || !s_userConnectInFlight) {
+        return;
+    }
+    if (s_inflightRetryCount >= INFLIGHT_ASSOC_RETRY_MAX) {
+        ESP_LOGW(TAG, "in-flight assoc retries exhausted (reason=%u)",
+                 (unsigned)reason);
+        return;
+    }
+    s_inflightRetryCount++;
+    s_inflightQuickRetry = true;
+    esp_timer_stop(s_reconnectTimer);
+    esp_timer_start_once(s_reconnectTimer,
+                         (uint64_t)INFLIGHT_ASSOC_RETRY_MS * 1000ULL);
+    ESP_LOGI(TAG, "in-flight assoc retry #%d in %d ms (reason=%u)",
+             s_inflightRetryCount, INFLIGHT_ASSOC_RETRY_MS, (unsigned)reason);
+}
 
 static void httpd_arm_retry(int left);
 static void httpd_wait_heap_for_start(void);
@@ -251,7 +292,9 @@ void wifi_httpd_resume_after_mqtt(void)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     http_server_start();
     if (!http_server_is_up()) {
-        httpd_arm_retry(20);
+        /* Pause claim already cleared — let retry/watchdog bring LAN web back. */
+        ESP_LOGW(TAG, "resume httpd failed — arm retry (LAN must recover)");
+        httpd_arm_retry(30);
     }
     /* Pause/resume must not leave the status LED stuck off. */
     wifi_led_apply_idle_state();
@@ -427,9 +470,16 @@ static void ble_idle_timer_cb(void *arg)
 static void reconnect_timer_cb(void *arg)
 {
     (void)arg;
-    if (!s_staStarted || s_userConnectInFlight) {
+    if (!s_staStarted) {
         return;
     }
+    /* Normal backoff is suppressed while try_connect waits; the in-flight
+     * quick-retry path sets s_inflightQuickRetry for ASSOC_FAIL etc. */
+    if (s_userConnectInFlight && !s_inflightQuickRetry) {
+        return;
+    }
+    const bool inflight = s_inflightQuickRetry;
+    s_inflightQuickRetry = false;
 #if CONFIG_BT_NIMBLE_ENABLED
     /* BLE CT-Prov owns the radio — do not steal airtime for STA join. */
     if (s_bleProvUp || s_bleEntering || ct_prov_ble_is_up()) {
@@ -439,8 +489,12 @@ static void reconnect_timer_cb(void *arg)
     if (wifi_sta_is_connected()) {
         return;
     }
-    ESP_LOGI(TAG, "reconnect attempt (backoff %d ms)", s_reconnectDelayMs);
-    s_staState = WIFI_STA_RECONNECTING;
+    if (inflight) {
+        ESP_LOGI(TAG, "in-flight reconnect attempt");
+    } else {
+        ESP_LOGI(TAG, "reconnect attempt (backoff %d ms)", s_reconnectDelayMs);
+        s_staState = WIFI_STA_RECONNECTING;
+    }
     esp_wifi_connect();
 }
 
@@ -482,7 +536,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         /* Do not set FAIL_BIT here — association often disconnects once
          * before GOT_IP; try_connect waits on CONNECTED + timeout only. */
         xEventGroupClearBits(s_wifiEvent, WIFI_STA_CONNECTED_BIT);
-        if (!s_userConnectInFlight) {
+        if (s_userConnectInFlight) {
+            uint8_t reason = disc ? disc->reason : 0;
+            if (sta_reason_inflight_retryable(reason)) {
+                inflight_assoc_retry_arm(reason);
+            }
+        } else {
             s_staState = WIFI_STA_RECONNECTING;
             /* SoftAP open/close itself owns LED + reconnect; ignore APSTA churn.
              * BLE window owns cyan — do not flash blue over it. */
@@ -532,6 +591,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         xEventGroupSetBits(s_wifiEvent, WIFI_STA_CONNECTED_BIT);
         s_staState = WIFI_STA_CONNECTED;
         s_reconnectDelayMs = RECONNECT_MIN_MS;
+        s_inflightRetryCount = 0;
+        s_inflightQuickRetry = false;
         if (s_reconnectTimer) {
             esp_timer_stop(s_reconnectTimer);
         }
@@ -811,6 +872,8 @@ static bool sta_apply_and_wait(const char *ssid, const char *password, int timeo
     }
 
     s_userConnectInFlight = true;
+    s_inflightRetryCount = 0;
+    s_inflightQuickRetry = false;
     if (s_reconnectTimer) {
         esp_timer_stop(s_reconnectTimer);
     }
@@ -866,12 +929,17 @@ static bool sta_apply_and_wait(const char *ssid, const char *password, int timeo
 #endif
     xEventGroupClearBits(s_wifiEvent, WIFI_STA_CONNECTED_BIT | WIFI_STA_FAIL_BIT);
     esp_wifi_disconnect();
-    vTaskDelay(pdMS_TO_TICKS(80));
+    /* Give the AP a beat after disconnect — 80ms was too tight on some 11ax. */
+    vTaskDelay(pdMS_TO_TICKS(STA_CONNECT_SETTLE_MS));
     esp_wifi_connect();
 
     EventBits_t bits = xEventGroupWaitBits(s_wifiEvent, WIFI_STA_CONNECTED_BIT,
                                            pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     s_userConnectInFlight = false;
+    s_inflightQuickRetry = false;
+    if (s_reconnectTimer) {
+        esp_timer_stop(s_reconnectTimer);
+    }
 #if CONFIG_BT_NIMBLE_ENABLED
     if (ble_coex) {
         (void)esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
@@ -1023,9 +1091,27 @@ static esp_err_t softap_apply_config(void)
     ap.ap.ssid_len = strlen(ssid);
     ap.ap.channel = softap_pick_channel();
     ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    ap.ap.max_connection = 2;
+    ap.ap.max_connection = 4;
+    ap.ap.ssid_hidden = 0;
+    ap.ap.beacon_interval = 100;
+    /* Optional PMF — required=true breaks many phones on SoftAP. */
+    ap.ap.pmf_cfg.capable = true;
+    ap.ap.pmf_cfg.required = false;
     ESP_LOGI(TAG, "SoftAP config ssid=%s ch=%u", ssid, (unsigned)ap.ap.channel);
-    return esp_wifi_set_config(WIFI_IF_AP, &ap);
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &ap);
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* APSTA + HE STA often demotes SoftAP oddly; lock AP iface to 11bgn so
+     * phones can associate (11ax-only SoftAP beacons are a common miss). */
+    const uint8_t proto = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
+    err = esp_wifi_set_protocol(WIFI_IF_AP, proto);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SoftAP set_protocol BGN: %s (continue)", esp_err_to_name(err));
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "SoftAP protocol locked to 11bgn");
+    return ESP_OK;
 }
 
 /**

@@ -10,6 +10,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-11-20
+
+### Added
+
+- Web local firmware upload (`POST /api/v1/system/uploadFirmware`) alongside HTTPS URL OTA; pending-verify reboot after success.
+- Markdown mode: Spectra-6 background and text color controls (preview + push).
+
+### Changed
+
+- System page desktop layout: full-width 2-column cards (work mode / OTA stay wide).
+- MQTT QoS option labels use standard QoS 0/1/2 wording; topic details copy cleaned up.
+
+### Fixed
+
+- STA/LAN MQTT start no longer pauses httpd (pause was leaving the device IP unreachable).
+- Local OTA upload failure restores MQTT and re-arms cycle sleep; busy MQTT stop refuses the upload.
+- HTTPS URL OTA now stops MQTT before download (same as local upload), refuses when upload is busy, and restores MQTT + sleep on failure / task spawn failure.
+- SoftAP “Test connection” only reuses a live MQTT session when the form is unchanged since last load/save; dirty saves without an HTTP ack report unknown instead of trusting the old session; baseline is locked to the submitted payload so edits during the request stay dirty; post-save `loadCfg` keeps local MQTT edits; oversize CA errors re-enable Save/Test buttons.
+- Cold-boot STA join: recoverable disconnects during `wifi_sta_start()` (ASSOC_FAIL 203 / AUTH_FAIL / handshake / no-AP) trigger up to 3 quick in-flight reconnects instead of waiting the full 20s timeout; settle delay after disconnect raised to 250ms.
+
+### 中文
+
+- 网页支持本地固件上传；Markdown 可调背景/文字六色。
+- System 桌面端双列布局；QoS 文案规范化。
+- 修复 STA 起 MQTT 误停局域网网页、OTA 失败后未恢复 MQTT/休眠、SoftAP 测试误报旧会话成功（含保存无应答与请求中再编辑）；保存后回填不覆盖本地新编辑；超长 CA 不再卡死按钮。
+- HTTPS URL OTA 与本地上传对齐：先停 MQTT、busy 互斥、失败恢复 MQTT/休眠。
+- 冷启动首次关联失败（如 reason=203）在连接等待窗口内快速重试，不再傻等 20 秒。
+
+## [1.3.1] — 2026-11-19
+
 ### Changed
 
 - Single firmware image: SoftAP XOR BLE CT-Prov in-process (no dual OTA SKU / reboot switch).

@@ -124,7 +124,7 @@ STA 已连（APSTA）且 SoftAP up
 - `mqtt stop busy`（大预览遥测占 mutex）→ **不落盘**，返回错误  
 - SoftAP 下未连家里 Wi‑Fi → 只保存，无法连公网 Broker  
 - 空密码 = 不改密码（避免浏览器空白覆盖 NVS）  
-- 仅改 QoS 且 `keep_live` 时可能不重启客户端（host/port/auth 未变）
+- `keep_live` 仅在 host/port/qos/auth/tlsVerify/transport 与 CA 均未变且已在线时跳过 stop/restart（`same_broker` 已含 `qos`）
 
 ### 4.4 SoftAP ↔ BLE XOR
 
@@ -168,7 +168,7 @@ BLE 与 SoftAP **不能**同时 up（单镜像互斥）。
 3. **`ESP_ERROR_CHECK` in `phy_track_pll_init`** 遇 NO_MEM 直接 abort——除提高门槛外，能否在应用层进一步隔离（减少并行 timer/DNS）？  
 4. MQTT `out_size=220KB` 虽走 PSRAM，发布路径是否仍间接抬升 internal 碎片？SoftAP 期是否应强制更小 `buffer.out_size`？  
 5. 墨水屏 32KB render 任务与 MQTT stop 争用：是否应用「配网窗口禁止大遥测/禁止刷屏」硬门闩？  
-6. `keep_live` 未覆盖 QoS 变更：是否应把 qos 纳入 same_broker 或强制 restart？
+6. ~~`keep_live` 未覆盖 QoS~~：**已关闭** — `set_mqtt_param_handle` 的 `same_broker` 已比较 `qos`；仅改 QoS 会 stop/restart。
 
 ---
 

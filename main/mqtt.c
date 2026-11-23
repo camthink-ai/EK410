@@ -936,13 +936,17 @@ static void mqtt_bringup_task(void *arg)
         const bool softap = wifi_softap_is_up();
         bool paused_httpd = false;
 
+        /* Already running — never tear down LAN/SoftAP httpd for a no-op. */
+        if (g_MQ.client) {
+            continue;
+        }
+
         /*
-         * httpd fragments internal RAM (SoftAP or STA). Pause web briefly,
-         * start MQTT, then resume — otherwise largest_int can sit at ~8.7KB
-         * forever under a higher floor and MQTT never connects.
+         * SoftAP only: pause httpd briefly so MQTT can grab a contiguous
+         * internal block. STA/LAN must keep the web up — pausing then failing
+         * to resume leaves 192.168.x.x dead and looks like a "reboot".
          */
-        if (peek.host[0] &&
-            (softap || !internal_heap_ready_for(need_stack))) {
+        if (peek.host[0] && softap) {
             int pr = wifi_httpd_pause_for_mqtt();
             if (pr < 0) {
                 ESP_LOGW(TAG, "defer start — httpd pause incomplete");
@@ -963,8 +967,8 @@ static void mqtt_bringup_task(void *arg)
                 }
                 vTaskDelay(pdMS_TO_TICKS(50));
             }
-        } else {
-            for (int i = 0; i < 30 && peek.host[0] && !internal_heap_ready_for(need_stack); i++) {
+        } else if (peek.host[0] && !internal_heap_ready_for(need_stack)) {
+            for (int i = 0; i < 30 && !internal_heap_ready_for(need_stack); i++) {
                 if (wifi_ble_prov_busy()) {
                     break;
                 }

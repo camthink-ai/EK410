@@ -28,6 +28,8 @@
  * GET  /api/v1/system/getEventLogMeta     {present,bytes,seq,capBytes,keepDays,timeOk}
  * GET  /api/v1/system/eventLog            text/plain download (critical events)
  * POST /api/v1/system/clearEventLog
+ * POST /api/v1/system/setDevUpgrade          {url:"https://…"} HTTPS OTA
+ * POST /api/v1/system/uploadFirmware         raw application/octet-stream .bin
  *
  * Handlers return the data JSON directly (no envelope), like lowpower_camera.
  */
@@ -974,6 +976,17 @@ static esp_err_t display_last_frame_handle(httpd_req_t *req)
 
 /* ---------- OTA ---------- */
 
+/* URL + local OTA pause MQTT/sleep; on failure restore so the old image keeps
+ * cloud connectivity and cycle sleep without a reboot. */
+static void ota_upload_restore_runtime(void)
+{
+    wifi_led_refresh();
+    if (wifi_sta_is_connected() && !wifi_ble_prov_is_up()) {
+        mqtt_start();
+    }
+    sleep_kick();
+}
+
 static void ota_task(void *arg)
 {
     char *url = (char *)arg;
@@ -986,14 +999,17 @@ static void ota_task(void *arg)
         esp_restart();
     }
     ESP_LOGE(TAG, "OTA failed: %s", err);
-    wifi_led_refresh(); /* restore green/blue — do not leave sticky red */
     led_pulse(LEDC_ERR_R, 2000);
+    ota_upload_restore_runtime();
     free(url);
     vTaskDelete(NULL);
 }
 
 static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
 {
+    if (ota_upload_is_active()) {
+        return send_err(req, "ota busy");
+    }
     char *body = read_body(req);
     if (!body) {
         return send_err(req, "bad body");
@@ -1010,12 +1026,97 @@ static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
     if (!urlCopy) {
         return send_err(req, "oom");
     }
-    if (xTaskCreate(ota_task, "ota", 12288, urlCopy, 5, NULL) != pdPASS) {
+    /* Match local upload: free internal heap before HTTPS TLS + flash write. */
+    if (mqtt_stop_wait(4000) != 0) {
         free(urlCopy);
-        return send_err(req, "task spawn failed");
+        return send_err(req, "mqtt stop busy");
     }
     sleep_cancel(); /* don't sleep mid-upgrade */
+    if (xTaskCreate(ota_task, "ota", 12288, urlCopy, 5, NULL) != pdPASS) {
+        free(urlCopy);
+        ota_upload_restore_runtime();
+        return send_err(req, "task spawn failed");
+    }
     return send_json(req, "{\"code\":0,\"msg\":\"upgrading, device will reboot\"}");
+}
+
+/* Raw firmware body (application/octet-stream). Prefer LAN/STA; SoftAP works
+ * but is slow. Success → JSON then reboot into pending-verify slot. */
+static esp_err_t upload_firmware_handle(httpd_req_t *req)
+{
+    softap_touch();
+    if (ota_upload_is_active()) {
+        return send_err(req, "ota busy");
+    }
+    if (req->content_len <= 0) {
+        return send_err(req, "Content-Length required");
+    }
+    /* Slot is 4MB; reject absurdly small stubs early (real app ≫ 200KB). */
+    if (req->content_len < 200 * 1024) {
+        return send_err(req, "image too small");
+    }
+    if (req->content_len > 4 * 1024 * 1024) {
+        return send_err(req, "image too large");
+    }
+
+    /* Refuse to start if MQTT cannot stop — keep live session + sleep arm. */
+    if (mqtt_stop_wait(4000) != 0) {
+        return send_err(req, "mqtt stop busy");
+    }
+    sleep_cancel();
+
+    char err[64] = "";
+    if (ota_upload_begin((size_t)req->content_len, err, sizeof(err)) != 0) {
+        ota_upload_restore_runtime();
+        return send_err(req, err[0] ? err : "ota begin failed");
+    }
+
+    led_set(LEDC_OTA_R, LED_BLINK_FAST);
+    ESP_LOGI(TAG, "firmware upload %d bytes (softap=%d)",
+             req->content_len, wifi_softap_is_up() ? 1 : 0);
+
+    uint8_t *buf = malloc(4096);
+    if (!buf) {
+        ota_upload_abort();
+        led_pulse(LEDC_ERR_R, 2000);
+        ota_upload_restore_runtime();
+        return send_err(req, "oom");
+    }
+
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int want = remaining > 4096 ? 4096 : remaining;
+        int got = httpd_req_recv(req, (char *)buf, want);
+        if (got <= 0) {
+            free(buf);
+            ota_upload_abort();
+            led_pulse(LEDC_ERR_R, 2000);
+            ota_upload_restore_runtime();
+            return send_err(req, "upload interrupted");
+        }
+        if (ota_upload_write(buf, (size_t)got) != 0) {
+            free(buf);
+            ota_upload_abort();
+            led_pulse(LEDC_ERR_R, 2000);
+            ota_upload_restore_runtime();
+            return send_err(req, "ota write failed (bad magic or flash)");
+        }
+        remaining -= got;
+        softap_touch();
+    }
+    free(buf);
+
+    if (ota_upload_finish(err, sizeof(err)) != 0) {
+        led_pulse(LEDC_ERR_R, 2000);
+        ota_upload_restore_runtime();
+        return send_err(req, err[0] ? err : "ota validate failed");
+    }
+
+    esp_err_t res = send_json(req,
+        "{\"code\":0,\"msg\":\"uploaded — rebooting into new image (pending verify)\"}");
+    vTaskDelay(pdMS_TO_TICKS(400));
+    esp_restart();
+    return res; /* not reached */
 }
 
 /* ---------- power ---------- */
@@ -1284,6 +1385,7 @@ static const httpd_uri_t g_handlers[] = {
     { .uri = "/api/v1/display/lastFrame", .method = HTTP_GET, .handler = display_last_frame_handle },
     { .uri = "/api/v1/display/testPattern", .method = HTTP_POST, .handler = display_test_pattern_handle },
     { .uri = "/api/v1/system/setDevUpgrade", .method = HTTP_POST, .handler = set_dev_upgrade_handle },
+    { .uri = "/api/v1/system/uploadFirmware", .method = HTTP_POST, .handler = upload_firmware_handle },
     { .uri = "/api/v1/system/getPowerParam", .method = HTTP_GET, .handler = get_power_param_handle },
     { .uri = "/api/v1/system/setPowerParam", .method = HTTP_POST, .handler = set_power_param_handle },
     { .uri = "/api/v1/system/sleepNow", .method = HTTP_POST, .handler = sleep_now_handle },

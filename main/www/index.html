@@ -383,6 +383,21 @@ body.desktop .conn-status{margin:0 0 12px; max-width:none}
 .conn-status[data-state="idle"]{background:#f5f6f8; color:var(--sub)}
 .conn-status[data-state="failed"]{background:#fef2f2; color:#dc2626}
 .conn-status[data-state="failed"] i{background:#dc2626}
+.mqtt-inline-busy{
+  display:flex; align-items:center; gap:8px; margin:8px 18px 0; padding:10px 12px;
+  border-radius:12px; background:#fff7ed; color:#c2410c; font-size:12px; line-height:1.4
+}
+body.desktop .mqtt-inline-busy{margin:8px 0 0}
+.mqtt-inline-busy[hidden]{display:none !important}
+.mqtt-inline-dot{
+  width:8px; height:8px; border-radius:50%; background:#f97316; flex:0 0 auto;
+  box-shadow:0 0 0 0 rgba(249,115,22,.45); animation:mqtt-pulse 1.2s ease-out infinite
+}
+@keyframes mqtt-pulse{
+  0%{box-shadow:0 0 0 0 rgba(249,115,22,.45)}
+  70%{box-shadow:0 0 0 8px rgba(249,115,22,0)}
+  100%{box-shadow:0 0 0 0 rgba(249,115,22,0)}
+}
 .topics{padding:4px 14px 0; color:var(--sub); font-size:12px; display:flex; flex-direction:column; gap:8px}
 body.desktop .topics{padding:8px 0 0}
 .topics .topic-row{
@@ -767,6 +782,9 @@ body.desktop .md-editor{
   border-radius:0; width:380px; flex:0 0 380px; border-right:1px solid var(--line);
   padding:22px 22px 24px; min-height:0; overflow:auto;
 }
+.md-colors{display:flex; flex-direction:column; gap:0; margin:0 0 12px; flex:0 0 auto}
+.md-colors .row{min-height:44px; padding:0}
+body.desktop .md-colors .row{min-height:48px}
 .md-editor textarea{
   flex:1; width:100%; min-height:160px; max-height:42vh; border:0; resize:vertical; outline:none;
   font:inherit; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -775,23 +793,28 @@ body.desktop .md-editor{
   border-radius:12px; padding:12px; touch-action:manipulation}
 body.desktop .md-editor textarea{min-height:0; max-height:none; resize:none; font-size:13px}
 
-/* System — sectioned blocks */
-.sys-stack{display:flex; flex-direction:column; gap:12px}
+/* System — sectioned blocks (phone: stack; desktop: full-width 2-col) */
+.sys-stack{display:flex; flex-direction:column; gap:12px; width:100%}
 body.desktop .sys-stack{
-  max-width:720px; gap:16px;
-  display:grid; grid-template-columns:1fr 1fr; align-items:start;
+  max-width:none; width:100%; gap:16px;
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  align-items:stretch;
 }
 body.desktop .sys-block--wide{grid-column:1 / -1}
+body.desktop #page-system:not([hidden]){
+  display:block; width:100%; max-width:none;
+}
 .sys-block{
   background:var(--surface); border-radius:20px;
   border:1px solid rgba(9,14,23,.05); padding:8px 0 14px;
+  display:flex; flex-direction:column; min-width:0;
 }
 body.desktop .sys-block{padding:22px 24px 20px; border-radius:22px}
 .sys-block .row{padding:0 18px}
 body.desktop .sys-block .row{padding:0; min-height:52px}
 body.desktop .sys-block .row .grow{text-align:left !important}
-.sys-block .actions{padding:14px 18px 0}
-body.desktop .sys-block .actions{padding:18px 0 0; justify-content:flex-start}
+.sys-block .actions{padding:14px 18px 0; margin-top:auto}
+body.desktop .sys-block .actions{padding:18px 0 0; justify-content:flex-start; gap:10px}
 .sys-block--danger .row button{color:var(--text)}
 .sys-block--danger .row button.danger{color:#dc2626}
 .sys .danger{color:#dc2626}
@@ -821,11 +844,34 @@ body.desktop .dock{display:none}
 body.desktop .toast{bottom:28px}
 .toast.show{opacity:1}
 
+/* MQTT save/test: sticky loading (survives SoftAP httpd pause better than toast). */
+.mqtt-busy{
+  position:fixed; inset:0; z-index:45; display:none;
+  align-items:center; justify-content:center;
+  padding:24px; background:rgba(9,14,23,.42); backdrop-filter:blur(6px);
+  box-sizing:border-box
+}
+.mqtt-busy.on{display:flex}
+.mqtt-busy-card{
+  width:min(360px,100%); background:#fff; border-radius:18px;
+  padding:22px 20px 18px; box-shadow:0 18px 48px rgba(9,14,23,.22);
+  text-align:center
+}
+.mqtt-busy-spin{
+  width:28px; height:28px; margin:0 auto 14px; border-radius:50%;
+  border:3px solid #e5e7eb; border-top-color:var(--ink);
+  animation:mqtt-spin .7s linear infinite
+}
+@keyframes mqtt-spin{to{transform:rotate(360deg)}}
+.mqtt-busy-card b{display:block; font-size:15px; color:var(--ink); font-weight:600; margin-bottom:6px}
+.mqtt-busy-card p{margin:0; font-size:12px; color:var(--sub); line-height:1.45}
+.mqtt-busy-card .hint-line{margin-top:10px; color:var(--muted); font-size:11px}
+
 .lang-seg{display:flex; gap:2px; padding:3px; border-radius:999px; background:rgba(255,255,255,.1); margin-left:4px}
 .lang-seg button{border:0!important; background:transparent; color:rgba(255,255,255,.65)!important; height:26px; padding:0 10px; border-radius:999px; font:inherit; font-size:11px; cursor:pointer}
 .lang-seg button.on{background:var(--brand)!important; color:#fff!important; border-color:transparent!important}
 .sys-lang-wrap{display:flex; justify-content:flex-end}
-body.desktop .sys-lang-wrap{justify-content:flex-start}
+body.desktop .sys-lang-wrap{justify-content:flex-end}
 .sys-lang{box-sizing:border-box; display:inline-flex; align-items:center; gap:4px; height:36px; padding:3px; border-radius:12px; background:#f3f4f6}
 .sys-lang button{
   box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
@@ -855,7 +901,7 @@ body.desktop .meta-val{text-align:left}
 .mode-cards{display:flex; flex-direction:column; gap:8px; padding:4px 18px 8px}
 body.desktop .mode-cards{
   padding:0 0 8px;
-  display:grid; grid-template-columns:1fr 1fr; gap:10px;
+  display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px;
 }
 .mode-card{
   display:block; width:100%; text-align:left; border:1px solid var(--line);
@@ -914,6 +960,7 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
   body.desktop .mode-switch {min-width:0}
   body.desktop .disp-tools-row {flex:1 1 340px;flex-wrap:wrap}
   body.desktop .md-editor {width:clamp(245px,26vw,325px);flex-basis:clamp(245px,26vw,325px)}
+  body.desktop .mode-cards{grid-template-columns:1fr 1fr}
 }
 @media (max-width:599.98px){
   body.phone .main {max-width:none}
@@ -1036,6 +1083,10 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
           <div class="conn-status" id="mqttStatus" data-state="disconnected">
             <i></i><span id="mqStatusLabel" data-i18n="mq.disconnected">未连接</span>
           </div>
+          <div class="mqtt-inline-busy" id="mqInlineBusy" hidden>
+            <span class="mqtt-inline-dot" aria-hidden="true"></span>
+            <span id="mqInlineBusyText" data-i18n="toast.mqtt_test">正在测试 MQTT…</span>
+          </div>
           <div class="row"><label data-i18n="mq.transport">协议</label>
             <div class="grow" style="display:flex;justify-content:flex-end">
               <div class="mq-transport" id="mqTransport">
@@ -1067,9 +1118,9 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
           <div class="err-msg" id="errMqCid" data-i18n="err.cid">请填写 Client ID</div>
           <div class="row"><label>QoS</label>
             <select class="ghost grow" id="mqQos">
-              <option value="1" data-i18n="mq.qos1">1 至少一次</option>
-              <option value="0" data-i18n="mq.qos0">0 最多一次</option>
-              <option value="2" data-i18n="mq.qos2">2 恰好一次</option>
+              <option value="0" data-i18n="mq.qos0">QoS 0</option>
+              <option value="1" data-i18n="mq.qos1" selected>QoS 1</option>
+              <option value="2" data-i18n="mq.qos2">QoS 2</option>
             </select>
           </div>
           <div class="row"><label data-i18n="mq.user">用户名</label><input class="ghost grow" id="mqUser" placeholder="Optional" data-i18n-placeholder="common.optional" autocomplete="off"></div>
@@ -1077,9 +1128,9 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
           <details><summary data-i18n="mq.topic_details">查看 MQTT 主题</summary>
           <p class="card-lede" data-i18n="mq.topic_hint">由 deviceId 自动生成，只读。</p>
           <div class="topics">
-            <div class="topic-row" id="rowTUp"><label data-i18n="mq.t_up">上报（publish）</label><code class="topic-val" id="tUp"></code></div>
+            <div class="topic-row" id="rowTUp"><label data-i18n="mq.t_up">上报 uplink</label><code class="topic-val" id="tUp"></code></div>
             <div class="err-msg" id="errTUp" style="padding:0" data-i18n="err.t_up">上报 topic 必填</div>
-            <div class="topic-row" id="rowTDown"><label data-i18n="mq.t_down">下行（subscribe）</label><code class="topic-val" id="tDown"></code></div>
+            <div class="topic-row" id="rowTDown"><label data-i18n="mq.t_down">下行 downlink</label><code class="topic-val" id="tDown"></code></div>
             <div class="err-msg" id="errTDown" style="padding:0" data-i18n="err.t_down">下行 topic 必填</div>
           </div>
           </details>
@@ -1296,6 +1347,28 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
         <div class="mode-view md-mode" id="mode-md" hidden>
           <div class="md-editor">
             <h2 class="card-title" style="padding:0 0 10px" data-i18n="md.write">编写 Markdown</h2>
+            <div class="md-colors" id="mdColors">
+              <div class="row"><label data-i18n="ed.bg">背景</label>
+                <select class="ghost grow" id="mdCanvasBg">
+                  <option value="white" data-i18n="color.white" selected>白</option>
+                  <option value="black" data-i18n="color.black">黑</option>
+                  <option value="red" data-i18n="color.red">红</option>
+                  <option value="yellow" data-i18n="color.yellow">黄</option>
+                  <option value="blue" data-i18n="color.blue">蓝</option>
+                  <option value="green" data-i18n="color.green">绿</option>
+                </select>
+              </div>
+              <div class="row"><label data-i18n="md.fg">文字</label>
+                <select class="ghost grow" id="mdTextColor">
+                  <option value="black" data-i18n="color.black" selected>黑</option>
+                  <option value="white" data-i18n="color.white">白</option>
+                  <option value="red" data-i18n="color.red">红</option>
+                  <option value="yellow" data-i18n="color.yellow">黄</option>
+                  <option value="blue" data-i18n="color.blue">蓝</option>
+                  <option value="green" data-i18n="color.green">绿</option>
+                </select>
+              </div>
+            </div>
             <textarea id="mdText"># CamThink EK410
 
 Edge e-paper · 1600×1200
@@ -1354,6 +1427,13 @@ Edge e-paper · 1600×1200
         </div>
 
         <div class="sys-block">
+          <h2 class="card-title" data-i18n="sys.sec_info">设备信息</h2>
+          <div class="row"><label style="min-width:88px">MAC</label><span class="grow meta-val">D8:85:AC:60:38:70</span></div>
+          <div class="row"><label style="min-width:88px" data-i18n="ov.fw">固件</label><span class="grow meta-val">0.1.0-dev</span></div>
+          <div class="row"><label style="min-width:88px" data-i18n="ov.part">分区</label><span class="grow meta-val">ota_0</span></div>
+        </div>
+
+        <div class="sys-block">
           <h2 class="card-title" data-i18n="sys.sec_log">事件日志</h2>
           <div class="meta" style="padding:0 18px 8px;line-height:1.45" data-i18n="sys.log_hint">关键事件（配网 / Wi‑Fi / MQTT / 刷屏 / 休眠），约 48KB 或 7 天自动裁剪。用于现场排查。</div>
           <div class="row"><label style="min-width:88px" data-i18n="sys.log_size">大小</label><span class="grow meta-val" id="evtLogMeta">—</span></div>
@@ -1363,11 +1443,10 @@ Edge e-paper · 1600×1200
           </div>
         </div>
 
-        <div class="sys-block">
-          <h2 class="card-title" data-i18n="sys.sec_info">设备信息</h2>
-          <div class="row"><label style="min-width:88px">MAC</label><span class="grow meta-val">D8:85:AC:60:38:70</span></div>
-          <div class="row"><label style="min-width:88px" data-i18n="ov.fw">固件</label><span class="grow meta-val">0.1.0-dev</span></div>
-          <div class="row"><label style="min-width:88px" data-i18n="ov.part">分区</label><span class="grow meta-val">ota_0</span></div>
+        <div class="sys-block sys-block--danger">
+          <h2 class="card-title" data-i18n="sys.sec_danger">危险操作</h2>
+          <div class="row"><button class="btn" type="button" style="border:0;width:100%;justify-content:flex-start;padding:0;height:48px;background:transparent" id="btnReboot" data-i18n="sys.reboot">重启设备</button></div>
+          <div class="row"><button class="btn danger" type="button" style="border:0;width:100%;justify-content:flex-start;padding:0;height:48px;background:transparent" id="btnFactory" data-i18n="sys.factory">恢复出厂</button></div>
         </div>
 
         <div class="sys-block sys-block--wide">
@@ -1397,20 +1476,23 @@ Edge e-paper · 1600×1200
           </div>
         </div>
 
-        <div class="sys-block">
+        <div class="sys-block sys-block--wide">
           <h2 class="card-title" data-i18n="sys.sec_update">名称与升级</h2>
           <div class="row"><label style="min-width:88px" data-i18n="sys.name">设备名</label><input class="ghost grow" id="devName" value="EK410"></div>
+          <p class="hint" data-i18n="sys.ota_hint" style="padding:0 18px 8px;margin:0">推荐上传本地固件包；也可填远程 HTTPS URL。升级后设备会重启，新固件需自检通过，否则自动回滚。</p>
+          <div class="row"><label style="min-width:88px" data-i18n="sys.ota_file">固件文件</label>
+            <input class="ghost grow" id="otaFile" type="file" accept=".bin,application/octet-stream" style="text-align:left;padding:10px 0">
+          </div>
+          <div class="row" id="otaProgressRow" hidden>
+            <label style="min-width:88px" data-i18n="sys.ota_progress">进度</label>
+            <span class="grow meta-val" id="otaProgress">0%</span>
+          </div>
           <div class="row"><label style="min-width:88px">OTA URL</label><input class="ghost grow" id="otaUrl" placeholder="https://" style="text-align:left"></div>
           <div class="actions">
             <button class="btn" type="button" id="btnSysSave" data-i18n="common.save">保存</button>
-            <button class="btn solid" type="button" id="btnOta" data-i18n="sys.ota">升级</button>
+            <button class="btn solid" type="button" id="btnOtaUpload" data-i18n="sys.ota_upload">上传升级</button>
+            <button class="btn" type="button" id="btnOta" data-i18n="sys.ota_url">URL 升级</button>
           </div>
-        </div>
-
-        <div class="sys-block sys-block--danger">
-          <h2 class="card-title" data-i18n="sys.sec_danger">危险操作</h2>
-          <div class="row"><button class="btn" type="button" style="border:0;width:100%;justify-content:flex-start;padding:0;height:48px;background:transparent" id="btnReboot" id="btnReboot" data-i18n="sys.reboot">重启设备</button></div>
-          <div class="row"><button class="btn danger" type="button" style="border:0;width:100%;justify-content:flex-start;padding:0;height:48px;background:transparent" id="btnFactory" data-i18n="sys.factory">恢复出厂</button></div>
         </div>
       </div>
     </section>
@@ -1442,6 +1524,14 @@ Edge e-paper · 1600×1200
 .dlg p{margin:0;color:var(--sub);font-size:13px;line-height:1.45}
 </style>
 <div class="toast" id="toast"></div>
+<div class="mqtt-busy" id="mqttBusy" aria-live="polite" aria-busy="true">
+  <div class="mqtt-busy-card">
+    <div class="mqtt-busy-spin" aria-hidden="true"></div>
+    <b id="mqttBusyTitle">正在测试 MQTT…</b>
+    <p id="mqttBusySub">请稍候，热点网页可能短暂无响应。</p>
+    <p class="hint-line" id="mqttBusyHint">此期间无法刷图 / 上传，完成后请重试。</p>
+  </div>
+</div>
 
 
 <script>
@@ -1450,7 +1540,7 @@ const I18N = {
 zh:{
   "preview.tag":"显示预览 · 六色 / 布局","preview.phone":"手机","preview.tablet":"平板","preview.desktop":"桌面",
   "nav.overview":"概览","nav.network":"网络","nav.display":"显示","nav.system":"系统",
-  "banner.title":"配网热点已开启","banner.desc":"SSID 为 EK410-{deviceId}；配置中保持开启，可主动关闭。","banner.close":"关闭热点","banner.ble":"改用 BLE","toast.ap_closed":"热点已关闭","toast.ap_lost":"热点已关闭或连接断开，请改连家里 Wi‑Fi 后用设备 IP 打开。","toast.ble_start":"正在开启 BLE 配网…","toast.ble_ok":"BLE 已开启，请用 NeoLink 连接","toast.ble_busy":"MQTT 正忙（大图遥测），请稍后再开 SoftAP/BLE","toast.mqtt_busy":"MQTT 正忙，配置未保存，请稍后再试","toast.mqtt_saved_softap":"配置已保存，请先连接上游 Wi‑Fi","toast.mqtt_softap_connect":"已保存，正在连接 MQTT…","toast.mqtt_wait":"正在连接 MQTT，请稍候…","toast.mqtt_wait_progress":"正在连接 MQTT…（约 {0} 秒）","toast.mqtt_softap_pause":"连接中：热点网页可能短暂无响应，请稍候…","toast.mqtt_ok":"MQTT 已连接","toast.mqtt_fail":"MQTT 未连接","toast.mqtt_infra":"MQTT 后台未就绪，请重启设备","toast.mqtt_outcome_pending":"仍在连接或网页曾短暂中断，请看概览 MQTT 状态","toast.mqtt_save_unknown":"网页短暂中断，请看概览是否已连接，勿连点","toast.mqtt_warn_port":"端口与协议可能不匹配，仍要保存吗？","toast.sleep_deferred_ap":"已保存；SoftAP 开启时休眠暂不生效，关热点后自动排程","toast.sleep_deferred_sta":"已保存；连上家里 Wi‑Fi 后才会排程休眠","toast.display_done":"刷屏完成","toast.display_fail":"刷屏失败，请查看事件日志","toast.ota_pending":"OTA 待确认：请保持联网直至状态消失",
+  "banner.title":"配网热点已开启","banner.desc":"SSID 为 EK410_xxxxxx（设备 MAC 后缀，与设备名 EK410-deviceId 不同）；密码 12345678。配置中保持开启，可主动关闭。","banner.close":"关闭热点","banner.ble":"改用 BLE","toast.ap_closed":"热点已关闭","toast.ap_lost":"热点已关闭或连接断开，请改连家里 Wi‑Fi 后用设备 IP 打开。","toast.ble_start":"正在开启 BLE 配网…","toast.ble_ok":"BLE 已开启，请用 NeoLink 连接","toast.ble_busy":"MQTT 正忙（大图遥测），请稍后再开 SoftAP/BLE","toast.mqtt_busy":"MQTT 正忙，配置未保存，请稍后再试","toast.mqtt_saved_softap":"配置已保存，请先连接上游 Wi‑Fi","toast.mqtt_softap_connect":"已保存，正在连接 MQTT…","toast.mqtt_wait":"正在连接 MQTT，请稍候…","toast.mqtt_wait_progress":"正在连接 MQTT…（约 {0} 秒）","toast.mqtt_softap_pause":"连接中：热点网页可能短暂无响应，请稍候…","toast.mqtt_ok":"MQTT 已连接","toast.mqtt_fail":"MQTT 未连接","toast.mqtt_infra":"MQTT 后台未就绪，请重启设备","toast.mqtt_outcome_pending":"仍在连接或网页曾短暂中断，请看概览 MQTT 状态","toast.mqtt_save_unknown":"网页短暂中断，请看概览是否已连接，勿连点","toast.mqtt_warn_port":"端口与协议可能不匹配，仍要保存吗？","toast.sleep_deferred_ap":"已保存；SoftAP 开启时休眠暂不生效，关热点后自动排程","toast.sleep_deferred_sta":"已保存；连上家里 Wi‑Fi 后才会排程休眠","toast.display_done":"刷屏完成","toast.display_fail":"刷屏失败，请查看事件日志","toast.ota_pending":"OTA 待确认：请保持联网直至状态消失",
   "prov.title":"配网方式","prov.hint":"SoftAP 与 BLE 互斥。先连家里 Wi‑Fi，再保存/测试 MQTT；连接时网页可能短暂无响应，成功后可保持 SoftAP 并看到已连接。","prov.open_ap":"开启 SoftAP","prov.open_ble":"开启 BLE（NeoLink）",
   "ov.mqtt_paused":"MQTT 需先连家里 Wi‑Fi","ov.mqtt_heap":"MQTT 堆不足推迟","ov.mqtt_web_first":"配网页优先，MQTT 即将恢复","ov.mqtt_connecting":"MQTT 连接中","ov.bat_na":"电量不可用",
   "ov.wlan_off":"WLAN 未连接","ov.wlan_on":"WLAN 已连接","ov.mqtt_off":"MQTT 未连接","ov.mqtt_on":"MQTT 已连接","ov.ap_on":"热点开启","ov.ap_off":"热点关闭",
@@ -1471,18 +1561,18 @@ zh:{
   "mq.tls_insecure_hint":"已关闭校验：不验证服务器证书，仅建议内网/自签调试使用。",
   "mq.tls_ca":"自定义 CA（PEM）","mq.tls_ca_ph":"-----BEGIN CERTIFICATE-----","mq.tls_ca_hint":"可选。留空则用系统 CA 包；填写后仅信任该证书。",
   "mq.host_ph":"Broker IP / 主机名","mq.cid_ph":"ek410-XXXXXXXX（出厂写入）",
-  "mq.user":"用户名","mq.qos0":"0 最多一次","mq.qos1":"1 至少一次","mq.qos2":"2 恰好一次",
-  "mq.hint":"选择 MQTT 或 MQTTS。Topic 遵循 NeoMind 标准 uplink / downlink。",
+  "mq.user":"用户名","mq.qos0":"QoS 0","mq.qos1":"QoS 1","mq.qos2":"QoS 2",
+  "mq.hint":"选择 MQTT 或 MQTTS（与端口无关）。主题按 NeoMind 标准 uplink / downlink。",
   "mq.topic_hint":"由 deviceId 自动生成，只读。",
   "net.scan_expand":"展开网络列表","net.scan_collapse":"收起列表",
-  "mq.t_up":"上报（publish）","mq.t_down":"下行（subscribe）",
+  "mq.t_up":"上报 uplink","mq.t_down":"下行 downlink",
   "mq.topic_details":"查看 MQTT 主题","mq.test":"测试连接","common.save":"保存","common.optional":"可选",
   "err.ssid":"请填写或选择 SSID","err.pass":"加密网络请填写密码","err.host":"请填写 MQTT 服务器",
   "err.port":"端口需为 1–65535","err.cid":"请填写 Client ID",
   "err.t_up":"上报 topic 必填","err.t_down":"下行 topic 必填",
   "err.required":"请填写{0}","err.wifi_incomplete":"请完善 Wi‑Fi 必填项","err.mqtt_incomplete":"请完善 MQTT 必填项",
   "toast.scan":"正在扫描附近 Wi‑Fi…","toast.wifi_saved":"Wi‑Fi 已保存","toast.mqtt_saved":"MQTT 已保存",
-  "toast.mqtt_test":"正在测试 MQTT…","toast.filled_sec":"已填入 {0}（需密码）","toast.filled_open":"已填入 {0}（开放）",
+  "toast.mqtt_test":"正在测试 MQTT…","toast.mqtt_busy_title":"正在连接 MQTT…","toast.mqtt_busy_sub":"请稍候，热点网页可能短暂无响应。","toast.mqtt_busy_hint":"此期间无法刷图 / 上传，完成后请重试。","toast.mqtt_busy_disp":"MQTT 连接中，请稍后再刷图","toast.filled_sec":"已填入 {0}（需密码）","toast.filled_open":"已填入 {0}（开放）",
   "disp.image":"图片","disp.editor":"编辑器","disp.source":"原色","disp.eink":"墨水六色",
   "disp.color_title":"原色 vs Spectra 6 量化","disp.layout":"布局辅助","disp.push":"刷到屏幕",
   "disp.content_preview":"内容预览","disp.layout_preview":"布局预览","disp.img_src":"图片来源",
@@ -1499,9 +1589,10 @@ zh:{
   "ed.subtitle":"边缘 AI · 墨水屏","ed.brand":"品牌","ed.accent":"强调","ed.aux":"辅色",
   "color.black":"黑","color.white":"白","color.red":"红","color.yellow":"黄","color.blue":"蓝","color.green":"绿",
   "md.write":"编写 Markdown","md.open":"打开文件","md.paste":"粘贴","md.apply":"生成预览",
+  "md.fg":"文字",
   "md.note":"右侧为屏幕布局预览（非富文本）。H1→大字 · 段落→正文 · 列表→多行。",
   "md.sample":"# CamThink EK410\n\n边缘墨水屏 · 1600×1200\n\n- Wi‑Fi / MQTT 配网\n- 六色显示\n",
-  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_log":"事件日志","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。切换后立即保存。","sys.log_hint":"关键事件（配网 / Wi‑Fi / MQTT / 刷屏 / 休眠），约 48KB 或 7 天自动裁剪。用于现场排查。","sys.log_unavailable":"当前分区表无事件日志（旧机应用 OTA 后常见）。完整烧录后可用。","sys.log_size":"大小","sys.log_dl":"下载日志","sys.log_clear":"清空","toast.log_cleared":"事件日志已清空","toast.log_unavailable":"事件日志不可用","toast.queue_full":"设备忙，请稍后再试","toast.sleep_pending":"设备正在进入休眠","toast.oom":"设备内存不足","toast.img_qual_saved":"图片质量已保存","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.wake_sec":"在线窗（秒）","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.pwr_save":"保存工作模式","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开 — 点「保存工作模式」生效","toast.mode_cycle":"已选定时刷新 — 点「保存工作模式」生效","toast.mode_hibernate":"已选休眠 — 保存后将深睡","toast.sys_saved":"系统设置已保存","toast.pwr_saved":"工作模式已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
+  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_log":"事件日志","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。切换后立即保存。","sys.log_hint":"关键事件（配网 / Wi‑Fi / MQTT / 刷屏 / 休眠），约 48KB 或 7 天自动裁剪。用于现场排查。","sys.log_unavailable":"当前分区表无事件日志（旧机应用 OTA 后常见）。完整烧录后可用。","sys.log_size":"大小","sys.log_dl":"下载日志","sys.log_clear":"清空","toast.log_cleared":"事件日志已清空","toast.log_unavailable":"事件日志不可用","toast.queue_full":"设备忙，请稍后再试","toast.sleep_pending":"设备正在进入休眠","toast.oom":"设备内存不足","toast.img_qual_saved":"图片质量已保存","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.wake_sec":"在线窗（秒）","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.pwr_save":"保存工作模式","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.ota_url":"URL 升级","sys.ota_upload":"上传升级","sys.ota_file":"固件文件","sys.ota_progress":"进度","sys.ota_hint":"推荐上传本地固件包；也可填远程 HTTPS URL。升级后重启，新固件自检通过才保留，否则自动回滚。","toast.ota_uploading":"正在上传固件…","toast.ota_ok_reboot":"上传成功，设备重启中…","toast.ota_need_file":"请先选择 .bin 固件文件","toast.ota_bad_file":"文件过小或不是固件包","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开 — 点「保存工作模式」生效","toast.mode_cycle":"已选定时刷新 — 点「保存工作模式」生效","toast.mode_hibernate":"已选休眠 — 保存后将深睡","toast.sys_saved":"系统设置已保存","toast.pwr_saved":"工作模式已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
   "toast.guide_on":"已显示安全区 / 中线","toast.guide_off":"已隐藏布局辅助",
   "toast.color_eink":"预览：Spectra 6 量化","toast.color_source":"预览：原色（未量化）",
   "toast.mode_image":"图片：预览量化与布局","toast.mode_editor":"编辑器：布局 + 六色","toast.mode_md":"Markdown：映射到屏布局",
@@ -1515,7 +1606,7 @@ zh:{
 en:{
   "preview.tag":"Display preview · 6-color / layout","preview.phone":"Phone","preview.tablet":"Tablet","preview.desktop":"Desktop",
   "nav.overview":"Overview","nav.network":"Network","nav.display":"Display","nav.system":"System",
-  "banner.title":"SoftAP is on","banner.desc":"SSID EK410-{deviceId}; stays on while configuring.","banner.close":"Close SoftAP","banner.ble":"Use BLE","toast.ap_closed":"Hotspot closed","toast.ap_lost":"Hotspot closed or link lost. Rejoin home Wi‑Fi and open the device IP.","toast.ble_start":"Starting BLE provisioning…","toast.ble_ok":"BLE on — connect with NeoLink","toast.ble_busy":"MQTT busy (large telemetry) — retry SoftAP/BLE later","toast.mqtt_busy":"MQTT busy — config not saved, retry shortly","toast.mqtt_saved_softap":"Saved — join upstream Wi‑Fi first","toast.mqtt_softap_connect":"Saved — connecting MQTT…","toast.mqtt_wait":"Connecting MQTT…","toast.mqtt_wait_progress":"Connecting MQTT… (~{0}s left)","toast.mqtt_softap_pause":"Connecting — SoftAP page may pause briefly…","toast.mqtt_ok":"MQTT connected","toast.mqtt_fail":"MQTT not connected","toast.mqtt_infra":"MQTT backend not ready — reboot device","toast.mqtt_outcome_pending":"Still connecting or page paused — check overview MQTT status","toast.mqtt_save_unknown":"Page paused briefly — check overview; do not tap again","toast.mqtt_warn_port":"Port and protocol may mismatch. Save anyway?","toast.sleep_deferred_ap":"Saved; sleep waits until SoftAP closes","toast.sleep_deferred_sta":"Saved; sleep arms after home Wi‑Fi is up","toast.display_done":"Display refresh done","toast.display_fail":"Display failed — check event log","toast.ota_pending":"OTA pending verify — stay online until cleared",
+  "banner.title":"SoftAP is on","banner.desc":"SSID EK410_xxxxxx (MAC suffix — not the EK410-deviceId name); password 12345678. Stays on while configuring.","banner.close":"Close SoftAP","banner.ble":"Use BLE","toast.ap_closed":"Hotspot closed","toast.ap_lost":"Hotspot closed or link lost. Rejoin home Wi‑Fi and open the device IP.","toast.ble_start":"Starting BLE provisioning…","toast.ble_ok":"BLE on — connect with NeoLink","toast.ble_busy":"MQTT busy (large telemetry) — retry SoftAP/BLE later","toast.mqtt_busy":"MQTT busy — config not saved, retry shortly","toast.mqtt_saved_softap":"Saved — join upstream Wi‑Fi first","toast.mqtt_softap_connect":"Saved — connecting MQTT…","toast.mqtt_wait":"Connecting MQTT…","toast.mqtt_wait_progress":"Connecting MQTT… (~{0}s left)","toast.mqtt_softap_pause":"Connecting — SoftAP page may pause briefly…","toast.mqtt_ok":"MQTT connected","toast.mqtt_fail":"MQTT not connected","toast.mqtt_infra":"MQTT backend not ready — reboot device","toast.mqtt_outcome_pending":"Still connecting or page paused — check overview MQTT status","toast.mqtt_save_unknown":"Page paused briefly — check overview; do not tap again","toast.mqtt_warn_port":"Port and protocol may mismatch. Save anyway?","toast.sleep_deferred_ap":"Saved; sleep waits until SoftAP closes","toast.sleep_deferred_sta":"Saved; sleep arms after home Wi‑Fi is up","toast.display_done":"Display refresh done","toast.display_fail":"Display failed — check event log","toast.ota_pending":"OTA pending verify — stay online until cleared",
   "prov.title":"Provisioning","prov.hint":"SoftAP and BLE are mutually exclusive. Join home Wi‑Fi first, then save/test MQTT; the page may pause briefly while connecting, then stay on SoftAP with mqttConnected.","prov.open_ap":"Open SoftAP","prov.open_ble":"Open BLE (NeoLink)",
   "ov.mqtt_paused":"MQTT needs home Wi‑Fi","ov.mqtt_heap":"MQTT deferred (heap)","ov.mqtt_web_first":"SoftAP web first — MQTT resumes soon","ov.mqtt_connecting":"MQTT connecting","ov.bat_na":"Battery N/A",
   "ov.wlan_off":"WLAN disconnected","ov.wlan_on":"WLAN connected","ov.mqtt_off":"MQTT disconnected","ov.mqtt_on":"MQTT connected","ov.ap_on":"Hotspot on","ov.ap_off":"Hotspot off",
@@ -1536,18 +1627,18 @@ en:{
   "mq.tls_insecure_hint":"Verify off: server certificate is not checked. Lab / self-signed only.",
   "mq.tls_ca":"Custom CA (PEM)","mq.tls_ca_ph":"-----BEGIN CERTIFICATE-----","mq.tls_ca_hint":"Optional. Empty = system CA bundle; when set, only this CA is trusted.",
   "mq.host_ph":"Broker IP / hostname","mq.cid_ph":"ek410-XXXXXXXX (factory-burned)",
-  "mq.user":"Username","mq.qos0":"0 at most once","mq.qos1":"1 at least once","mq.qos2":"2 exactly once",
-  "mq.hint":"Choose MQTT or MQTTS. Topics follow NeoMind uplink / downlink.",
+  "mq.user":"Username","mq.qos0":"QoS 0","mq.qos1":"QoS 1","mq.qos2":"QoS 2",
+  "mq.hint":"Choose MQTT or MQTTS (not inferred from port). Topics follow NeoMind uplink / downlink.",
   "mq.topic_hint":"Derived from deviceId (read-only).",
   "net.scan_expand":"Show networks","net.scan_collapse":"Hide list",
-  "mq.t_up":"Uplink (publish)","mq.t_down":"Downlink (subscribe)",
-  "mq.topic_details":"Vies=s.replapics","mq.test":"Test connection","common.save":"Save","common.optional":"Optional",
+  "mq.t_up":"Uplink","mq.t_down":"Downlink",
+  "mq.topic_details":"MQTT topics","mq.test":"Test connection","common.save":"Save","common.optional":"Optional",
   "err.ssid":"Enter or select an SSID","err.pass":"Password required for secured Wi‑Fi","err.host":"Enter MQTT broker",
   "err.port":"Port must be 1–65535","err.cid":"Enter Client ID",
   "err.t_up":"Uplink topic required","err.t_down":"Downlink topic required",
   "err.required":"Enter {0}","err.wifi_incomplete":"Complete required Wi‑Fi fields","err.mqtt_incomplete":"Complete required MQTT fields",
   "toast.scan":"Scanning nearby Wi‑Fi…","toast.wifi_saved":"Wi‑Fi saved","toast.mqtt_saved":"MQTT saved",
-  "toast.mqtt_test":"Testing MQTT…","toast.filled_sec":"Filled {0} (password required)","toast.filled_open":"Filled {0} (open)",
+  "toast.mqtt_test":"Testing MQTT…","toast.mqtt_busy_title":"Connecting MQTT…","toast.mqtt_busy_sub":"Please wait — SoftAP page may pause briefly.","toast.mqtt_busy_hint":"Display push / upload unavailable until this finishes.","toast.mqtt_busy_disp":"MQTT busy — try display push again shortly","toast.filled_sec":"Filled {0} (password required)","toast.filled_open":"Filled {0} (open)",
   "disp.image":"Image","disp.editor":"Editor","disp.source":"Original","disp.eink":"E‑ink 6",
   "disp.color_title":"Original vs Spectra 6 quantize","disp.layout":"Layout guides","disp.push":"Push to screen",
   "disp.content_preview":"Content preview","disp.layout_preview":"Layout preview","disp.img_src":"Image source",
@@ -1564,9 +1655,10 @@ en:{
   "ed.subtitle":"Edge AI · e‑paper","ed.brand":"Brand","ed.accent":"Accent","ed.aux":"Accent 2",
   "color.black":"Black","color.white":"White","color.red":"Red","color.yellow":"Yellow","color.blue":"Blue","color.green":"Green",
   "md.write":"Write Markdown","md.open":"Open file","md.paste":"Paste","md.apply":"Generate preview",
+  "md.fg":"Text",
   "md.note":"Right side is screen layout preview (not rich text). H1→large · paragraph→body · list→lines.",
   "md.sample":"# CamThink EK410\n\nEdge e‑paper · 1600×1200\n\n- Wi‑Fi / MQTT setup\n- 6‑color display\n",
-  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_log":"Event log","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Changes save immediately.","sys.log_hint":"Critical events (prov / Wi‑Fi / MQTT / refresh / sleep). Capped ~48KB or 7 days. For field debug.","sys.log_unavailable":"Event log partition missing (common after app-only OTA on older tables). Full flash enables it.","sys.log_size":"Size","sys.log_dl":"Download log","sys.log_clear":"Clear","toast.log_cleared":"Event log cleared","toast.log_unavailable":"Event log unavailable","toast.queue_full":"Device busy — try again","toast.sleep_pending":"Device is entering sleep","toast.oom":"Device out of memory","toast.img_qual_saved":"Image quality saved","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"Stay online for a configurable window after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.wake_sec":"Online window (s)","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.pwr_save":"Save work mode","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected — tap Save work mode","toast.mode_cycle":"Timed refresh selected — tap Save work mode","toast.mode_hibernate":"Hibernate selected — save will deep-sleep","toast.sys_saved":"System settings saved","toast.pwr_saved":"Work mode saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
+  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_log":"Event log","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Changes save immediately.","sys.log_hint":"Critical events (prov / Wi‑Fi / MQTT / refresh / sleep). Capped ~48KB or 7 days. For field debug.","sys.log_unavailable":"Event log partition missing (common after app-only OTA on older tables). Full flash enables it.","sys.log_size":"Size","sys.log_dl":"Download log","sys.log_clear":"Clear","toast.log_cleared":"Event log cleared","toast.log_unavailable":"Event log unavailable","toast.queue_full":"Device busy — try again","toast.sleep_pending":"Device is entering sleep","toast.oom":"Device out of memory","toast.img_qual_saved":"Image quality saved","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"Stay online for a configurable window after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.wake_sec":"Online window (s)","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.pwr_save":"Save work mode","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.ota_url":"URL update","sys.ota_upload":"Upload update","sys.ota_file":"Firmware file","sys.ota_progress":"Progress","sys.ota_hint":"Prefer uploading a local .bin; HTTPS URL also works. Device reboots; new image is kept only after self-check, else bootloader rolls back.","toast.ota_uploading":"Uploading firmware…","toast.ota_ok_reboot":"Upload OK — rebooting…","toast.ota_need_file":"Choose a .bin firmware file first","toast.ota_bad_file":"File too small or not a firmware image","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected — tap Save work mode","toast.mode_cycle":"Timed refresh selected — tap Save work mode","toast.mode_hibernate":"Hibernate selected — save will deep-sleep","toast.sys_saved":"System settings saved","toast.pwr_saved":"Work mode saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
   "toast.guide_on":"Layout guides on","toast.guide_off":"Layout guides off",
   "toast.color_eink":"Preview: Spectra 6 quantized","toast.color_source":"Preview: original (not quantized)",
   "toast.mode_image":"Image: quantize & layout preview","toast.mode_editor":"Editor: layout + 6‑color","toast.mode_md":"Markdown: mapped to screen layout",
@@ -2220,7 +2312,7 @@ function mdEmitPieces(pieces, x, y0, items, yMax, colW){
       if(items.length>=MD_MAX_ITEMS) return {y, truncated:true};
       const ruleH=Math.max(2, Math.round(p.scale));
       const yy=y+Math.round((p.h-ruleH)/2);
-      items.push({type:'rect',x,y:yy,w:colW,h:ruleH,color:'black',fill:true,thickness:1,mdRole:'hr'});
+      items.push({type:'rect',x,y:yy,w:colW,h:ruleH,color:mdTextColor||'black',fill:true,thickness:1,mdRole:'hr'});
       y+=p.h;
       continue;
     }
@@ -2230,7 +2322,7 @@ function mdEmitPieces(pieces, x, y0, items, yMax, colW){
     for(const text of chunks){
       if(items.length>=MD_MAX_ITEMS) return {y:localY, truncated:true};
       if(localY>yMax) return {y:localY, truncated:true};
-      items.push({type:'text',x:x,y:localY,text,color:'black',scale:p.scale,mdRole:p.role||'p'});
+      items.push({type:'text',x:x,y:localY,text,color:mdTextColor||'black',scale:p.scale,mdRole:p.role||'p'});
       localY+=text.split('\n').length*mdLineH(p.scale, lead);
     }
     y+=p.h;
@@ -2656,8 +2748,16 @@ function drawQrCode(ctx, x, y, s, ink, payload){
   }
 }
 let edCanvasBg='white';
+let mdCanvasBg='white';
+let mdTextColor='black';
 function editorBgCss(){
   return E6_SWATCH[edCanvasBg] || E6_SWATCH.white || '#fff';
+}
+function mdBgCss(){
+  return E6_SWATCH[mdCanvasBg] || E6_SWATCH.white || '#fff';
+}
+function mdFgCss(){
+  return E6_SWATCH[mdTextColor] || E6_SWATCH.black || '#090e17';
 }
 function drawEditorScene(ctx,w,h,eink){
   ctx.fillStyle=editorBgCss(); ctx.fillRect(0,0,w,h);
@@ -2865,11 +2965,12 @@ function parseMdToLines(text){
 function paintMdStage(ctx, w, h){
   /* Layout in panel coords; scale only for source half-res preview. */
   const sx=w/PANEL_W, sy=h/PANEL_H;
-  ctx.fillStyle='#f6f4ef'; ctx.fillRect(0,0,w,h);
+  const fg=mdFgCss();
+  ctx.fillStyle=mdBgCss(); ctx.fillRect(0,0,w,h);
   const items=mdToCanvasItems($('mdText')?$('mdText').value:'');
   items.forEach(it=>{
     if(it.type==='rect'){
-      ctx.fillStyle='#111';
+      ctx.fillStyle=E6_SWATCH[it.color]||fg;
       ctx.fillRect(it.x*sx, it.y*sy, Math.max(1,it.w*sx), Math.max(1,it.h*sy));
       return;
     }
@@ -2880,7 +2981,7 @@ function paintMdStage(ctx, w, h){
     const lh=mdLineH(scale)*sy;
     /* Match Markdown hierarchy: heavier titles, normal body. */
     const weight=role==='h1'?'700':role==='h2'||role==='h3'?'650':'400';
-    ctx.fillStyle='#111';
+    ctx.fillStyle=E6_SWATCH[it.color]||fg;
     /* Monospace-ish stack so preview width tracks the panel 8/16 cell font. */
     ctx.font=`${weight} ${Math.max(10, Math.round(px))}px ui-monospace,SFMono-Regular,Menlo,"PingFang SC",monospace`;
     ctx.textBaseline='top';
@@ -3073,6 +3174,18 @@ function syncLayerFromFields(){
     }
   }
   redrawEditor();
+}
+if($('mdCanvasBg')){
+  $('mdCanvasBg').addEventListener('change',()=>{
+    mdCanvasBg=$('mdCanvasBg').value||'white';
+    redrawMd();
+  });
+}
+if($('mdTextColor')){
+  $('mdTextColor').addEventListener('change',()=>{
+    mdTextColor=$('mdTextColor').value||'black';
+    redrawMd();
+  });
 }
 if($('edCanvasBg')){
   $('edCanvasBg').addEventListener('change',()=>{
@@ -3347,8 +3460,43 @@ document.querySelectorAll('#fitPills button').forEach(b=>{
   });
 });
 let _urlPreviewSrc='';
+let mqttUiBusy=false;
 function syncImgPushGate(){
-  /* Header「刷到屏幕」stays enabled; image mode validates imgBitmap on click. */
+  /* Header push stays clickable for UX, but MQTT busy short-circuits with a toast. */
+  const push=$('dispPush');
+  if(push) push.classList.toggle('is-mqtt-busy', !!mqttUiBusy);
+}
+function setMqttBusyUi(on, title, sub){
+  mqttUiBusy=!!on;
+  const ov=$('mqttBusy');
+  const inline=$('mqInlineBusy');
+  const inlineTxt=$('mqInlineBusyText');
+  if(ov){
+    ov.classList.toggle('on', mqttUiBusy);
+    if(mqttUiBusy){
+      const tit=$('mqttBusyTitle');
+      const sb=$('mqttBusySub');
+      const hn=$('mqttBusyHint');
+      if(tit) tit.textContent=title||t('toast.mqtt_busy_title');
+      if(sb) sb.textContent=sub||t('toast.mqtt_busy_sub');
+      if(hn) hn.textContent=t('toast.mqtt_busy_hint');
+    }
+  }
+  if(inline){
+    inline.hidden=!mqttUiBusy;
+    if(inlineTxt) inlineTxt.textContent=title||t('toast.mqtt_busy_title');
+  }
+  if(typeof setMqttStatus==='function' && mqttUiBusy){
+    setMqttStatus(false, 'connecting');
+  }
+  syncImgPushGate();
+}
+function updateMqttBusyProgress(secLeft){
+  const msg=(t('toast.mqtt_wait_progress')||t('toast.mqtt_wait')).replace('{0}', String(secLeft));
+  const tit=$('mqttBusyTitle');
+  const inlineTxt=$('mqInlineBusyText');
+  if(tit) tit.textContent=msg;
+  if(inlineTxt) inlineTxt.textContent=msg;
 }
 function clearImgPreview(){
   if(imgBitmap){ try{ imgBitmap.close(); }catch(_){} }
@@ -3996,16 +4144,22 @@ async function loadCfg(){
       $('wfPass').placeholder=(lang==='zh'?'已保存（留空沿用）':'Saved (leave blank to keep)');
     }
     const m=await get('/api/v1/network/getMqttParam');
-    if($('mqHost')) $('mqHost').value=m.host||'';
-    const tr=(m.transport==='mqtts'||m.tls===true)?'mqtts':'mqtt';
-    setMqTransport(tr, false);
-    if($('mqPort')) $('mqPort').value=m.port||(tr==='mqtts'?8883:1883);
-    if($('mqCid')) $('mqCid').value=m.clientId||'';
-    if($('mqQos')) $('mqQos').value=String(m.qos!=null?m.qos:1);
-    if($('mqUser')) $('mqUser').value=m.username||'';
-    if($('mqPass')) $('mqPass').value=m.password||'';
-    setMqTlsVerify(m.tlsVerify!==false, false);
-    if($('mqCaPem')) $('mqCaPem').value=m.caPem||'';
+    /* After await: if user edited since last confirmed save/load, keep local MQTT
+     * fields (e.g. submitted B, then typed C while save was in flight). */
+    const keepLocalMqtt=!!(mqttFormBaseline && mqttFormIsDirty());
+    if(!keepLocalMqtt){
+      if($('mqHost')) $('mqHost').value=m.host||'';
+      const tr=(m.transport==='mqtts'||m.tls===true)?'mqtts':'mqtt';
+      setMqTransport(tr, false);
+      if($('mqPort')) $('mqPort').value=m.port||(tr==='mqtts'?8883:1883);
+      if($('mqCid')) $('mqCid').value=m.clientId||'';
+      if($('mqQos')) $('mqQos').value=String(m.qos!=null?m.qos:1);
+      if($('mqUser')) $('mqUser').value=m.username||'';
+      if($('mqPass')) $('mqPass').value=m.password||'';
+      setMqTlsVerify(m.tlsVerify!==false, false);
+      if($('mqCaPem')) $('mqCaPem').value=m.caPem||'';
+      markMqttFormClean();
+    }
     /* Topics are device-derived (read-only). */
     if(m.topicUp) setTopicVal('tUp', m.topicUp);
     if(m.topicDown) setTopicVal('tDown', m.topicDown);
@@ -4013,7 +4167,6 @@ async function loadCfg(){
       applyTopicDefaults(deviceIdFromClientId(m.clientId)||'xxxxxxxx');
     }
     if(typeof setMqttStatus==='function') setMqttStatus(!!m.connected);
-
   }catch(e){}
 }
 
@@ -4224,6 +4377,23 @@ function mqttPayload(){
   }
   return payload;
 }
+/** Snapshot after load/save — SoftAP "already connected" shortcut must not
+ * fire when the user edited broker/creds without saving yet. */
+let mqttFormBaseline='';
+function mqttFormFingerprint(p){
+  const x=p||mqttPayload();
+  return [x.transport,x.host,x.port,x.qos,x.username,x.password,
+    x.tlsVerify?'1':'0',x.caPem||''].join('\u001f');
+}
+function markMqttFormClean(p){
+  try{ mqttFormBaseline=mqttFormFingerprint(p); }
+  catch(_){ mqttFormBaseline=''; }
+}
+function mqttFormIsDirty(){
+  if(!mqttFormBaseline) return true;
+  try{ return mqttFormFingerprint()!==mqttFormBaseline; }
+  catch(_){ return true; }
+}
 if($('mqTransport')){
   $('mqTransport').querySelectorAll('button').forEach(btn=>{
     btn.onclick=()=>setMqTransport(btn.dataset.transport, true);
@@ -4254,9 +4424,11 @@ async function waitMqttOutcome(timeoutMs, absoluteDeadline){
   let lastToastAt=0;
   const progressToast=()=>{
     const sec=Math.max(1, Math.ceil((deadline-Date.now())/1000));
+    updateMqttBusyProgress(sec);
     toast((t('toast.mqtt_wait_progress')||t('toast.mqtt_wait')).replace('{0}', String(sec)), 3200);
     lastToastAt=Date.now();
   };
+  if(!mqttUiBusy) setMqttBusyUi(true, t('toast.mqtt_busy_title'), t('toast.mqtt_busy_sub'));
   progressToast();
   while(Date.now()<deadline){
     if(Date.now()-lastToastAt>=2200) progressToast();
@@ -4313,15 +4485,26 @@ if($('btnMqttSave')) $('btnMqttSave').onclick=async()=>{
   if(mqTransportPortWarn() && !(await ask(t('mq.transport'), t('toast.mqtt_warn_port')))) return;
   busy($('btnMqttSave'),1);
   const deadline=Date.now()+40000;
+  let submitted=null;
+  let wasDirty=false;
   let savedOk=false;
   try{
+    /* Payload inside try so oversize CA still hits finally (re-enable button). */
+    submitted=mqttPayload();
+    wasDirty=mqttFormIsDirty();
+    setMqttBusyUi(true, softapKnownUp?t('toast.mqtt_softap_connect'):t('toast.mqtt_busy_title'), t('toast.mqtt_busy_sub'));
     if(softapKnownUp) toast(t('toast.mqtt_softap_pause'), 4000);
     const b=budgetSignal(deadline);
     let r=null;
-    try{ r=await postMqttSave(mqttPayload(), {signal:b.signal}); savedOk=true; }
+    try{ r=await postMqttSave(submitted, {signal:b.signal}); savedOk=true; }
     catch(e){
       if(isTransportFail(e)||isAbort(e)){
-        /* SoftAP may drop the reply while MQTT starts — poll status instead of “unknown”. */
+        /* Dirty + no ack: do not treat an old live session as this save. */
+        if(wasDirty){
+          toast(t('toast.mqtt_save_unknown'), 5500);
+          loadInfo();
+          return;
+        }
         if(softapKnownUp){
           toast(t('toast.mqtt_softap_pause'), 4500);
           const o=await waitMqttOutcome(Math.max(2000, deadline-Date.now()), deadline);
@@ -4335,45 +4518,67 @@ if($('btnMqttSave')) $('btnMqttSave').onclick=async()=>{
       }
       throw e;
     }finally{ b.clear(); }
+    if(savedOk) markMqttFormClean(submitted);
     await applyMqttSaveResult(r, {poll:!!(r&&(r.mqttSoftApConnect||softapKnownUp)), deadline});
+    /* loadInfo always; loadCfg skips MQTT fields if user typed after submit. */
     setTimeout(()=>{ loadInfo(); loadCfg(); },800);
   }catch(e){
     const msg=(e&&e.message)||'';
     if(isTransportFail(e)||isAbort(e)){
-      toast(savedOk||softapKnownUp?t('toast.mqtt_outcome_pending'):t('toast.mqtt_save_unknown'), 5500);
+      toast(wasDirty?t('toast.mqtt_save_unknown'):
+        (savedOk||softapKnownUp?t('toast.mqtt_outcome_pending'):t('toast.mqtt_save_unknown')), 5500);
     }else toast(/busy/i.test(msg)?t('toast.mqtt_busy'):(msg||'MQTT save failed'), 5000);
   }
-  finally{ busy($('btnMqttSave'),0); }
+  finally{ setMqttBusyUi(false); busy($('btnMqttSave'),0); }
 };
 if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
   if(!validateMqtt()){ toast(t('err.mqtt_incomplete')); return; }
   if(mqTransportPortWarn() && !(await ask(t('mq.transport'), t('toast.mqtt_warn_port')))) return;
   busy($('btnMqttTest'),1);
-  toast(t('toast.mqtt_test'), 4000);
   const deadline=Date.now()+40000;
+  let submitted=null;
+  let wasDirty=false;
   let kicked=false;
+  let saveConfirmed=false;
   try{
+    submitted=mqttPayload();
+    wasDirty=mqttFormIsDirty();
+    setMqttBusyUi(true, t('toast.mqtt_test'), t('toast.mqtt_busy_sub'));
+    toast(t('toast.mqtt_test'), 4000);
     /* —— SoftAP: save may pause the page; never treat that as “unknown”. —— */
     if(softapKnownUp){
       toast(t('toast.mqtt_softap_pause'), 4500);
-      try{
-        const b0=budgetSignal(deadline);
+      /* Only reuse a live session when the form still matches last load/save. */
+      if(!wasDirty){
         try{
-          const i0=await get('/api/v1/system/getDevInfo',{signal:b0.signal});
-          if(i0.mqttConnected){
-            toast(t('toast.mqtt_ok'), 4000);
-            loadInfo(); loadCfg();
-            return;
-          }
-        }finally{ b0.clear(); }
-      }catch(e){ /* page may already be pausing — continue */ }
+          const b0=budgetSignal(deadline);
+          try{
+            const i0=await get('/api/v1/system/getDevInfo',{signal:b0.signal});
+            if(i0.mqttConnected){
+              toast(t('toast.mqtt_ok'), 4000);
+              loadInfo(); loadCfg();
+              return;
+            }
+          }finally{ b0.clear(); }
+        }catch(e){ /* page may already be pausing — continue */ }
+      }
 
       let saved=null;
       const bSave=budgetSignal(deadline);
-      try{ saved=await postMqttSave(mqttPayload(), {signal:bSave.signal}); kicked=true; }
+      try{
+        saved=await postMqttSave(submitted, {signal:bSave.signal});
+        kicked=true;
+        saveConfirmed=true;
+        markMqttFormClean(submitted);
+      }
       catch(e){
         if(isTransportFail(e)||isAbort(e)){
-          /* SoftAP often drops the HTTP reply while MQTT starts — keep going. */
+          /* Edited form + no save ack → never claim success from old session. */
+          if(wasDirty){
+            toast(t('toast.mqtt_save_unknown'), 5500);
+            loadInfo();
+            return;
+          }
           kicked=true;
           toast(t('toast.mqtt_softap_pause'), 4500);
         }else throw e;
@@ -4391,7 +4596,12 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
       if(saved&&saved.mqttSoftApConnect){
         toast(t('toast.mqtt_softap_connect'), 4000);
       }else if(!saved){
-        /* Reply lost or no connect flag — kick async SoftAP testMqtt. */
+        if(wasDirty){
+          toast(t('toast.mqtt_save_unknown'), 5500);
+          loadInfo();
+          return;
+        }
+        /* Clean form, reply lost — probe existing NVS session only. */
         try{
           const bT=budgetSignal(deadline);
           try{
@@ -4423,7 +4633,11 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
     /* —— LAN: sync save + testMqtt —— */
     const bSave=budgetSignal(deadline);
     let saved;
-    try{ saved=await postMqttSave(mqttPayload(), {signal:bSave.signal}); }
+    try{
+      saved=await postMqttSave(submitted, {signal:bSave.signal});
+      saveConfirmed=true;
+      markMqttFormClean(submitted);
+    }
     catch(e){
       if(isTransportFail(e)){ toast(t('toast.mqtt_save_unknown'), 5000); return; }
       throw e;
@@ -4433,6 +4647,7 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
       toast(t('toast.mqtt_saved_softap'), 4500);
       return;
     }
+    /* After confirmed save, connected ⇒ keep_live or fresh OK. */
     try{
       const bInfo=budgetSignal(deadline);
       try{
@@ -4465,7 +4680,10 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
   }catch(e){
     const raw=(e&&e.message)||'';
     if(isTransportFail(e)||isAbort(e)){
-      if(kicked||softapKnownUp){
+      if(wasDirty && !saveConfirmed){
+        toast(t('toast.mqtt_save_unknown'), 5500);
+        loadInfo();
+      }else if(kicked||softapKnownUp){
         toast(t('toast.mqtt_softap_pause'), 4500);
         const o=await waitMqttOutcome(Math.max(2000, deadline-Date.now()), deadline);
         if(o.ok) toast(t('toast.mqtt_ok'), 4500);
@@ -4474,7 +4692,7 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
       }else toast(t('toast.mqtt_save_unknown'), 5000);
     }else toast(/busy/i.test(raw)?t('toast.mqtt_busy'):(raw||'failed'), 5000);
   }
-  finally{ busy($('btnMqttTest'),0); }
+  finally{ setMqttBusyUi(false); busy($('btnMqttTest'),0); }
 };
 
 if($('btnOpenBle')) $('btnOpenBle').onclick=async()=>{
@@ -4557,11 +4775,56 @@ if($('btnSleepNow')) $('btnSleepNow').onclick=async()=>{
 };
 if($('btnOta')) $('btnOta').onclick=async()=>{
   const url=($('otaUrl')&&$('otaUrl').value||'').trim();
-  if(!url.startsWith('https://')){ toast('OTA needs https://'); return; }
-  if(!await ask('OTA', url)) return;
+  if(!url.startsWith('https://')){ toast('OTA needs https://', 4000); return; }
+  if(!await ask(t('sys.ota_url')||'OTA', url)) return;
   busy($('btnOta'),1);
-  try{ await post('/api/v1/system/setDevUpgrade',{url}); toast('Upgrading…',5000); }
-  catch(e){ toast(e.message||'OTA failed'); busy($('btnOta'),0); }
+  try{ await post('/api/v1/system/setDevUpgrade',{url}); toast(t('toast.ota_ok_reboot')||'Upgrading…', 6000); }
+  catch(e){ toast(e.message||'OTA failed', 5000); busy($('btnOta'),0); }
+};
+if($('btnOtaUpload')) $('btnOtaUpload').onclick=async()=>{
+  const inp=$('otaFile');
+  const file=inp&&inp.files&&inp.files[0];
+  if(!file){ toast(t('toast.ota_need_file'), 4000); return; }
+  if(file.size<200*1024){ toast(t('toast.ota_bad_file'), 4000); return; }
+  const tip=(file.name||'firmware.bin')+' · '+(file.size/1048576).toFixed(2)+' MB';
+  if(!await ask(t('sys.ota_upload')||'OTA', tip)) return;
+  const row=$('otaProgressRow'); const lab=$('otaProgress');
+  if(row) row.hidden=false;
+  if(lab) lab.textContent='0%';
+  busy($('btnOtaUpload'),1);
+  busy($('btnOta'),1);
+  toast(t('toast.ota_uploading'), 5000);
+  try{
+    await new Promise((resolve,reject)=>{
+      const xhr=new XMLHttpRequest();
+      xhr.open('POST','/api/v1/system/uploadFirmware');
+      xhr.setRequestHeader('Content-Type','application/octet-stream');
+      xhr.timeout=600000; /* large SoftAP uploads */
+      xhr.upload.onprogress=ev=>{
+        if(!ev.lengthComputable) return;
+        const pct=Math.min(99, Math.round(ev.loaded*100/ev.total));
+        if(lab) lab.textContent=pct+'%';
+        if(pct%10===0) toast(t('toast.ota_uploading')+' '+pct+'%', 2500);
+      };
+      xhr.onload=()=>{
+        let j=null; try{j=JSON.parse(xhr.responseText)}catch(e){}
+        if(xhr.status>=200&&xhr.status<300 && j&&j.code===0){
+          if(lab) lab.textContent='100%';
+          resolve(j);
+        }else reject(new Error((j&&j.msg)||('HTTP '+xhr.status)));
+      };
+      xhr.onerror=()=>reject(new Error('network'));
+      xhr.ontimeout=()=>reject(new Error('timeout'));
+      xhr.send(file);
+    });
+    toast(t('toast.ota_ok_reboot'), 8000);
+    /* Device reboots — keep buttons busy; page will drop. */
+  }catch(e){
+    toast(e.message||'OTA upload failed', 5500);
+    busy($('btnOtaUpload'),0);
+    busy($('btnOta'),0);
+    if(row) row.hidden=true;
+  }
 };
 if($('btnReboot')) $('btnReboot').onclick=async()=>{
   if(!await ask(t('sys.reboot'), 'Device will reboot.')) return;
@@ -4694,14 +4957,19 @@ async function pushMdToDevice(){
   const items=mdToCanvasItems($('mdText')?$('mdText').value:'');
   if(!items.length) throw new Error(lang==='zh'?'Markdown 为空':'Markdown is empty');
   /* Ensure each text payload respects firmware UTF-8 byte limit. */
-  items.forEach(it=>{ if(it.type==='text') it.text=panelTextClip(it.text); });
-  await post('/api/v1/display/renderCanvas',{bg:'white',items});
+  const fg=mdTextColor||'black';
+  items.forEach(it=>{
+    if(it.type==='text'){ it.text=panelTextClip(it.text); it.color=fg; }
+    else if(it.type==='rect') it.color=fg;
+  });
+  await post('/api/v1/display/renderCanvas',{bg:mdCanvasBg||'white',items});
   if(_mdLastMeta && _mdLastMeta.truncated) toast(t('toast.md_trunc'), 4000);
   else toast(lang==='zh'?'已提交刷屏':'Pushed to screen',4000);
   scheduleOverviewPanelRefresh();
 }
 
 if($('dispPush')) $('dispPush').onclick=async()=>{
+  if(mqttUiBusy){ toast(t('toast.mqtt_busy_disp'), 3500); return; }
   const m=activeDispMode();
   busy($('dispPush'),1);
   try{
