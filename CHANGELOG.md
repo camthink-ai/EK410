@@ -10,6 +10,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-11-23
+
+### Changed
+
+- LAN MQTT “Test connection” now saves then polls `getDevInfo` (same path as SoftAP); no longer blocks on sync `testMqtt`.
+
+### Fixed
+
+- MQTT display commands (`clear` / `render_text` / `render_canvas` / `display_url`) publish `cmd_ack` status `queued` on accept (was `ok` + detail `queued`), matching HTTP and CHANGELOG async semantics.
+- Fragmented MQTT downlink chunk gap/overflow/orphan mid-chunk now returns `cmd_ack` error `fragment desync` instead of silent drop.
+
+### 中文
+
+- LAN「测试 MQTT」与 SoftAP 一致：保存后轮询状态，不再同步卡在 testMqtt。
+- 刷屏类下行即时 ack 状态改为 `queued`；分片失步/溢出时上报 `fragment desync`。
+
 ## [1.3.2] — 2026-11-20
 
 ### Added

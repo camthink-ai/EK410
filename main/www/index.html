@@ -4630,7 +4630,7 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
       return;
     }
 
-    /* —— LAN: sync save + testMqtt —— */
+    /* —— LAN: same as SoftAP — save then poll getDevInfo (no sync testMqtt). —— */
     const bSave=budgetSignal(deadline);
     let saved;
     try{
@@ -4647,7 +4647,7 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
       toast(t('toast.mqtt_saved_softap'), 4500);
       return;
     }
-    /* After confirmed save, connected ⇒ keep_live or fresh OK. */
+    /* keep_live / already up — short probe before waiting. */
     try{
       const bInfo=budgetSignal(deadline);
       try{
@@ -4659,23 +4659,11 @@ if($('btnMqttTest')) $('btnMqttTest').onclick=async()=>{
         }
       }finally{ bInfo.clear(); }
     }catch(e){ if(isAbort(e)){ toast(t('toast.mqtt_outcome_pending'), 5000); return; } }
-    const left=Math.max(1, deadline-Date.now());
-    const ctrl=new AbortController();
-    const to=setTimeout(()=>ctrl.abort(), left);
-    try{
-      toast(t('toast.mqtt_test'), 4000);
-      const opt={method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store',signal:ctrl.signal};
-      const res=await fetch('/api/v1/network/testMqtt',opt);
-      let r=null; try{r=await res.json()}catch(e){}
-      if(!res.ok) throw new Error((r&&r.msg)||('HTTP '+res.status));
-      if(r&&r.ok) toast(r.msg||t('toast.mqtt_ok'), 4500);
-      else if(r&&(r.softapAsync||r.connecting)){
-        const o=await waitMqttOutcome(Math.max(2000, deadline-Date.now()), deadline);
-        if(o.ok) toast(t('toast.mqtt_ok'), 4500);
-        else if(o.pending||o.err==='timeout') toast(t('toast.mqtt_outcome_pending'), 5500);
-        else toast(o.err||t('toast.mqtt_fail'), 5000);
-      }else toast((r&&r.msg)||t('toast.mqtt_fail'), 5000);
-    }finally{ clearTimeout(to); }
+    toast(t('toast.mqtt_wait'), 3500);
+    const o=await waitMqttOutcome(Math.max(2000, deadline-Date.now()), deadline);
+    if(o.ok) toast(t('toast.mqtt_ok'), 4500);
+    else if(o.pending||o.err==='timeout') toast(t('toast.mqtt_outcome_pending'), 5500);
+    else toast(o.err||t('toast.mqtt_fail'), 5000);
     loadInfo(); loadCfg();
   }catch(e){
     const raw=(e&&e.message)||'';

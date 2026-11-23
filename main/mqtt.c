@@ -373,7 +373,12 @@ static void handle_command(const char *raw, int len)
     } else if (!strcasecmp(cmd, "clear")) {
         cJSON *c = cJSON_GetObjectItem(p, "color");
         int rc = app_epd_fill_async(cJSON_IsString(c) ? canvas_color(c->valuestring) : 0x11);
-        mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
+        /* Match HTTP: accept → status "queued"; failure → "error"+token. */
+        if (rc == 0) {
+            mqtt_publish_cmd_ack(cmd, "queued", app_epd_queue_err(0));
+        } else {
+            mqtt_publish_cmd_ack(cmd, "error", app_epd_queue_err(rc));
+        }
     } else if (!strcasecmp(cmd, "render_text")) {
         cJSON *t = cJSON_GetObjectItem(p, "text");
         cJSON *c = cJSON_GetObjectItem(p, "color");
@@ -402,7 +407,11 @@ static void handle_command(const char *raw, int len)
             }
             int rc = app_epd_render_async(render);
             free(render);
-            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
+            if (rc == 0) {
+                mqtt_publish_cmd_ack(cmd, "queued", app_epd_queue_err(0));
+            } else {
+                mqtt_publish_cmd_ack(cmd, "error", app_epd_queue_err(rc));
+            }
         }
     } else if (!strcasecmp(cmd, "render_canvas")) {
         canvas_t *cv = malloc(sizeof(canvas_t));
@@ -414,7 +423,11 @@ static void handle_command(const char *raw, int len)
             free(cv);
         } else {
             int rc = app_epd_canvas_async(cv);
-            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
+            if (rc == 0) {
+                mqtt_publish_cmd_ack(cmd, "queued", app_epd_queue_err(0));
+            } else {
+                mqtt_publish_cmd_ack(cmd, "error", app_epd_queue_err(rc));
+            }
             free(cv);
         }
     } else if (!strcasecmp(cmd, "display_url")) {
@@ -427,7 +440,11 @@ static void handle_command(const char *raw, int len)
             ESP_LOGI(TAG, "display_url queued: %.80s%s", u->valuestring,
                      strlen(u->valuestring) > 80 ? "…" : "");
             int rc = app_epd_url_async(u->valuestring);
-            mqtt_publish_cmd_ack(cmd, rc == 0 ? "ok" : "error", app_epd_queue_err(rc));
+            if (rc == 0) {
+                mqtt_publish_cmd_ack(cmd, "queued", app_epd_queue_err(0));
+            } else {
+                mqtt_publish_cmd_ack(cmd, "error", app_epd_queue_err(rc));
+            }
         }
     } else if (!strcasecmp(cmd, "reboot")) {
         mqtt_publish_cmd_ack(cmd, "ok", "rebooting");
@@ -580,15 +597,23 @@ static void handle_data_event(esp_mqtt_event_handle_t event)
         g_MQ.rxLen = 0;
     }
     if (!g_MQ.rxBuf || g_MQ.rxTotal <= 0) {
+        /* Mid/late chunk with no open reassembly — tell the cloud. */
+        ESP_LOGW(TAG, "chunk with no reassembly (off=%d) — drop",
+                 event->current_data_offset);
+        mqtt_publish_cmd_ack("(queue)", "error", "fragment desync");
         return;
     }
     if (event->current_data_offset != g_MQ.rxLen) {
         ESP_LOGW(TAG, "chunk gap %d!=%d — drop", event->current_data_offset, g_MQ.rxLen);
         rx_reset();
+        mqtt_publish_cmd_ack("(queue)", "error", "fragment desync");
         return;
     }
     if (g_MQ.rxLen + event->data_len > g_MQ.rxTotal) {
+        ESP_LOGW(TAG, "chunk overflow %d+%d>%d — drop",
+                 g_MQ.rxLen, event->data_len, g_MQ.rxTotal);
         rx_reset();
+        mqtt_publish_cmd_ack("(queue)", "error", "fragment desync");
         return;
     }
     memcpy(g_MQ.rxBuf + g_MQ.rxLen, event->data, (size_t)event->data_len);
