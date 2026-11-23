@@ -24,6 +24,8 @@ bool mqtt_infra_ok(void);
 /** Last broker/TLS failure string for UI ("" if none). */
 const char *mqtt_last_error(void);
 void mqtt_start(void);   /* no-op if host empty or already started */
+/** Arm oneshot bring-up retry after stop/defer (survives cancelled timers). */
+void mqtt_kick_start_retry(int delay_ms);
 /**
  * Stop MQTT client under the module mutex.
  * Returns 0 if stopped (or already idle), -1 if mutex timed out — client

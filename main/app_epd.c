@@ -75,7 +75,9 @@ static void url_tls_release(void)
             }
             ESP_LOGW(TAG, "mqtt restart attempt %d/7 — waiting for heap", i + 1);
         }
-        ESP_LOGE(TAG, "mqtt restart failed after URL job — timer will keep retrying");
+        /* mqtt_stop cancelled any prior retry timer — force a fresh oneshot. */
+        mqtt_kick_start_retry(2000);
+        ESP_LOGE(TAG, "mqtt restart failed after URL job — kicked start-retry timer");
     }
 }
 

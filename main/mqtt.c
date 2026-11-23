@@ -841,6 +841,7 @@ static void telemetry_timer_cb(void *arg)
 }
 
 static void mqtt_start_retry_cb(void *arg);
+static void mqtt_arm_start_retry_us(uint64_t delay_us);
 static void mqtt_bringup_task(void *arg);
 
 static SemaphoreHandle_t s_bringupSem;
@@ -1103,10 +1104,7 @@ static void mqtt_bringup_task(void *arg)
                 /* Drop sticky pause claim so SoftAP/LAN httpd can self-heal. */
                 wifi_httpd_resume_after_mqtt();
                 mqtt_set_fail("httpd pause incomplete");
-                if (s_startRetryTimer) {
-                    esp_timer_stop(s_startRetryTimer);
-                    esp_timer_start_once(s_startRetryTimer, 2000000ULL);
-                }
+                mqtt_arm_start_retry_us(2000000ULL);
                 continue;
             }
             if (pr == 0 && wifi_ble_prov_busy()) {
@@ -1160,19 +1158,15 @@ static void mqtt_bringup_task(void *arg)
             if (paused_httpd) {
                 wifi_httpd_resume_after_mqtt();
             }
-            if (s_startRetryTimer) {
-                esp_timer_stop(s_startRetryTimer);
-                esp_timer_start_once(s_startRetryTimer, 2000000ULL);
-            }
+            mqtt_arm_start_retry_us(2000000ULL);
             continue;
         }
         if (mqtt_esp_start_locked()) {
             mqtt_clear_fail();
             esp_timer_stop(s_telemetryTimer);
             esp_timer_start_periodic(s_telemetryTimer, TELEMETRY_PERIOD_US);
-        } else if (s_startRetryTimer) {
-            esp_timer_stop(s_startRetryTimer);
-            esp_timer_start_once(s_startRetryTimer, 5000000ULL);
+        } else {
+            mqtt_arm_start_retry_us(5000000ULL);
         }
         xSemaphoreGive(g_MQ.mutex);
         if (paused_httpd) {
@@ -1185,6 +1179,34 @@ static void mqtt_start_retry_cb(void *arg)
 {
     (void)arg;
     mqtt_start();
+}
+
+static void mqtt_arm_start_retry_us(uint64_t delay_us)
+{
+    if (!s_startRetryTimer || !s_mqttInfraOk) {
+        return;
+    }
+    if (wifi_ble_prov_busy()) {
+        return;
+    }
+    if (g_MQ.client) {
+        return;
+    }
+    if (delay_us < 200000ULL) {
+        delay_us = 200000ULL;
+    }
+    esp_timer_stop(s_startRetryTimer);
+    if (esp_timer_start_once(s_startRetryTimer, delay_us) != ESP_OK) {
+        ESP_LOGW(TAG, "start-retry timer arm failed");
+    }
+}
+
+void mqtt_kick_start_retry(int delay_ms)
+{
+    if (delay_ms < 0) {
+        delay_ms = 0;
+    }
+    mqtt_arm_start_retry_us((uint64_t)delay_ms * 1000ULL);
 }
 
 void mqtt_start(void)
@@ -1205,6 +1227,8 @@ void mqtt_start(void)
         return;
     }
     if (s_bringupPending) {
+        /* Coalesced kick — still arm retry so a cancelled timer cannot strand. */
+        mqtt_arm_start_retry_us(2000000ULL);
         return;
     }
     s_bringupPending = true;
@@ -1242,6 +1266,15 @@ int mqtt_stop(void)
     }
     rx_reset_unlocked();
     xSemaphoreGive(g_MQ.mutex);
+    /*
+     * Temporary stops (URL TLS / OTA) cancel the retry timer above. Re-arm a
+     * delayed bring-up unless provisioning owns the radio — SoftAP/BLE callers
+     * that need a quiet window still win for ~3s, then self-heal if they forget
+     * mqtt_start. SoftAP open / BLE enter call mqtt_start themselves on success.
+     */
+    if (!wifi_ble_prov_busy() && !wifi_softap_is_up() && wifi_sta_is_connected()) {
+        mqtt_arm_start_retry_us(3000000ULL);
+    }
     return 0;
 }
 
@@ -1327,9 +1360,13 @@ void mqtt_status_detail(char *buf, size_t len)
         return;
     }
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    if (largest < mqtt_internal_need(mqtt_task_stack_for(mqtt.transport)) ||
-        (s_lastFail[0] && strcmp(s_lastFail, "deferred_heap") == 0)) {
+    if (largest < mqtt_internal_need(mqtt_task_stack_for(mqtt.transport))) {
         snprintf(buf, len, "deferred_heap");
+        return;
+    }
+    /* Heap OK but client not up — retry armed / in flight (do not sticky-fail). */
+    if (s_lastFail[0] && strcmp(s_lastFail, "deferred_heap") == 0) {
+        snprintf(buf, len, "connecting");
         return;
     }
     snprintf(buf, len, "disconnected");

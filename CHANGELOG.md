@@ -10,6 +10,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.8] — 2026-11-23
+
+### Fixed
+
+- MQTT `deferred_heap` no longer sticks forever: `mqtt_stop` re-arms start-retry on STA; coalesced `mqtt_start` arms retry; URL TLS release kicks retry after failed restore.
+- `mqttReason` reports `deferred_heap` only while largest internal block is actually too small (else `connecting`).
+
+### 中文
+
+- 修复 MQTT deferred_heap 粘连：stop 后重武装重试、URL 刷屏失败强制 kick、状态不再假粘连。
+
 ## [1.3.7] — 2026-11-23
 
 ### Fixed
