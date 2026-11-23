@@ -447,16 +447,25 @@ int last_frame_capture_commit(void)
     esp_err_t e = esp_partition_erase_range(s_part, 0, s_part->size);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "erase fail %s", esp_err_to_name(e));
+        s_meta_valid = false;
+        s_meta.present = false;
+        last_frame_capture_abort();
         return -1;
     }
     e = esp_partition_write(s_part, HDR_SIZE, s_cap, LAST_FRAME_BYTES);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "frame write fail %s", esp_err_to_name(e));
+        s_meta_valid = false;
+        s_meta.present = false;
+        last_frame_capture_abort();
         return -1;
     }
     e = esp_partition_write(s_part, 0, &hdr, sizeof(hdr));
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "hdr write fail %s", esp_err_to_name(e));
+        s_meta_valid = false;
+        s_meta.present = false;
+        last_frame_capture_abort();
         return -1;
     }
 

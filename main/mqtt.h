@@ -42,7 +42,8 @@ bool mqtt_is_started(void); /* client object exists (may still be connecting) */
  * no_sta | no_host | connecting | deferred_heap | disconnected.
  */
 void mqtt_status_detail(char *buf, size_t len);
-void mqtt_publish_telemetry(void);
+/** Publish telemetry uplink. Returns false if not connected / mutex / broker fail. */
+bool mqtt_publish_telemetry(void);
 
 /* Async command result (e.g. display_url finished after "queued" ack). */
 void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detail);

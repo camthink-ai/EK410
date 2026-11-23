@@ -10,6 +10,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.7] — 2026-11-23
+
+### Fixed
+
+- Render queue supersede now publishes MQTT completion `error` ack (no stranded `queued`).
+- CYCLE `sleep_timer` spawn failure clears `s_entering` and re-arms (no sticky sleep gate).
+- SUBSCRIBE-fail teardown uses timer retry if stop-task create fails.
+- `mqtt_publish_telemetry` / `publish_up` return broker publish success; `ping` acks honestly.
+- SoftAP hibernate save toasts deferred sleep instead of false "sleeping".
+- `setMqttParam` restores MQTT if NVS save fails after a preparatory stop.
+- Proxy image HTTP open failure calls `url_tls_release`.
+- Deep-sleep abort (panel busy / provisioning) sends follow-up MQTT `error` ack.
+- Last-frame flash write failure invalidates meta and aborts capture.
+
+### 中文
+
+- 队列丢弃补完成 ack；sleep 定时器 spawn 回滚；zombie stop 定时器重试；telemetry/ping 诚实；SoftAP hibernate toast；NVS 失败恢复 MQTT；proxy TLS 释放；深睡推迟补 ack；lastfrm 写失败清 meta。
+
 ## [1.3.6] — 2026-11-23
 
 ### Fixed

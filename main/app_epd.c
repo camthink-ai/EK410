@@ -525,6 +525,13 @@ static void render_queue_drop_pending(const char *reason)
         if (!msg) {
             continue;
         }
+        /* Cloud already got "queued" — always close with an error completion. */
+        const char *why = (reason && reason[0]) ? reason : "superseded";
+        if (msg->kind == 5) {
+            mqtt_publish_cmd_ack("display_url", "error", why);
+        } else if (msg->mqtt_ack_cmd[0]) {
+            mqtt_publish_cmd_ack(msg->mqtt_ack_cmd, "error", why);
+        }
         if (msg->kind == 9 && msg->proxy) {
             msg->proxy->orphaned = true;
             if (msg->proxy_done) {
@@ -833,6 +840,7 @@ static void epd_proxy_download(epd_proxy_job_t *job)
     if (esp_http_client_open(client, 0) != ESP_OK) {
         snprintf(job->err, sizeof(job->err), "http open/TLS fail");
         esp_http_client_cleanup(client);
+        url_tls_release();
         return;
     }
     long clen = esp_http_client_fetch_headers(client);

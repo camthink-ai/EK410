@@ -139,24 +139,25 @@ static void build_broker_uri(char *uri, size_t uri_len, const mqttAttr_t *mqtt)
 }
 
 /* Caller must hold g_MQ.mutex (or know client lifetime is stable). */
-static void publish_raw_unlocked(const char *topic, const char *json, int qos, int retain)
+static bool publish_raw_unlocked(const char *topic, const char *json, int qos, int retain)
 {
     if (!g_MQ.client || !topic || !json) {
-        return;
+        return false;
     }
     int len = (int)strlen(json);
     int msg_id = esp_mqtt_client_publish(g_MQ.client, topic, json, len, qos, retain);
     if (msg_id < 0) {
         ESP_LOGE(TAG, "publish fail topic=%s len=%d qos=%d", topic, len, qos);
-    } else {
-        ESP_LOGI(TAG, "publish ok id=%d topic=%s len=%d", msg_id, topic, len);
+        return false;
     }
+    ESP_LOGI(TAG, "publish ok id=%d topic=%s len=%d", msg_id, topic, len);
+    return true;
 }
 
-static void publish_up_unlocked(const char *json, int retain)
+static bool publish_up_unlocked(const char *json, int retain)
 {
     if (g_MQ.topicUp[0] == '\0' || !json) {
-        return;
+        return false;
     }
     mqttAttr_t mqtt;
     cfg_get_mqtt_attr(&mqtt);
@@ -166,11 +167,11 @@ static void publish_up_unlocked(const char *json, int retain)
     if (len > 16 * 1024) {
         qos = 0;
     }
-    publish_raw_unlocked(g_MQ.topicUp, json, qos, retain);
+    return publish_raw_unlocked(g_MQ.topicUp, json, qos, retain);
 }
 
 /** Publish uplink under mutex so mqtt_stop cannot destroy the client mid-send.
- * Returns false if the mutex could not be taken (payload not sent). */
+ * Returns false if mutex busy or esp_mqtt_client_publish failed. */
 static bool publish_up(const char *json, int retain)
 {
     if (!g_MQ.mutex) {
@@ -187,9 +188,9 @@ static bool publish_up(const char *json, int retain)
             return false;
         }
     }
-    publish_up_unlocked(json, retain);
+    bool ok = publish_up_unlocked(json, retain);
     xSemaphoreGive(g_MQ.mutex);
-    return true;
+    return ok;
 }
 
 static void publish_status(const char *state, int retain)
@@ -219,10 +220,10 @@ static void publish_status(const char *state, int retain)
     }
 }
 
-void mqtt_publish_telemetry(void)
+bool mqtt_publish_telemetry(void)
 {
     if (!g_MQ.client || !g_MQ.isConnected) {
-        return;
+        return false;
     }
     devInfo_t info;
     mqttAttr_t mqtt;
@@ -238,7 +239,7 @@ void mqtt_publish_telemetry(void)
     int bat = (bat_mv >= 0) ? battery_soc_from_mv(bat_mv) : -1;
     cJSON *root = cJSON_CreateObject();
     if (!root) {
-        return;
+        return false;
     }
     char ip[48] = "";
     wifi_get_ip_str(ip, sizeof(ip));
@@ -299,7 +300,7 @@ void mqtt_publish_telemetry(void)
     if (!head) {
         ESP_LOGE(TAG, "telemetry JSON print OOM");
         free(prev);
-        return;
+        return false;
     }
     char *json = head;
     if (prev) {
@@ -320,7 +321,7 @@ void mqtt_publish_telemetry(void)
             ESP_LOGE(TAG, "telemetry preview append OOM (need %u)", (unsigned)out_len);
             free(head);
             free(prev);
-            return;
+            return false;
         }
         memcpy(out, head, hlen);
         memcpy(out + hlen, prefix, strlen(prefix));
@@ -333,16 +334,19 @@ void mqtt_publish_telemetry(void)
     }
     /* Hold client mutex across publish so mqtt_stop cannot destroy mid-send;
      * a contended stop returns busy and callers must not persist new broker. */
+    bool ok = false;
     if (!g_MQ.mutex ||
-        xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        ESP_LOGW(TAG, "telemetry: mutex busy — drop");
         free(json);
-        return;
+        return false;
     }
     if (g_MQ.client && g_MQ.isConnected) {
-        publish_up_unlocked(json, 0);
+        ok = publish_up_unlocked(json, 0);
     }
     xSemaphoreGive(g_MQ.mutex);
     free(json);
+    return ok;
 }
 
 void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detail)
@@ -395,8 +399,11 @@ static void handle_command(const char *raw, int len)
     }
 
     if (!strcasecmp(cmd, "ping") || !strcasecmp(cmd, "heartbeat")) {
-        mqtt_publish_telemetry();
-        mqtt_publish_cmd_ack(cmd, "ok", "pong");
+        if (mqtt_publish_telemetry()) {
+            mqtt_publish_cmd_ack(cmd, "ok", "pong");
+        } else {
+            mqtt_publish_cmd_ack(cmd, "error", "publish_failed");
+        }
     } else if (!strcasecmp(cmd, "clear")) {
         cJSON *c = cJSON_GetObjectItem(p, "color");
         app_epd_mqtt_ack_next(cmd);
@@ -695,12 +702,49 @@ static void handle_data_event(esp_mqtt_event_handle_t event)
 }
 
 /* Destroy client outside the MQTT event callback (unsafe to destroy in-handler). */
+static esp_timer_handle_t s_zombieStopTimer;
+
 static void mqtt_zombie_stop_task(void *arg)
 {
     (void)arg;
     ESP_LOGW(TAG, "tearing down MQTT session after subscribe failure");
     (void)mqtt_stop_wait(5000);
     vTaskDelete(NULL);
+}
+
+static void mqtt_zombie_stop_timer_cb(void *arg)
+{
+    (void)arg;
+    /* Never block in esp_timer — only (re)spawn the stop task. */
+    if (xTaskCreate(mqtt_zombie_stop_task, "mqtt_zomb", 3072, NULL, 5, NULL) == pdPASS) {
+        return;
+    }
+    ESP_LOGW(TAG, "zombie stop task still unavailable — retry in 500 ms");
+    if (s_zombieStopTimer) {
+        (void)esp_timer_start_once(s_zombieStopTimer, 500000);
+    }
+}
+
+static void mqtt_schedule_zombie_stop(void)
+{
+    if (xTaskCreate(mqtt_zombie_stop_task, "mqtt_zomb", 3072, NULL, 5, NULL) == pdPASS) {
+        return;
+    }
+    ESP_LOGW(TAG, "zombie stop task create failed — timer fallback");
+    if (!s_zombieStopTimer) {
+        const esp_timer_create_args_t args = {
+            .callback = mqtt_zombie_stop_timer_cb,
+            .name = "mqtt_zomb",
+        };
+        if (esp_timer_create(&args, &s_zombieStopTimer) != ESP_OK) {
+            ESP_LOGE(TAG, "zombie stop timer create failed — client may linger");
+            return;
+        }
+    }
+    esp_timer_stop(s_zombieStopTimer);
+    if (esp_timer_start_once(s_zombieStopTimer, 100000) != ESP_OK) {
+        ESP_LOGE(TAG, "zombie stop timer start failed — client may linger");
+    }
 }
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *data)
@@ -722,9 +766,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             if (g_MQ.client) {
                 (void)esp_mqtt_client_disconnect(g_MQ.client);
             }
-            if (xTaskCreate(mqtt_zombie_stop_task, "mqtt_zomb", 3072, NULL, 5, NULL) != pdPASS) {
-                ESP_LOGE(TAG, "zombie stop task create failed — client may linger");
-            }
+            mqtt_schedule_zombie_stop();
             break;
         }
         g_MQ.isConnected = true;

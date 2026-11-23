@@ -469,7 +469,8 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     const bool keep_live = same_broker && !ca_touch && mqtt_is_connected() &&
                            wifi_sta_is_connected();
 
-    if (wifi_sta_is_connected() && !keep_live) {
+    const bool stopped_for_save = wifi_sta_is_connected() && !keep_live;
+    if (stopped_for_save) {
         /* Stop old client BEFORE persist — otherwise a busy restart leaves NVS
          * on the new broker while the live client still talks to the old one. */
         if (mqtt_stop_wait(4000) != 0) {
@@ -481,11 +482,17 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (cJSON_IsString(caPem)) {
         if (cfg_set_mqtt_ca_pem(caPem->valuestring) != ESP_OK) {
             cJSON_Delete(root);
+            if (stopped_for_save) {
+                mqtt_start(); /* restore session after stop; NVS host unchanged */
+            }
             return send_err(req, "mqtt CA save failed");
         }
     }
     if (cfg_set_mqtt_attr(&mqtt) != ESP_OK) {
         cJSON_Delete(root);
+        if (stopped_for_save) {
+            mqtt_start(); /* bring back prior NVS broker */
+        }
         return send_err(req, "mqtt config save failed");
     }
     cJSON_Delete(root);

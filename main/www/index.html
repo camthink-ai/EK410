@@ -4714,9 +4714,10 @@ async function savePowerParam(btn, okToastKey){
     const wakeUrl = ($('pwrWake')&&$('pwrWake').value||'').trim();
     const hibernate = mode==='hibernate';
     const r=await post('/api/v1/system/setPowerParam',{mode, sleepMin, wakeSec, wakeUrl, imageQuality});
-    if(hibernate){ toast(t('toast.sleeping')); return true; }
-    if(r&&r.sleepDeferred==='softap') toast(t('toast.sleep_deferred_ap'), 4500);
-    else if(r&&r.sleepDeferred==='no_sta') toast(t('toast.sleep_deferred_sta'), 4500);
+    /* SoftAP/no-STA hibernate is deferred — never toast "sleeping" first. */
+    if(r&&r.sleepDeferred==='softap'){ toast(t('toast.sleep_deferred_ap'), 4500); }
+    else if(r&&r.sleepDeferred==='no_sta'){ toast(t('toast.sleep_deferred_sta'), 4500); }
+    else if(hibernate){ toast(t('toast.sleeping')); return true; }
     else toast(t(okToastKey||'toast.pwr_saved'));
     if(typeof loadPower==='function') loadPower();
     if(typeof loadInfo==='function') loadInfo();

@@ -116,6 +116,9 @@ static void sleep_go_task(void *arg)
     (void)arg;
     if (wifi_softap_is_up() || wifi_ble_prov_is_up()) {
         ESP_LOGW(TAG, "provisioning window up — abort deep sleep");
+        evtlog_event("SLP", "abort — provisioning up");
+        /* Follow-up if MQTT already acked ok/sleeping after sleep_now(). */
+        mqtt_publish_cmd_ack("sleep_now", "error", "prov_busy");
         s_entering = false;
         vTaskDelete(NULL);
         return;
@@ -134,6 +137,7 @@ static void sleep_go_task(void *arg)
     if (!app_epd_sleep_prepare(180000)) {
         ESP_LOGW(TAG, "panel still busy — defer deep sleep");
         evtlog_event("SLP", "defer — panel busy");
+        mqtt_publish_cmd_ack("sleep_now", "error", "panel_busy");
         s_entering = false;
         sleep_arm_from_config();
         vTaskDelete(NULL);
@@ -193,7 +197,12 @@ static void sleep_timer_cb(void *arg)
         return;
     }
     s_entering = true;
-    xTaskCreate(sleep_go_task, "sleep_go", 4096, NULL, 5, NULL);
+    if (xTaskCreate(sleep_go_task, "sleep_go", 4096, NULL, 5, NULL) != pdPASS) {
+        s_entering = false;
+        ESP_LOGE(TAG, "sleep_timer: task spawn failed — re-arm cycle");
+        evtlog_event("SLP", "timer spawn failed");
+        sleep_arm_from_config();
+    }
 }
 
 static void sleep_schedule(void)
