@@ -223,19 +223,20 @@ void sleep_on_sta_online(void)
         ESP_LOGI(TAG, "defer sleep cycle — provisioning window up");
         return;
     }
-    powerAttr_t p;
-    cfg_get_power_attr(&p);
-    s_cycleStarted = true;
 
-    /* Button wake into SoftAP/BLE: stay in provisioning; do not re-arm yet.
-     * SoftAP/BLE close paths re-arm CYCLE when STA is up. */
+    /* Button wake into SoftAP/BLE: stay in provisioning; do not arm yet and
+     * do NOT set s_cycleStarted — otherwise GOT_IP after SoftAP close can never
+     * re-enter here and CYCLE sleep stays disarmed forever. */
     sleep_wake_src_t w = sleep_get_wake_src();
     if (w == SLEEP_WAKE_MAIN || w == SLEEP_WAKE_PAGE) {
         ESP_LOGI(TAG, "woke by button for provisioning — skip cycle arm");
         return;
     }
 
+    powerAttr_t p;
+    cfg_get_power_attr(&p);
     if (p.mode != POWER_MODE_CYCLE || p.sleepMin <= 0) {
+        s_cycleStarted = true;
         ESP_LOGI(TAG, "always/hibernate — no sleep cycle");
         return;
     }
@@ -246,6 +247,7 @@ void sleep_on_sta_online(void)
         }
     }
     sleep_arm_from_config();
+    s_cycleStarted = true;
 }
 
 void sleep_cancel(void)
@@ -272,13 +274,13 @@ void sleep_kick(void)
     }
 }
 
-void sleep_now(void)
+bool sleep_now(void)
 {
     /* SoftAP-first: never tear down the provisioning hotspot for sleep. */
     if (wifi_softap_is_up()) {
         ESP_LOGW(TAG, "sleep_now ignored — SoftAP provisioning is up");
         evtlog_event("SLP", "ignored — softap up");
-        return;
+        return false;
     }
     if (wifi_ble_prov_is_up()) {
         ESP_LOGW(TAG, "sleep_now: closing BLE first");
@@ -286,10 +288,16 @@ void sleep_now(void)
     }
     sleep_cancel();
     if (s_entering) {
-        return;
+        ESP_LOGW(TAG, "sleep_now ignored — already entering");
+        return false;
     }
     s_entering = true;
-    xTaskCreate(sleep_go_task, "sleep_go", 4096, NULL, 5, NULL);
+    if (xTaskCreate(sleep_go_task, "sleep_go", 4096, NULL, 5, NULL) != pdPASS) {
+        s_entering = false;
+        ESP_LOGE(TAG, "sleep_now: task spawn failed");
+        return false;
+    }
+    return true;
 }
 
 bool sleep_is_armed(void)

@@ -10,6 +10,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-11-23
+
+### Fixed
+
+- CYCLE sleep: button-wake provisioning no longer sets `s_cycleStarted` early, so GOT_IP after SoftAP/BLE close can arm the wake window again.
+- MQTT uplink publish (`cmd_ack` / status) holds the client mutex so `mqtt_stop` cannot destroy the client mid-send.
+- SoftAP httpd pause incomplete drops the sticky pause claim (resume) so SoftAP/LAN web can self-heal; if httpd is still up the claim is cleared immediately.
+- BOOT (IO9) factory reset now `esp_restart()` like button/HTTP factory.
+- URL Quality dither failure frees the RGB buffer (was leaking hundreds of KB PSRAM).
+- `uploadFrame` finish returns error on size mismatch / commit failure (HTTP reports failure).
+- `sleep_now` / hibernate refuse SoftAP with an explicit error instead of HTTP/MQTT success + silent no-op.
+- Last-frame flash: write body before header; stream verifies CRC before painting the panel.
+- `getMqttParam.connected` requires STA (aligned with `getDevInfo.mqttConnected`).
+
+### Changed
+
+- `tools/build_release.sh` runs `bump_version --check` + `gen_www.py` before build.
+- `gen_www.py` uses gzip `mtime=0` for deterministic `www_html.h`.
+- README SoftAP SSID docs use `EK410_<MAC6>` (matches firmware).
+
+### 中文
+
+- 修复按键唤醒后 CYCLE 睡眠可能永不布防、MQTT 发布与 stop 竞态、httpd pause 粘连、IO9 出厂不重启、Quality dither 泄漏、上传误报成功、SoftAP 下休眠假成功、lastfrm CRC/写序、MQTT connected 语义。
+- 发布脚本增加版本/网页预检；gzip 确定性；README SoftAP SSID 文案对齐。
+
 ## [1.3.3] — 2026-11-23
 
 ### Changed

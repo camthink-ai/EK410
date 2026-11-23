@@ -13,6 +13,10 @@ fi
 DIST="$ROOT/dist"
 mkdir -p "$DIST"
 
+echo "==> Preflight: version + embed www"
+python3 "$ROOT/tools/bump_version.py" --check
+python3 "$ROOT/tools/gen_www.py"
+
 echo "==> Single image ek410 (SoftAP XOR BLE CT-Prov)"
 idf.py fullclean || true
 idf.py set-target esp32c61

@@ -114,6 +114,8 @@ void app_main(void)
         cfg_ble_prov_boot_set(false);
         cfg_softap_pending_set(false);
         cfg_ble_idle_sec_set(0);
+        /* Match button/HTTP factory paths — wipe RAM tasks/MQTT too. */
+        esp_restart();
     }
 
     if (app_epd_init() != 0) {

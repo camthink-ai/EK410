@@ -34,8 +34,9 @@ void sleep_on_sta_online(void);
 void sleep_cancel(void);
 /* Refresh the CYCLE wake window (MQTT downlink / user activity). */
 void sleep_kick(void);
-/* Enter deep sleep now. SoftAP/BLE closed first. Wakes: MAIN, PAGE, or timer. */
-void sleep_now(void);
+/* Enter deep sleep now. SoftAP/BLE closed first. Wakes: MAIN, PAGE, or timer.
+ * Returns false if SoftAP is up, already entering, or task spawn failed. */
+bool sleep_now(void);
 bool sleep_is_armed(void);
 
 #ifdef __cplusplus

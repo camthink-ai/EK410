@@ -138,7 +138,8 @@ static void build_broker_uri(char *uri, size_t uri_len, const mqttAttr_t *mqtt)
     snprintf(uri, uri_len, "%s://%s:%d", mqtt_transport_str(mqtt->transport), mqtt->host, port);
 }
 
-static void publish_raw(const char *topic, const char *json, int qos, int retain)
+/* Caller must hold g_MQ.mutex (or know client lifetime is stable). */
+static void publish_raw_unlocked(const char *topic, const char *json, int qos, int retain)
 {
     if (!g_MQ.client || !topic || !json) {
         return;
@@ -152,20 +153,32 @@ static void publish_raw(const char *topic, const char *json, int qos, int retain
     }
 }
 
-static void publish_up(const char *json, int retain)
+static void publish_up_unlocked(const char *json, int retain)
 {
-    if (g_MQ.topicUp[0] == '\0') {
+    if (g_MQ.topicUp[0] == '\0' || !json) {
         return;
     }
     mqttAttr_t mqtt;
     cfg_get_mqtt_attr(&mqtt);
     int qos = (mqtt.qos >= 0 && mqtt.qos <= 2) ? mqtt.qos : 1;
     /* Large telemetry (preview) — QoS0 avoids outbox doubling / publish fail. */
-    int len = json ? (int)strlen(json) : 0;
+    int len = (int)strlen(json);
     if (len > 16 * 1024) {
         qos = 0;
     }
-    publish_raw(g_MQ.topicUp, json, qos, retain);
+    publish_raw_unlocked(g_MQ.topicUp, json, qos, retain);
+}
+
+/** Publish uplink under mutex so mqtt_stop cannot destroy the client mid-send. */
+static void publish_up(const char *json, int retain)
+{
+    if (!g_MQ.mutex ||
+        xSemaphoreTake(g_MQ.mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        ESP_LOGW(TAG, "publish_up: mutex busy — drop");
+        return;
+    }
+    publish_up_unlocked(json, retain);
+    xSemaphoreGive(g_MQ.mutex);
 }
 
 static void publish_status(const char *state, int retain)
@@ -315,7 +328,7 @@ void mqtt_publish_telemetry(void)
         return;
     }
     if (g_MQ.client && g_MQ.isConnected) {
-        publish_up(json, 0);
+        publish_up_unlocked(json, 0);
     }
     xSemaphoreGive(g_MQ.mutex);
     free(json);
@@ -456,7 +469,9 @@ static void handle_command(const char *raw, int len)
         } else {
             mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
             vTaskDelay(pdMS_TO_TICKS(400));
-            sleep_now();
+            if (!sleep_now()) {
+                mqtt_publish_cmd_ack(cmd, "error", "sleep refused");
+            }
         }
     } else if (!strcasecmp(cmd, "set_power")) {
         powerAttr_t pwr;
@@ -498,7 +513,9 @@ static void handle_command(const char *raw, int len)
             } else {
                 mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
                 vTaskDelay(pdMS_TO_TICKS(400));
-                sleep_now();
+                if (!sleep_now()) {
+                    mqtt_publish_cmd_ack(cmd, "error", "sleep refused");
+                }
             }
         } else {
             sleep_cancel();
@@ -975,6 +992,8 @@ static void mqtt_bringup_task(void *arg)
             int pr = wifi_httpd_pause_for_mqtt();
             if (pr < 0) {
                 ESP_LOGW(TAG, "defer start — httpd pause incomplete");
+                /* Drop sticky pause claim so SoftAP/LAN httpd can self-heal. */
+                wifi_httpd_resume_after_mqtt();
                 mqtt_set_fail("httpd pause incomplete");
                 if (s_startRetryTimer) {
                     esp_timer_stop(s_startRetryTimer);

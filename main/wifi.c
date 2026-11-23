@@ -258,10 +258,16 @@ int wifi_httpd_pause_for_mqtt(void)
         if (http_server_stop_wait(2500) != 0 || http_server_is_stopping() ||
             http_server_is_up()) {
             /*
-             * Keep the pause claim so watchdog cannot bounce httpd while MQTT
-             * retries. Clearing the flag raced SoftAP UI back into the heap.
+             * If httpd is still up we failed to pause — drop the claim so
+             * SoftAP/LAN can keep serving. If it is already down, keep the
+             * claim until mqtt bringup resumes (or aborts via resume).
              */
-            ESP_LOGW(TAG, "httpd pause incomplete — keep pause claim for retry");
+            if (http_server_is_up()) {
+                s_httpdPausedForMqtt = false;
+                ESP_LOGW(TAG, "httpd pause incomplete — httpd still up, drop claim");
+            } else {
+                ESP_LOGW(TAG, "httpd pause incomplete — keep pause claim for retry");
+            }
             return -1;
         }
     }

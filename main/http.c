@@ -369,7 +369,9 @@ static esp_err_t get_mqtt_param_handle(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "topicDown", topicDown);
     cJSON_AddNumberToObject(obj, "keepalive_s", 30);
     cJSON_AddNumberToObject(obj, "heartbeat_s", 30);
-    cJSON_AddBoolToObject(obj, "connected", mqtt_is_connected());
+    /* Match getDevInfo: require STA so LAN UI cannot show MQTT up while Wi‑Fi is down. */
+    cJSON_AddBoolToObject(obj, "connected",
+                          mqtt_is_connected() && wifi_sta_is_connected());
     char *str = cJSON_PrintUnformatted(obj);
     esp_err_t res = send_json(req, str);
     cJSON_free(str);
@@ -893,7 +895,9 @@ static esp_err_t display_upload_frame_handle(httpd_req_t *req)
         }
         remaining -= got;
     }
-    epd_upload_finish(); /* sync refresh + unlock */
+    if (epd_upload_finish() != 0) { /* sync refresh + unlock */
+        return send_err(req, "upload finish failed");
+    }
     return send_json(req, "{\"code\":0,\"msg\":\"uploaded, refreshing\"}");
 }
 
@@ -1211,15 +1215,20 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
         }
     } else if (p.mode == POWER_MODE_HIBERNATE) {
         sleep_cancel();
-        sleepSoon = true;
+        if (wifi_softap_is_up()) {
+            sleepDeferred = "softap";
+        } else {
+            sleepSoon = true;
+        }
     } else {
         sleep_cancel();
     }
     if (sleepSoon) {
-        /* Respond first, then enter hibernate so the client gets HTTP 200. */
+        /* Respond first, then enter hibernate so the client gets HTTP 200.
+         * SoftAP already gated above; spawn failure is rare after that. */
         esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"hibernating\"}");
         vTaskDelay(pdMS_TO_TICKS(300));
-        sleep_now();
+        (void)sleep_now();
         return res;
     }
     cJSON *resp = cJSON_CreateObject();
@@ -1239,9 +1248,14 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
 static esp_err_t sleep_now_handle(httpd_req_t *req)
 {
     softap_touch();
+    if (wifi_softap_is_up()) {
+        return send_err(req, "softap busy — close hotspot first");
+    }
     esp_err_t res = send_json(req, "{\"code\":0,\"msg\":\"sleeping\"}");
     vTaskDelay(pdMS_TO_TICKS(300));
-    sleep_now();
+    if (!sleep_now()) {
+        return send_err(req, "sleep refused");
+    }
     return res;
 }
 

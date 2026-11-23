@@ -4,7 +4,7 @@
  *
  * First boot (empty NVS) burns a random 8-hex deviceId used for:
  *   MQTT clientId = ek410-{deviceId}
- *   SoftAP SSID   = EK410-{deviceId}
+ *   SoftAP SSID   = EK410_<MAC6> (last 3 bytes of STA MAC)
  *   display name  = EK410-{deviceId}
  * NeoMind topics: device/ek410_Eink/{deviceId}/uplink|downlink
  */

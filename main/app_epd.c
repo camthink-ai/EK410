@@ -959,10 +959,12 @@ int epd_upload_finish(void)
     }
     stream_end(s_uploadCsx);
     s_uploadCsx = -1;
+    int rc = 0;
     if (s_uploadCount != EPD_HALF_BYTES * 2) {
         ESP_LOGW(TAG, "upload size mismatch: %lu", (unsigned long)s_uploadCount);
         last_frame_capture_abort();
         s_panelDirty = true;
+        rc = -1;
     } else {
         /* Refresh while still holding the panel lock so nothing else can
          * interleave DTM/PON with this frame (avoids dirty corners). */
@@ -970,13 +972,16 @@ int epd_upload_finish(void)
             last_frame_capture_commit();
         } else {
             last_frame_capture_abort();
+            rc = -1;
         }
     }
     /* Drop jobs queued during the long upload (MQTT render_text, etc.). */
     render_queue_drop_pending("upload finish");
     epd_unlock();
-    app_epd_note_user_content();
-    return 0;
+    if (rc == 0) {
+        app_epd_note_user_content();
+    }
+    return rc;
 }
 
 void epd_upload_abort(void)
@@ -1575,8 +1580,10 @@ int epd_url_frame(const char *url)
             uint8_t *codes = NULL;
             int cw = 0, ch = 0;
             if (img_rgb_dither_codes(rgb, rw, rh, &codes, &cw, &ch, use_proc) != 0) {
+                free(rgb);
                 url_fail("dither OOM/fail");
             } else {
+                free(rgb); /* dither owns the output codes; drop RGB early */
                 codes_cover_ctx_t cctx = {.codes = codes, .sw = cw, .sh = ch};
                 url_heap_log("pre_stream");
                 ESP_LOGI(TAG, "decode OK — stream cover %dx%d", cw, ch);

@@ -442,19 +442,21 @@ int last_frame_capture_commit(void)
     hdr.saved_us = esp_timer_get_time();
     strlcpy(hdr.source, s_cap_src, sizeof(hdr.source));
 
+    /* Erase → body → header last. Power loss mid-body leaves no valid magic
+     * hdr (or stale erased flash), so boot will not replay a truncated frame. */
     esp_err_t e = esp_partition_erase_range(s_part, 0, s_part->size);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "erase fail %s", esp_err_to_name(e));
         return -1;
     }
-    e = esp_partition_write(s_part, 0, &hdr, sizeof(hdr));
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "hdr write fail %s", esp_err_to_name(e));
-        return -1;
-    }
     e = esp_partition_write(s_part, HDR_SIZE, s_cap, LAST_FRAME_BYTES);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "frame write fail %s", esp_err_to_name(e));
+        return -1;
+    }
+    e = esp_partition_write(s_part, 0, &hdr, sizeof(hdr));
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "hdr write fail %s", esp_err_to_name(e));
         return -1;
     }
 
@@ -551,7 +553,35 @@ int last_frame_stream(last_frame_write_fn write_fn, void *ctx)
         goto out;
     }
 
+    /* Pass 1: CRC before any consumer write — avoid painting a corrupt frame. */
+    uint32_t crc = 0;
     size_t off = 0;
+    while (off < LAST_FRAME_BYTES) {
+        size_t n = LAST_FRAME_BYTES - off;
+        if (n > STREAM_CHUNK) {
+            n = STREAM_CHUNK;
+        }
+        if (esp_partition_read(s_part, HDR_SIZE + off, buf, n) != ESP_OK) {
+            free(buf);
+            goto out;
+        }
+        crc = esp_crc32_le(crc, buf, n);
+        off += n;
+        if ((off & 0x7FFF) == 0) {
+            vTaskDelay(1);
+        }
+    }
+    if (crc != hdr.crc32) {
+        ESP_LOGW(TAG, "stream crc mismatch 0x%08lx vs hdr 0x%08lx — discard",
+                 (unsigned long)crc, (unsigned long)hdr.crc32);
+        s_meta.present = false;
+        s_meta_valid = false;
+        free(buf);
+        goto out;
+    }
+
+    /* Pass 2: deliver to caller (panel upload / HTTP download). */
+    off = 0;
     while (off < LAST_FRAME_BYTES) {
         size_t n = LAST_FRAME_BYTES - off;
         if (n > STREAM_CHUNK) {

@@ -2,7 +2,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
-[![Version](https://img.shields.io/badge/version-1.3.3-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.3.4-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Dual--License-red)](LICENSE)
 
 **CamThink** 7.09″ Spectra 6 电子墨水屏固件。
@@ -14,7 +14,7 @@
 | **产品** | EK410 · CamThink 电子墨水屏 |
 | **主控** | ESP32-C61HR2 · 16MB Flash · 2MB PSRAM |
 | **面板** | Spectra 6 · 逻辑 1600×1200 · 六色 |
-| **固件** | [`VERSION`](VERSION) → **1.3.3** |
+| **固件** | [`VERSION`](VERSION) → **1.3.4** |
 | **平台** | [NeoMind](https://wiki.camthink.ai) · 设备类型 `ek410_Eink` |
 
 ---
@@ -60,7 +60,7 @@ MQTT / 唤醒 URL 仍走设备侧 `displayUrl`。
 
 | 操作 | 行为 |
 |------|------|
-| **MAIN** 长按约 2.5s | 开 SoftAP（`EK410-{id}` / `12345678` → `http://192.168.4.1`）· 蓝 |
+| **MAIN** 长按约 2.5s | 开 SoftAP（`EK410_<MAC6>` / `12345678` → `http://192.168.4.1`）· 蓝 |
 | **PAGE** 长按约 2.5s | 进入 / 退出 BLE CT-Prov · 青 |
 | **MAIN+PAGE** 长按约 6s | 恢复出厂（保留 device id） |
 | 深睡 **MAIN** | 唤醒 → SoftAP |
@@ -137,7 +137,7 @@ EK410/
 | [`VERSION`](VERSION) | 权威版本号 |
 | [`main/version.h`](main/version.h) | 固件内嵌 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 发布说明 |
-| Git tag | `v1.3.3` |
+| Git tag | `v1.3.4` |
 
 ```bash
 python3 tools/bump_version.py --check
