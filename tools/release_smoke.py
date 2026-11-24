@@ -192,6 +192,12 @@ def main() -> int:
     ap.add_argument("--idle-sec", type=int, default=20)
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--skip-reset", action="store_true")
+    ap.add_argument(
+        "--mqtt-password",
+        default="",
+        help="MQTT password for steps that change the broker and must restore it "
+             "(getMqttParam only reports hasPassword)",
+    )
     args = ap.parse_args()
 
     failures = 0
@@ -365,6 +371,13 @@ def main() -> int:
             return
         old_port = int(cur.get("port") or 1883)
         old_transport = cur.get("transport") or ("mqtts" if cur.get("tls") else "mqtt")
+        # getMqttParam is write-only for the password (hasPassword), and a
+        # broker/username change clears the stored one: this step can only
+        # restore the device when the password is known.
+        mqtt_password = args.mqtt_password or cur.get("password") or ""
+        if cur.get("hasPassword") and not mqtt_password:
+            print("skip broker-change — stored MQTT password is write-only; pass --mqtt-password to run")
+            return
         fake = "broker-must-not-persist.invalid"
         busy_msgs = ("mqtt stop busy", "mqtt restart busy")
 
@@ -385,7 +398,7 @@ def main() -> int:
             "port": old_port,
             "transport": old_transport,
             "username": cur.get("username") or "",
-            "password": cur.get("password") or "",
+            "password": mqtt_password,
         }
         st_b, j_b = http_json_allow_fail(
             "POST", f"http://{host}/api/v1/network/setMqttParam", body_busy, timeout=25
@@ -417,8 +430,8 @@ def main() -> int:
         }
         if cur.get("username"):
             restore["username"] = cur["username"]
-        if cur.get("password"):
-            restore["password"] = cur["password"]
+        if mqtt_password:
+            restore["password"] = mqtt_password
         for attempt in range(3):
             st3, j3, _ = softap_suite.post_ctprov(
                 host,

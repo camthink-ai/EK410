@@ -36,6 +36,7 @@ class SuiteReport:
     tier: str
     firmware_sha256: str = ""
     firmware_path: str = ""
+    firmware_version: str = ""
     device_id: str = ""
     host: str = ""
     port: str = ""
@@ -54,9 +55,12 @@ class SuiteReport:
 
     @property
     def ok(self) -> bool:
-        """Pass if no device/fixture failures. skipped/invalid do not fail the gate."""
-        return not any(
-            c.status in (Status.FAIL_DEVICE, Status.FAIL_FIXTURE) for c in self.cases
+        """Pass only when something actually passed and nothing failed.
+        skipped/invalid never fail the gate on their own, but a run in which
+        every case was skipped or invalid is not a pass either."""
+        statuses = [c.status for c in self.cases]
+        return Status.PASS in statuses and not any(
+            s in (Status.FAIL_DEVICE, Status.FAIL_FIXTURE) for s in statuses
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,6 +69,7 @@ class SuiteReport:
             "tier": self.tier,
             "firmware_sha256": self.firmware_sha256,
             "firmware_path": self.firmware_path,
+            "firmware_version": self.firmware_version,
             "device_id": self.device_id,
             "host": self.host,
             "port": self.port,
