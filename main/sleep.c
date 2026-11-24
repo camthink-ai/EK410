@@ -32,6 +32,7 @@
 #include "wifi.h"
 #include "http.h"
 #include "app_epd.h"
+#include "ota.h"
 #include "evtlog.h"
 #include "led.h"
 #include "board_ioext.h"
@@ -144,6 +145,18 @@ static void sleep_go_task(void *arg)
         ack_aborted("prov_busy");
         s_entering = false;
         sleep_kick(); /* provisioning up → stays cancelled; its close re-arms */
+        vTaskDelete(NULL);
+        return;
+    }
+    /* An OTA is writing (or about to write) flash: sleeping now would cut the
+     * download and leave the slot half-written. A failed attempt re-arms the
+     * schedule itself (ota_restore_runtime), a successful one reboots. */
+    if (ota_busy()) {
+        ESP_LOGW(TAG, "OTA in progress — defer deep sleep");
+        evtlog_event("SLP", "defer — ota busy");
+        ack_aborted("ota_busy");
+        s_entering = false;
+        sleep_arm_from_config();
         vTaskDelete(NULL);
         return;
     }
@@ -441,6 +454,12 @@ bool sleep_now(void)
     if (wifi_softap_is_up()) {
         ESP_LOGW(TAG, "sleep_now ignored — SoftAP provisioning is up");
         evtlog_event("SLP", "ignored — softap up");
+        s_ackCmd[0] = '\0';
+        return false;
+    }
+    if (ota_busy()) {
+        ESP_LOGW(TAG, "sleep_now ignored — OTA in progress");
+        evtlog_event("SLP", "ignored — ota busy");
         s_ackCmd[0] = '\0';
         return false;
     }

@@ -19,7 +19,9 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
+#include "cJSON.h"
 
 #include "config.h"
 #include "wifi.h"
@@ -83,8 +85,34 @@ static void boot_apply_sleep_wake_provisioning(void)
     }
 }
 
+/**
+ * cJSON nodes are ~64 bytes and, with CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024,
+ * every one of them (and every short key string) comes from internal RAM. A
+ * getDevInfo reply is ~60 nodes (~5 KB): with the internal heap this unit has
+ * beside Wi-Fi, httpd and MQTT, a reply that carried diagnostics used to take
+ * the free internal RAM down to single-digit bytes. Prefer PSRAM for
+ * everything cJSON allocates; the call falls back to internal RAM when PSRAM
+ * is exhausted.
+ */
+static void *json_alloc(size_t n)
+{
+    /* PSRAM first; internal RAM only once PSRAM is exhausted. */
+    return n ? heap_caps_malloc_prefer(n, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                       MALLOC_CAP_8BIT)
+             : NULL;
+}
+
+static void json_mem_init(void)
+{
+    /* Before the first cJSON user. IDF's cJSON has no realloc hook: with
+     * custom hooks it grows its print buffers through allocate + memcpy. */
+    cJSON_Hooks hooks = { .malloc_fn = json_alloc, .free_fn = free };
+    cJSON_InitHooks(&hooks);
+}
+
 void app_main(void)
 {
+    json_mem_init();
     config_open();
     led_open();
     sleep_capture_wake_cause();

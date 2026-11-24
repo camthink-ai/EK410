@@ -46,6 +46,16 @@ int img_decode_to_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, int *w
                       int *h_out, img_proc_mode_t mode);
 
 /**
+ * Same as img_decode_to_rgb, but the file may live in up to `nparts` pieces that
+ * concatenate in order to `len` bytes. JPEG/PNG decoders already read through
+ * callbacks, so they never need one contiguous block.
+ */
+#define IMG_DECODE_MAX_PARTS 3
+int img_decode_to_rgb_parts(const uint8_t *const *parts, const size_t *part_lens, int nparts,
+                            size_t len, uint8_t **rgb_out, int *w_out, int *h_out,
+                            img_proc_mode_t mode);
+
+/**
  * SoftAP-style E6 FS at source res + cover into panel. Consumes/frees `rgb`.
  * Returns a process-lifetime panel FB in *fb_out (do not free — use
  * img_fb_release). QUALITY may nearest-upscale RGB toward the budget before FS.

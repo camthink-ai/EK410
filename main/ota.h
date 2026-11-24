@@ -46,6 +46,16 @@ bool ota_busy(void);
 bool ota_url_claim(void);
 /* Give the URL path back; a non-empty err records a failed attempt. */
 void ota_url_release(const char *err);
+/**
+ * Run a claimed URL OTA on the calling task. That must be the render task:
+ * HTTPS needs its deep stack (the URL image fetch uses the same one), and a
+ * dedicated OTA task can no longer be created once Wi-Fi, httpd and MQTT
+ * own the internal RAM. The caller stops MQTT and cancels sleep first.
+ * Reboots on success; on failure records the error and restores the runtime.
+ */
+void ota_url_run(const char *url);
+/* Bring LED, MQTT and the sleep schedule back after a failed OTA attempt. */
+void ota_restore_runtime(void);
 ota_state_t ota_state(void);
 const char *ota_state_str(void); /* "idle" | "running" | "failed" */
 const char *ota_last_error(void);

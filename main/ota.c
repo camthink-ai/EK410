@@ -16,6 +16,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
 #include "esp_https_ota.h"
@@ -25,6 +26,9 @@
 #include "ota.h"
 #include "wifi.h"
 #include "app_epd.h"
+#include "led.h"
+#include "mqtt.h"
+#include "sleep.h"
 
 #define TAG "-->OTA"
 #define OTA_IMAGE_MAGIC 0xE9
@@ -76,6 +80,35 @@ void ota_url_release(const char *err)
     } else {
         s_otaState = OTA_STATE_IDLE;
     }
+}
+
+void ota_restore_runtime(void)
+{
+    wifi_led_refresh();
+    mqtt_restore_after_temp_stop();
+    sleep_kick();
+}
+
+void ota_url_run(const char *url)
+{
+    char err[48] = "";
+    if (!url || !url[0]) {
+        ota_url_release("no url");
+        ota_restore_runtime();
+        return;
+    }
+    ESP_LOGW(TAG, "OTA start: %s", url);
+    led_set(LEDC_OTA_R, LED_BLINK_FAST); /* purple: upgrading */
+    int rc = ota_start(url, err, sizeof(err));
+    if (rc == 0) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+    }
+    ESP_LOGE(TAG, "OTA failed: %s", err);
+    led_pulse(LEDC_ERR_R, 2000);
+    /* Publish the failure before MQTT comes back: the web UI polls otaState. */
+    ota_url_release(err[0] ? err : "download failed");
+    ota_restore_runtime();
 }
 
 ota_state_t ota_state(void)

@@ -105,6 +105,9 @@ void cfg_set_wifi_attr(const wifiAttr_t *wifi);
 void cfg_get_mqtt_attr(mqttAttr_t *mqtt);
 /** True when no broker host is stored (cheap: no mqttAttr_t on the stack). */
 bool cfg_mqtt_host_empty(void);
+/** Single MQTT fields for callers on small stacks (no 270-byte mqttAttr_t). */
+int cfg_mqtt_qos(void);
+void cfg_mqtt_client_id(char *out, size_t len);
 /** Persist MQTT broker attrs. Returns ESP_OK or NVS error (RAM unchanged on fail). */
 esp_err_t cfg_set_mqtt_attr(const mqttAttr_t *mqtt);
 
@@ -117,6 +120,12 @@ const char *cfg_mqtt_ca_pem(void);
 esp_err_t cfg_set_mqtt_ca_pem(const char *pem);
 
 void cfg_get_dev_info(devInfo_t *info);
+/** Single device fields for callers on small stacks; same values as above. */
+void cfg_device_id(char *out, size_t len);
+void cfg_dev_name(char *out, size_t len);
+/** Build-time fields of the RAM-cached device record (stable for the boot). */
+const char *cfg_fw_version(void);
+const char *cfg_panel_name(void);
 /** Persist devName (1..32 bytes). Returns ESP_ERR_INVALID_ARG when it does
  * not fit devInfo_t.devName, or an NVS error. */
 esp_err_t cfg_set_dev_name(const char *name);

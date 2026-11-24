@@ -210,27 +210,6 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
         cJSON_AddStringToObject(obj, "softApPass", "12345678");
     }
     cJSON_AddNumberToObject(obj, "uptime_s", (double)(esp_timer_get_time() / 1000000));
-    /* Field diagnostics (read-only): heap headroom and, per long-lived task,
-     * the smallest amount of stack that has ever been left — the numbers to
-     * watch when validating a build on hardware. */
-    {
-        cJSON *heap = cJSON_AddObjectToObject(obj, "heap");
-        if (heap) {
-            cJSON_AddNumberToObject(heap, "free", esp_get_free_heap_size());
-            cJSON_AddNumberToObject(heap, "minFree", esp_get_minimum_free_heap_size());
-            cJSON_AddNumberToObject(heap, "freeInt",
-                                     heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-            cJSON_AddNumberToObject(heap, "minFreeInt",
-                                     heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
-            cJSON_AddNumberToObject(heap, "largestInt",
-                                     heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-            cJSON_AddNumberToObject(heap, "freeSpiram",
-                                     heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-            cJSON_AddNumberToObject(heap, "largestSpiram",
-                                     heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-        }
-    }
-    add_stack_min(obj);
     int batMv = battery_read_mv();
     cJSON_AddBoolToObject(obj, "batterySense", batMv >= 0);
     if (batMv >= 0) {
@@ -252,6 +231,38 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "powerMode", power_mode_str(p.mode));
     cJSON_AddNumberToObject(obj, "sleepMin", p.sleepMin);
     cJSON_AddNumberToObject(obj, "wakeSec", p.wakeSec);
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+/* Field diagnostics, polled on demand: heap headroom and, per long-lived
+ * task, the smallest amount of stack ever left. Deliberately NOT part of
+ * getDevInfo — the web UI polls that every few seconds. */
+static esp_err_t get_diag_handle(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) {
+        return send_err(req, "oom");
+    }
+    cJSON *heap = cJSON_AddObjectToObject(obj, "heap");
+    if (heap) {
+        cJSON_AddNumberToObject(heap, "free", esp_get_free_heap_size());
+        cJSON_AddNumberToObject(heap, "minFree", esp_get_minimum_free_heap_size());
+        cJSON_AddNumberToObject(heap, "freeInt",
+                                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        cJSON_AddNumberToObject(heap, "minFreeInt",
+                                 heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+        cJSON_AddNumberToObject(heap, "largestInt",
+                                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        cJSON_AddNumberToObject(heap, "freeSpiram",
+                                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        cJSON_AddNumberToObject(heap, "largestSpiram",
+                                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    }
+    add_stack_min(obj);
     char *str = cJSON_PrintUnformatted(obj);
     esp_err_t res = send_json(req, str);
     cJSON_free(str);
@@ -970,6 +981,9 @@ static esp_err_t display_upload_frame_handle(httpd_req_t *req)
     if (req->content_len != 960000) {
         return send_err(req, "body must be a raw 960000-byte frame");
     }
+    if (ota_busy()) {
+        return send_err(req, "ota busy");
+    }
     if (!app_epd_jobs_accepted()) {
         return send_err(req, "sleep pending");
     }
@@ -1077,35 +1091,6 @@ static esp_err_t display_last_frame_handle(httpd_req_t *req)
 
 /* ---------- OTA ---------- */
 
-/* URL + local OTA pause MQTT/sleep; on failure restore so the old image keeps
- * cloud connectivity and cycle sleep without a reboot. */
-static void ota_upload_restore_runtime(void)
-{
-    wifi_led_refresh();
-    mqtt_restore_after_temp_stop();
-    sleep_kick();
-}
-
-static void ota_task(void *arg)
-{
-    char *url = (char *)arg;
-    char err[48] = "";
-    ESP_LOGW(TAG, "OTA start: %s", url);
-    led_set(LEDC_OTA_R, LED_BLINK_FAST); /* purple: upgrading */
-    int rc = ota_start(url, err, sizeof(err));
-    if (rc == 0) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
-    }
-    ESP_LOGE(TAG, "OTA failed: %s", err);
-    led_pulse(LEDC_ERR_R, 2000);
-    /* Publish the failure before MQTT comes back: the web UI polls otaState. */
-    ota_url_release(err[0] ? err : "download failed");
-    ota_upload_restore_runtime();
-    free(url);
-    vTaskDelete(NULL);
-}
-
 static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
 {
     if (ota_busy()) {
@@ -1127,8 +1112,12 @@ static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
     if (!urlCopy) {
         return send_err(req, "oom");
     }
+    if (strlen(urlCopy) >= 512) {
+        free(urlCopy);
+        return send_err(req, "url too long");
+    }
     /* Claim BEFORE stopping MQTT: that stop arms a start-retry, which must
-     * already see the OTA and keep the client down until ota_task releases. */
+     * already see the OTA and keep the client down until the download ends. */
     if (!ota_url_claim()) {
         free(urlCopy);
         return send_err(req, "ota busy");
@@ -1140,11 +1129,15 @@ static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
         return send_err(req, "mqtt stop busy");
     }
     sleep_cancel(); /* don't sleep mid-upgrade */
-    if (xTaskCreate(ota_task, "ota", 12288, urlCopy, 5, NULL) != pdPASS) {
-        free(urlCopy);
+    /* The download runs on the render task: it owns the one deep TLS stack,
+     * and a dedicated 12 KB task could not be created on a unit with Wi-Fi,
+     * httpd and MQTT up (the request failed with "task spawn failed"). */
+    int rc = app_epd_ota_async(urlCopy);
+    free(urlCopy);
+    if (rc != 0) {
         ota_url_release(NULL);
-        ota_upload_restore_runtime();
-        return send_err(req, "task spawn failed");
+        ota_restore_runtime();
+        return send_err(req, app_epd_queue_err(rc));
     }
     return send_json(req, "{\"code\":0,\"msg\":\"upgrading, device will reboot\"}");
 }
@@ -1176,7 +1169,7 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
 
     char err[64] = "";
     if (ota_upload_begin((size_t)req->content_len, err, sizeof(err)) != 0) {
-        ota_upload_restore_runtime();
+        ota_restore_runtime();
         return send_err(req, err[0] ? err : "ota begin failed");
     }
 
@@ -1188,7 +1181,7 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
     if (!buf) {
         ota_upload_abort();
         led_pulse(LEDC_ERR_R, 2000);
-        ota_upload_restore_runtime();
+        ota_restore_runtime();
         return send_err(req, "oom");
     }
 
@@ -1200,14 +1193,14 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
             free(buf);
             ota_upload_abort();
             led_pulse(LEDC_ERR_R, 2000);
-            ota_upload_restore_runtime();
+            ota_restore_runtime();
             return send_err(req, "upload interrupted");
         }
         if (ota_upload_write(buf, (size_t)got) != 0) {
             free(buf);
             ota_upload_abort();
             led_pulse(LEDC_ERR_R, 2000);
-            ota_upload_restore_runtime();
+            ota_restore_runtime();
             return send_err(req, "ota write failed (bad magic or flash)");
         }
         remaining -= got;
@@ -1217,7 +1210,7 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
 
     if (ota_upload_finish(err, sizeof(err)) != 0) {
         led_pulse(LEDC_ERR_R, 2000);
-        ota_upload_restore_runtime();
+        ota_restore_runtime();
         return send_err(req, err[0] ? err : "ota validate failed");
     }
 
@@ -1504,6 +1497,7 @@ static esp_err_t get_root_handler(httpd_req_t *req)
 static const httpd_uri_t g_handlers[] = {
     { .uri = "/", .method = HTTP_GET, .handler = get_root_handler },
     { .uri = "/api/v1/system/getDevInfo", .method = HTTP_GET, .handler = get_dev_info_handle },
+    { .uri = "/api/v1/system/getDiag", .method = HTTP_GET, .handler = get_diag_handle },
     { .uri = "/api/v1/system/setDevInfo", .method = HTTP_POST, .handler = set_dev_info_handle },
     { .uri = "/api/v1/system/setDevReset", .method = HTTP_POST, .handler = set_dev_reset_handle },
     { .uri = "/api/v1/system/setDevFactory", .method = HTTP_POST, .handler = set_dev_factory_handle },

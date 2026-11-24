@@ -4,7 +4,7 @@
  *
  * First boot (empty NVS) burns a random 8-hex deviceId used for:
  *   MQTT clientId = ek410-{deviceId}
- *   SoftAP SSID   = EK410_<MAC6> (last 3 bytes of STA MAC)
+ *   SoftAP SSID   = EK410_<MAC6> (last 3 bytes of SoftAP MAC; see ct_prov_softap_ssid)
  *   display name  = EK410-{deviceId}
  * NeoMind topics: device/ek410_Eink/{deviceId}/uplink|downlink
  */
@@ -505,6 +505,80 @@ bool cfg_mqtt_host_empty(void)
         return head[0] == '\0';
     }
     return err == ESP_ERR_NVS_NOT_FOUND;
+}
+
+int cfg_mqtt_qos(void)
+{
+    /* Same clamping as cfg_get_mqtt_attr(). */
+    nvs_handle_t h;
+    int32_t v = 1;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
+        return 1;
+    }
+    if (nvs_get_i32(h, "qos", &v) != ESP_OK || v < 0 || v > 2) {
+        v = 1;
+    }
+    nvs_close(h);
+    return (int)v;
+}
+
+void cfg_mqtt_client_id(char *out, size_t len)
+{
+    /* Same resolution as cfg_get_mqtt_attr().clientId. */
+    nvs_handle_t h;
+    if (!out || len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = len;
+        nvs_get_str(h, "cid", out, &n);
+        nvs_close(h);
+    }
+    if (out[0] == '\0') {
+        snprintf(out, len, "ek410-%s",
+                 g_devInfo.deviceId[0] ? g_devInfo.deviceId : g_devInfo.mac);
+    }
+}
+
+void cfg_device_id(char *out, size_t len)
+{
+    if (out && len) {
+        strlcpy(out, g_devInfo.deviceId, len);
+    }
+}
+
+void cfg_dev_name(char *out, size_t len)
+{
+    /* Same fallbacks as cfg_get_dev_info(). */
+    nvs_handle_t h;
+    if (!out || len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = len;
+        esp_err_t err = nvs_get_str(h, "name", out, &n);
+        nvs_close(h);
+        if (err == ESP_OK && out[0] != '\0') {
+            return;
+        }
+    } else if (g_devInfo.devName[0] != '\0') {
+        strlcpy(out, g_devInfo.devName, len);
+        return;
+    }
+    snprintf(out, len, "EK410-%s",
+             g_devInfo.deviceId[0] ? g_devInfo.deviceId : g_devInfo.mac + 6);
+}
+
+const char *cfg_fw_version(void)
+{
+    return g_devInfo.fwVersion;
+}
+
+const char *cfg_panel_name(void)
+{
+    return g_devInfo.panel;
 }
 
 esp_err_t cfg_set_power_attr(const powerAttr_t *p)

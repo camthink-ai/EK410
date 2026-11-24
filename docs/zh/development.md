@@ -2,11 +2,20 @@
 
 英文版：[development.md](../development.md)
 
+仓库：[https://github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 ## 环境
 
 - ESP-IDF **5.5.x**（组件要求 `>=5.3.0`）
 - 芯片目标 `esp32c61`
 - 建议使用 IDF 自带的 Python 3.11 虚拟环境
+
+## 克隆
+
+```bash
+git clone https://github.com/camthink-ai/EK410.git
+cd EK410
+```
 
 ## 编译烧录
 

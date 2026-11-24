@@ -1,5 +1,7 @@
 # Security notes
 
+Source: [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 Status as of firmware 1.3.10. Read this before deploying units outside a lab
 or before the first production flash.
 

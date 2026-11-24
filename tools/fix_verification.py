@@ -40,6 +40,11 @@ from qa_lib.firmware import firmware_app_version  # noqa: E402
 SLEEP_MIN_MAX = 525600
 LOW_STACK = 300   # bytes: warn
 MIN_STACK = 128   # bytes: fail
+BOOT_WAIT = 120   # s: a cold boot (boot paint + Wi-Fi) takes ~55–65 s
+
+
+def _list(s: str):
+    return [x for x in (t.strip() for t in s.split(",")) if x]
 
 
 class Device:
@@ -69,7 +74,16 @@ class Device:
         return status, parsed
 
     def info(self):
-        return self.json("GET", "/api/v1/system/getDevInfo")
+        """getDevInfo, with the on-demand diagnostics (getDiag: heap, stackMin)
+        merged in so the callers read one dict."""
+        status, info = self.json("GET", "/api/v1/system/getDevInfo")
+        if status == 200 and isinstance(info, dict):
+            _, diag = self.json("GET", "/api/v1/system/getDiag")
+            if isinstance(diag, dict):
+                for key in ("heap", "stackMin"):
+                    if key in diag:
+                        info[key] = diag[key]
+        return status, info
 
     def wait_info(self, seconds: float):
         """Poll until getDevInfo answers; the info dict, or None after `seconds`."""
@@ -134,6 +148,29 @@ def check_identity(dev: Device, rep: Report, expect: str):
     return info
 
 
+LARGEST_INT_MIN = 8192   # MQTT bring-up floor (mqtt_internal_need): below it MQTT never starts
+FREE_INT_MIN = 12000     # steady state with Wi-Fi + web server + MQTT on the C61
+
+
+def check_internal_headroom(dev: Device, rep: Report):
+    """Steady-state internal RAM, read from getDiag. Below LARGEST_INT_MIN MQTT
+    can never be (re)started; a tight freeInt lets the next TLS session starve
+    lwIP and the web server."""
+    status, diag = dev.json("GET", "/api/v1/system/getDiag")
+    heap = (diag or {}).get("heap")
+    if status != 200 or not isinstance(heap, dict):
+        rep.add("internal_headroom", "FAIL", f"getDiag status={status} (no diagnostics in this firmware)")
+        return
+    largest, free_int = int(heap.get("largestInt", 0)), int(heap.get("freeInt", 0))
+    detail = f"freeInt={free_int} largestInt={largest} (want ≥ {FREE_INT_MIN} / ≥ {LARGEST_INT_MIN})"
+    if largest < LARGEST_INT_MIN:
+        rep.add("internal_headroom", "FAIL", detail + " — MQTT could not be started")
+    elif free_int < FREE_INT_MIN:
+        rep.add("internal_headroom", "WARN", detail)
+    else:
+        rep.add("internal_headroom", "PASS", detail)
+
+
 def check_json_depth(dev: Device, rep: Report):
     routes = ["/api/v1/system/setDevInfo", "/api/v1/network/setMqttParam",
               "/api/v1/display/renderCanvas", "/api/v1/ctprov"]
@@ -142,30 +179,41 @@ def check_json_depth(dev: Device, rep: Report):
     for path in routes:
         _, before = dev.info()
         t0 = time.time()
-        status, _ = dev.call("POST", path, body, timeout=20)
-        after = dev.wait_info(60)
+        status, raw = dev.call("POST", path, body, timeout=20)
+        # A crash means ~1 min of reboot; do not hammer the other routes then.
+        after = dev.wait_info(BOOT_WAIT if status is None else 20)
         took = time.time() - t0
+        try:
+            parsed = json.loads(raw.decode("utf-8", "replace")) if (status == 200 and raw) else None
+        except ValueError:
+            parsed = None
+        accepted = isinstance(parsed, dict) and parsed.get("code") == 0
         if status is None:
-            bad.append(f"{path}: no answer")
+            bad.append(f"{path}: no answer (connection dropped — the device crashed)")
         elif after is None:
             bad.append(f"{path}: device unreachable afterwards (rebooted and did not come back?)")
         elif not dev.uptime_ok(after):
-            bad.append(f"{path}: uptime went {before.get('uptime_s')} -> {after.get('uptime_s')} (REBOOT)")
+            bad.append(f"{path}: uptime went {(before or {}).get('uptime_s')} -> {after.get('uptime_s')} (REBOOT)")
         elif took > 10:
             bad.append(f"{path}: took {took:.1f}s")
+        elif accepted:
+            # Surviving is not enough: the guard has to reject before cJSON recurses.
+            bad.append(f"{path}: deep JSON accepted ({parsed})")
+        if bad:
+            break
     rep.add("json_depth_guard", "FAIL" if bad else "PASS",
-            "; ".join(bad) if bad else f"{len(routes)} route families answered, no reboot")
+            "; ".join(bad) if bad else f"rejected by all {len(routes)} route families, no reboot")
 
 
 def check_dev_name(dev: Device, rep: Report):
-    info = dev.wait_info(30)
+    info = dev.wait_info(BOOT_WAIT)
     if info is None:
         rep.add("dev_name_limit", "FAIL", "device unreachable")
         return
     name = str(info.get("devName") or "")
     status, resp = dev.json("POST", "/api/v1/system/setDevInfo", {"devName": "A" * 4000})
     code = (resp or {}).get("code")
-    after = dev.wait_info(30)
+    after = dev.wait_info(BOOT_WAIT)
     dev.json("POST", "/api/v1/system/setDevInfo", {"devName": name})  # restore in any case
     if status != 200 or code == 0:
         rep.add("dev_name_limit", "FAIL", f"4000-byte name accepted (status={status} code={code})")
@@ -178,6 +226,9 @@ def check_dev_name(dev: Device, rep: Report):
 
 
 def check_mqtt_hidden(dev: Device, rep: Report):
+    if dev.wait_info(BOOT_WAIT) is None:
+        rep.add("mqtt_password_hidden", "FAIL", "device unreachable")
+        return
     status, m = dev.json("GET", "/api/v1/network/getMqttParam")
     if status != 200 or not isinstance(m, dict):
         rep.add("mqtt_password_hidden", "FAIL", f"getMqttParam status={status}")
@@ -190,7 +241,7 @@ def check_mqtt_hidden(dev: Device, rep: Report):
 
 
 def check_ota_failure(dev: Device, rep: Report):
-    before = dev.wait_info(30)
+    before = dev.wait_info(BOOT_WAIT)
     if before is None or "otaState" not in before:
         rep.add("ota_failure_visible", "FAIL", "getDevInfo has no otaState (firmware older than 1.3.10?)")
         return
@@ -232,55 +283,118 @@ def check_ota_failure(dev: Device, rep: Report):
     rep.add("ota_failure_visible", "PASS", f"otaState=failed, otaError={err!r} after {waited:.0f}s, device kept running")
 
 
+def _psram_free_max(dev: Device):
+    """Largest of three readings of the total free PSRAM: a telemetry publish
+    (a ~160 KB preview) can hold half of it for a moment."""
+    best = None
+    for _ in range(3):
+        _, diag = dev.json("GET", "/api/v1/system/getDiag")
+        heap = diag.get("heap") if isinstance(diag, dict) else None
+        v = heap.get("freeSpiram") if isinstance(heap, dict) else None
+        if isinstance(v, (int, float)):
+            best = max(best or 0, int(v))
+        time.sleep(0.4)
+    return best
+
+
+def _display_url_once(dev: Device, rep: Report, url: str, mqtt_required: bool):
+    """One displayUrl. (info after the display — and after MQTT resumed when
+    it was up before —, None) or (None, what went wrong)."""
+    t0 = time.time()
+    status, resp = dev.json("POST", "/api/v1/display/displayUrl", {"url": url}, timeout=20)
+    if status != 200 or (resp or {}).get("code") not in (0, None):
+        return None, f"displayUrl status={status} {resp}"
+    while True:
+        info = dev.wait_info(15)
+        if info is None:
+            return None, "device vanished mid-display"
+        if not dev.uptime_ok(info):
+            return None, "REBOOT mid-display (uptime reset)"
+        rep.track(info)
+        if not info.get("displayBusy"):
+            break
+        if time.time() - t0 > 180:
+            return None, "displayBusy for >180 s"
+        time.sleep(2)
+    if not info.get("lastDisplayOk"):
+        return None, "display reported failure (lastDisplayOk=False)"
+    # displayUrl stops MQTT for the HTTPS heap: it has to come back by itself.
+    t1 = time.time()
+    while mqtt_required and not info.get("mqttConnected") and time.time() - t1 < 60:
+        info = dev.wait_info(10)
+        if info is None or not dev.uptime_ok(info):
+            return None, "device gone while MQTT was resuming"
+        rep.track(info)
+        if info.get("mqttConnected"):
+            break
+        time.sleep(2)
+    if mqtt_required and not info.get("mqttConnected"):
+        return None, f"MQTT not back within 60 s (mqttReason={info.get('mqttReason')})"
+    return info, None
+
+
 def check_url_soak(dev: Device, rep: Report, url: str, rounds: int):
-    spiram, display_s, failures = [], [], []
+    display_s, psram, largest, failures = [], [], [], []
     for i in range(rounds):
         before = dev.wait_info(30)
         if before is None:
             failures.append(f"round {i + 1}: unreachable before")
             break
-        status, resp = dev.json("POST", "/api/v1/display/displayUrl", {"url": url}, timeout=20)
-        if status != 200 or (resp or {}).get("code") not in (0, None):
-            failures.append(f"round {i + 1}: displayUrl status={status} {resp}")
-            break
         rep.track(before)
         t0 = time.time()
-        while True:
-            info = dev.wait_info(15)
-            if info is None:
-                failures.append(f"round {i + 1}: device vanished mid-display")
-                break
-            if not dev.uptime_ok(info):
-                failures.append(f"round {i + 1}: REBOOT mid-display (uptime reset)")
-                break
-            rep.track(info)
-            if not info.get("displayBusy"):
-                break
-            if time.time() - t0 > 180:
-                failures.append(f"round {i + 1}: displayBusy for >180 s")
-                break
-            time.sleep(2)
-        if failures:
-            break
-        if info is None or not info.get("lastDisplayOk"):
-            failures.append(f"round {i + 1}: display reported failure (lastDisplayOk={None if info is None else info.get('lastDisplayOk')})")
+        info, err = _display_url_once(dev, rep, url, bool(before.get("mqttConnected")))
+        if err:
+            failures.append(f"round {i + 1}: {err}")
             break
         display_s.append(time.time() - t0)
-        heap = info.get("heap") or {}
-        if "largestSpiram" in heap:
-            spiram.append(int(heap["largestSpiram"]))
+        # PSRAM trend. The largest single block legitimately swings with the
+        # layout (MQTT's buffers, the frame preview), so what must hold is the
+        # total: it may not shrink from round to round.
+        free_ps = _psram_free_max(dev)
+        if free_ps is not None:
+            psram.append(free_ps)
+        largest_block = int(((info.get("heap") or {}).get("largestSpiram")) or 0)
+        if largest_block:
+            largest.append(largest_block)
     if failures:
         rep.add("url_display_soak", "FAIL", failures[0])
         return
     detail = f"{rounds} displays ok, {min(display_s):.0f}–{max(display_s):.0f} s each"
-    if spiram:
-        base = sorted(spiram[:3])[len(spiram[:3]) // 2]
-        low = min(spiram)
-        detail += f", largestSpiram {low}–{max(spiram)} (first {base})"
-        if base and low < base * 0.6:
-            rep.add("url_display_soak", "FAIL", detail + " — PSRAM largest block did not recover")
+    if len(psram) >= 2:
+        drop = psram[0] - min(psram[1:])
+        detail += f", freeSpiram {psram[0]} → {psram[-1]}"
+        if largest:
+            detail += f" (largest block {min(largest)}–{max(largest)})"
+        if drop > max(64 * 1024, psram[0] * 0.15):
+            rep.add("url_display_soak", "FAIL", detail + " — PSRAM did not recover between displays")
             return
     rep.add("url_display_soak", "PASS", detail)
+
+
+def check_url_raw(dev: Device, rep: Report, raw_url: str, image_url: str):
+    """A raw 960000-byte frame by URL is the best-quality path, and it needs
+    one ~940 KB PSRAM block. Interleave it with ordinary images: a 19 KB
+    render message used to land in the middle of the free space after a
+    display and split it, so every later raw frame was rejected."""
+    if dev.wait_info(BOOT_WAIT) is None:
+        rep.add("url_raw_frame", "FAIL", "device unreachable")
+        return
+    seq = [raw_url]
+    if image_url:
+        seq += [image_url, raw_url, image_url, raw_url]
+    for i, u in enumerate(seq):
+        before = dev.wait_info(30)
+        if before is None:
+            rep.add("url_raw_frame", "FAIL", f"step {i + 1}: unreachable")
+            return
+        _, err = _display_url_once(dev, rep, u, bool(before.get("mqttConnected")))
+        if err:
+            rep.add("url_raw_frame", "FAIL",
+                    f"step {i + 1}/{len(seq)} ({'raw frame' if u == raw_url else 'image'}): {err}")
+            return
+    rep.add("url_raw_frame", "PASS",
+            f"{seq.count(raw_url)} raw frame(s) and {seq.count(image_url)} image(s) in a row, "
+            "every one displayed, MQTT resumed after each")
 
 
 def check_ota_roundtrip(dev: Device, rep: Report, image: Path):
@@ -353,17 +467,25 @@ def check_sleep_min(dev: Device, rep: Report):
     if p.get("mode") != "always":
         rep.add("sleep_min_clamp", "SKIPPED", f"unit is in mode {p.get('mode')!r} (needs always)")
         return
-    dev.json("POST", "/api/v1/system/setPowerParam",
-             {"mode": "cycle", "sleepMin": 2**31 - 1, "wakeSec": 600})
+    restore = {"mode": "always", "sleepMin": p.get("sleepMin", 0), "wakeSec": p.get("wakeSec", 120),
+               "wakeUrl": p.get("wakeUrl", ""), "imageQuality": p.get("imageQuality", "quality")}
+    # The unit is in CYCLE mode for a moment and keeps its own wake window.
+    # Never give up on the restore: a unit left here would sleep for a year.
+    dev.json("POST", "/api/v1/system/setPowerParam", {"mode": "cycle", "sleepMin": 2 ** 31 - 1})
     _, clamped = dev.json("GET", "/api/v1/system/getPowerParam")
-    dev.json("POST", "/api/v1/system/setPowerParam",
-             {"mode": "always", "sleepMin": p.get("sleepMin", 0), "wakeSec": p.get("wakeSec", 120),
-              "wakeUrl": p.get("wakeUrl", ""), "imageQuality": p.get("imageQuality", "quality")})
-    _, back = dev.json("GET", "/api/v1/system/getPowerParam")
-    if not clamped or not 1 <= int(clamped.get("sleepMin", 0)) <= SLEEP_MIN_MAX:
-        rep.add("sleep_min_clamp", "FAIL", f"sleepMin clamped to {clamped and clamped.get('sleepMin')} (max {SLEEP_MIN_MAX})")
-    elif not back or back.get("mode") != "always":
-        rep.add("sleep_min_clamp", "FAIL", f"could not restore always mode (now {back and back.get('mode')!r})")
+    back = None
+    for _ in range(5):
+        dev.json("POST", "/api/v1/system/setPowerParam", restore)
+        _, back = dev.json("GET", "/api/v1/system/getPowerParam")
+        if back and back.get("mode") == "always":
+            break
+        time.sleep(2)
+    if not back or back.get("mode") != "always":
+        rep.add("sleep_min_clamp", "FAIL",
+                f"UNIT LEFT IN {back and back.get('mode')!r} MODE — setPowerParam back to always failed 5x")
+    elif not clamped or not 1 <= int(clamped.get("sleepMin", 0)) <= SLEEP_MIN_MAX:
+        rep.add("sleep_min_clamp", "FAIL",
+                f"sleepMin clamped to {clamped and clamped.get('sleepMin')} (max {SLEEP_MIN_MAX})")
     else:
         rep.add("sleep_min_clamp", "PASS", f"clamped to {clamped.get('sleepMin')}, always mode restored")
 
@@ -375,34 +497,72 @@ def main() -> int:
                     help="fwVersion the device must run (default: repo VERSION; '' = any)")
     ap.add_argument("--url", default="", help="image URL the device can fetch, for the display soak")
     ap.add_argument("--rounds", type=int, default=20, help="URL displays in the soak")
+    ap.add_argument("--raw-url", default="",
+                    help="URL of a raw 960000-byte native frame the device can fetch — adds the raw-frame check")
     ap.add_argument("--firmware", type=Path, default=None,
                     help="app image for a local-upload OTA round trip (e.g. dist/ek410.bin)")
     ap.add_argument("--power", action="store_true",
                     help="also exercise the sleepMin clamp (saves the power config twice)")
     ap.add_argument("--json-out", type=Path, default=None)
+    ap.add_argument("--only", default="",
+                    help="comma list: run just these checks (identity always runs), e.g. json_depth_guard,ota_roundtrip")
+    ap.add_argument("--skip", default="", help="comma list of checks not to run")
     a = ap.parse_args()
 
+    only, skip = _list(a.only), _list(a.skip)
     dev, rep = Device(a.host), Report()
     print(f"==> fix verification against {a.host}")
+
+    def wanted(name):
+        return name not in skip and (not only or name in only or name == "identity")
+
+    def off(name, why):
+        if not wanted(name):
+            rep.add(name, "SKIPPED", "not selected")
+        else:
+            rep.add(name, "SKIPPED", why)
+
     info = check_identity(dev, rep, a.expect_version)
     if info is not None:
         rep.track(info)
-        check_json_depth(dev, rep)
-        check_dev_name(dev, rep)
-        check_mqtt_hidden(dev, rep)
-        check_ota_failure(dev, rep)
-        if a.url:
-            check_url_soak(dev, rep, a.url, a.rounds)
+        if wanted("internal_headroom"):
+            check_internal_headroom(dev, rep)
+        if wanted("json_depth_guard"):
+            check_json_depth(dev, rep)
+        if wanted("dev_name_limit"):
+            check_dev_name(dev, rep)
+        if wanted("mqtt_password_hidden"):
+            check_mqtt_hidden(dev, rep)
+        if wanted("ota_failure_visible"):
+            check_ota_failure(dev, rep)
+        if wanted("url_display_soak"):
+            if a.url:
+                check_url_soak(dev, rep, a.url, a.rounds)
+            else:
+                rep.add("url_display_soak", "SKIPPED", "no --url")
         else:
-            rep.add("url_display_soak", "SKIPPED", "no --url")
-        if a.firmware:
-            check_ota_roundtrip(dev, rep, a.firmware)
+            off("url_display_soak", "")
+        if wanted("url_raw_frame"):
+            if a.raw_url:
+                check_url_raw(dev, rep, a.raw_url, a.url)
+            else:
+                rep.add("url_raw_frame", "SKIPPED", "no --raw-url")
         else:
-            rep.add("ota_roundtrip", "SKIPPED", "no --firmware")
-        if a.power:
-            check_sleep_min(dev, rep)
+            off("url_raw_frame", "")
+        if wanted("ota_roundtrip"):
+            if a.firmware:
+                check_ota_roundtrip(dev, rep, a.firmware)
+            else:
+                rep.add("ota_roundtrip", "SKIPPED", "no --firmware")
         else:
-            rep.add("sleep_min_clamp", "SKIPPED", "no --power")
+            off("ota_roundtrip", "")
+        if wanted("sleep_min_clamp"):
+            if a.power:
+                check_sleep_min(dev, rep)
+            else:
+                rep.add("sleep_min_clamp", "SKIPPED", "no --power")
+        else:
+            off("sleep_min_clamp", "")
 
     if rep.stack_min:
         low = ", ".join(f"{k}={v}" for k, v in sorted(rep.stack_min.items(), key=lambda kv: kv[1])[:6])

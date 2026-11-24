@@ -1,6 +1,6 @@
 # EK410 硬件说明
 
-英文版：[hardware.md](../hardware.md)
+英文版：[hardware.md](../hardware.md) · 源码：[github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
 
 | 项 | 值 |
 |----|-----|
@@ -33,4 +33,4 @@
 ## 电源 / 指示灯
 
 - 电量：GPIO4 ADC，AW9523B 使能采样
-- 状态 RGB：AW9523B；红闪多表示故障 / OTA 失败
+- 状态 RGB：AW9523B；红色脉冲表示故障 / OTA 失败（不会常亮）

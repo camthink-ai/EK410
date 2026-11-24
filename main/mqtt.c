@@ -142,8 +142,10 @@ void mqtt_forget_error(void)
 #define MQTT_START_MIN_HEAP 48000
 /* Task stacks must live in internal RAM on ESP32-C61 (PSRAM stacks break create). */
 /* TCP client task stack. 2304 overflowed after CONNECTED (Stack protection
- * fault). 3072 is the proven floor; SoftAP may defer start until heap frees. */
-#define MQTT_TASK_STACK_TCP 3072
+ * fault); 3072 left only ~170 bytes there, and a downlink command (ping →
+ * preview telemetry publish) nests deeper still. SoftAP may defer start
+ * until heap frees. */
+#define MQTT_TASK_STACK_TCP 4096
 #define MQTT_TASK_STACK_TLS 8192
 #define MQTT_TASK_STACK_SLACK 256
 
@@ -250,10 +252,12 @@ static void publish_status(const char *state, int retain)
     if (g_MQ.topicUp[0] == '\0') {
         return;
     }
-    devInfo_t info;
-    mqttAttr_t mqtt;
-    cfg_get_dev_info(&info);
-    cfg_get_mqtt_attr(&mqtt);
+    /* Called from MQTT_EVENT_CONNECTED on the small mqtt_task stack: take the
+     * two fields without building a devInfo_t + mqttAttr_t (380 bytes). */
+    char deviceId[sizeof(((devInfo_t *)0)->deviceId)];
+    char clientId[sizeof(((mqttAttr_t *)0)->clientId)];
+    cfg_device_id(deviceId, sizeof(deviceId));
+    cfg_mqtt_client_id(clientId, sizeof(clientId));
     /* cJSON escapes quotes (panel/devName/detail) — snprintf broke on 7.09". */
     cJSON *root = cJSON_CreateObject();
     if (!root) {
@@ -261,8 +265,8 @@ static void publish_status(const char *state, int retain)
     }
     cJSON_AddStringToObject(root, "type", "status");
     cJSON_AddStringToObject(root, "state", state ? state : "offline");
-    cJSON_AddStringToObject(root, "clientId", mqtt.clientId);
-    cJSON_AddStringToObject(root, "deviceId", info.deviceId);
+    cJSON_AddStringToObject(root, "clientId", clientId);
+    cJSON_AddStringToObject(root, "deviceId", deviceId);
     cJSON_AddNumberToObject(root, "ts", (double)now_s());
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -277,15 +281,19 @@ bool mqtt_publish_telemetry(void)
     if (!g_MQ.client || !g_MQ.isConnected) {
         return false;
     }
-    devInfo_t info;
-    mqttAttr_t mqtt;
+    /* A downlink "ping" reaches this from mqtt_task: no devInfo_t / mqttAttr_t
+     * locals on that stack — take the published fields on their own. */
+    char devName[sizeof(((devInfo_t *)0)->devName)];
+    char deviceId[sizeof(((devInfo_t *)0)->deviceId)];
+    char clientId[sizeof(((mqttAttr_t *)0)->clientId)];
     wifi_ap_record_t ap;
     int rssi = 0;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         rssi = ap.rssi;
     }
-    cfg_get_dev_info(&info);
-    cfg_get_mqtt_attr(&mqtt);
+    cfg_dev_name(devName, sizeof(devName));
+    cfg_device_id(deviceId, sizeof(deviceId));
+    cfg_mqtt_client_id(clientId, sizeof(clientId));
 
     int bat_mv = battery_read_mv();
     int bat = (bat_mv >= 0) ? battery_soc_from_mv(bat_mv) : -1;
@@ -300,15 +308,15 @@ bool mqtt_publish_telemetry(void)
     (void)last_frame_get_meta(&frame);
 
     cJSON_AddStringToObject(root, "type", "telemetry");
-    cJSON_AddStringToObject(root, "devName", info.devName);
-    cJSON_AddStringToObject(root, "deviceId", info.deviceId);
-    cJSON_AddStringToObject(root, "clientId", mqtt.clientId);
+    cJSON_AddStringToObject(root, "devName", devName);
+    cJSON_AddStringToObject(root, "deviceId", deviceId);
+    cJSON_AddStringToObject(root, "clientId", clientId);
     cJSON_AddStringToObject(root, "ip", ip);
     cJSON_AddNumberToObject(root, "rssi_dbm", rssi);
     cJSON_AddNumberToObject(root, "heap_free", (double)esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "uptime_s", (double)now_s());
-    cJSON_AddStringToObject(root, "fwVersion", info.fwVersion);
-    cJSON_AddStringToObject(root, "panel", info.panel);
+    cJSON_AddStringToObject(root, "fwVersion", cfg_fw_version());
+    cJSON_AddStringToObject(root, "panel", cfg_panel_name());
     if (bat >= 0 && bat_mv >= 0) {
         cJSON_AddNumberToObject(root, "battery_percent", bat);
         cJSON_AddNumberToObject(root, "battery_mv", bat_mv);
@@ -406,15 +414,18 @@ void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detai
     if (!g_MQ.client) {
         return;
     }
-    devInfo_t info;
-    cfg_get_dev_info(&info);
+    /* Reached from the downlink handler on mqtt_task: no devInfo_t local. */
+    char devName[sizeof(((devInfo_t *)0)->devName)];
+    char deviceId[sizeof(((devInfo_t *)0)->deviceId)];
+    cfg_dev_name(devName, sizeof(devName));
+    cfg_device_id(deviceId, sizeof(deviceId));
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         return;
     }
     cJSON_AddStringToObject(root, "type", "cmd_ack");
-    cJSON_AddStringToObject(root, "devName", info.devName);
-    cJSON_AddStringToObject(root, "deviceId", info.deviceId);
+    cJSON_AddStringToObject(root, "devName", devName);
+    cJSON_AddStringToObject(root, "deviceId", deviceId);
     cJSON_AddStringToObject(root, "last_cmd", cmd ? cmd : "");
     cJSON_AddStringToObject(root, "cmd_status", status ? status : "");
     cJSON_AddStringToObject(root, "detail", detail ? detail : "");
@@ -814,9 +825,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     esp_mqtt_event_handle_t event = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED: {
-        mqttAttr_t mqtt;
-        cfg_get_mqtt_attr(&mqtt);
-        int qos = (mqtt.qos >= 0 && mqtt.qos <= 2) ? mqtt.qos : 1;
+        int qos = cfg_mqtt_qos(); /* not a 270-byte mqttAttr_t on this stack */
         ESP_LOGI(TAG, "connected — sub %s (qos %d)", g_MQ.topicDown, qos);
         int sub = esp_mqtt_client_subscribe(g_MQ.client, g_MQ.topicDown, qos);
         if (sub < 0) {

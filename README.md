@@ -7,7 +7,7 @@
 
 **CamThink** 7.09″ Spectra 6 e-ink display firmware.
 
-[中文文档](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [Docs](docs/) · [License](LICENSE)
+[中文文档](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [Docs](docs/) · [License](LICENSE) · [GitHub](https://github.com/camthink-ai/EK410)
 
 | | |
 |---|---|
@@ -16,6 +16,13 @@
 | **Panel** | E Ink Spectra 6 · logical 1600×1200 · 6 colors |
 | **Firmware** | [`VERSION`](VERSION) → **1.3.10** |
 | **Platform** | [NeoMind](https://wiki.camthink.ai) · device type `ek410_Eink` |
+| **Source** | [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410) |
+
+<p align="center">
+  <img src="assets/readme/EK410-Front-01-Alpine-Lake.jpg" alt="EK410 Spectra 6 — Alpine Lake" width="48%" />
+  &nbsp;
+  <img src="assets/readme/EK410-Front-05-Tiger.jpg" alt="EK410 Spectra 6 — Tiger" width="48%" />
+</p>
 
 ---
 

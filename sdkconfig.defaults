@@ -14,6 +14,10 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_TIMESTAMP_SOURCE_SYSTEM=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# The system event task runs the GOT_IP chain (web server start, MQTT start,
+# sleep schedule, OTA self-check) on every (re)connect. On its IDF default of
+# 2304 only ~600 bytes were left at the end of that chain on hardware.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=3072
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 # C61 internal RAM is too tight for TLS after Wi-Fi; use heap malloc (PSRAM for large).

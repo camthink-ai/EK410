@@ -91,6 +91,8 @@ body:not(.desktop) .rail{display:none}
 .rail nav button svg{width:18px; height:18px; flex:0 0 auto}
 .rail nav button.on{background:rgba(255,255,255,.1); color:#fff}
 .rail .foot{margin-top:auto; font-size:11px; opacity:.4; padding:12px}
+.rail .foot a{color:inherit; text-decoration:none}
+.rail .foot a:hover{opacity:1; text-decoration:underline}
 
 .main{
   flex:1; min-width:0;
@@ -261,8 +263,26 @@ body.desktop .net-stack{
 body.desktop .net-card{padding:28px 28px 32px; background:transparent; border:0; border-radius:0}
 body.desktop #mqttCard{border-left:1px solid var(--line)}
 
-body.desktop #provCard{grid-column:1 / -1;border-top:1px solid var(--line)}
 #mqttCard summary{cursor:pointer;padding:14px 18px;font-weight:600}
+
+/* Provisioning: quiet footer under Wi‑Fi/MQTT, divider only — not a third card */
+.prov-foot{
+  margin-top:18px; padding-top:16px;
+  border-top:1px solid var(--line);
+}
+.prov-foot .prov-title{
+  margin:0 0 6px; padding:0;
+  font:600 13px/1.3 var(--ui-font); color:var(--sub);
+  letter-spacing:.02em;
+}
+.prov-foot .prov-hint{
+  margin:0 0 12px; padding:0;
+  color:var(--sub); font-size:12px; line-height:1.5;
+  overflow-wrap:anywhere; word-break:break-word;
+}
+.prov-foot .actions{padding:0; justify-content:flex-start}
+body.desktop .prov-foot{margin-top:20px; padding-top:18px}
+body.desktop .prov-foot .actions{padding:0}
 
 /* Title hierarchy for all section cards: card-title > card-sub > field label */
 .card-title, .net-title{
@@ -898,6 +918,8 @@ body.desktop .mq-tls-panel{margin:4px 0 12px}
 .mq-tls-panel[data-verify="0"] textarea.ghost{opacity:.45; pointer-events:none}
 .meta-val{text-align:right; color:var(--sub)}
 body.desktop .meta-val{text-align:left}
+.sys-block a.meta-val{color:var(--brand); text-decoration:none; overflow-wrap:anywhere}
+.sys-block a.meta-val:hover{text-decoration:underline}
 .mode-cards{display:flex; flex-direction:column; gap:8px; padding:4px 18px 8px}
 body.desktop .mode-cards{
   padding:0 0 8px;
@@ -992,7 +1014,7 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
       <button type="button" data-page="display" data-i18n="nav.display">显示</button>
       <button type="button" data-page="system" data-i18n="nav.system">系统</button>
     </nav>
-    <div class="foot">CamThink EK410</div>
+    <div class="foot"><a href="https://github.com/camthink-ai/EK410" target="_blank" rel="noopener">CamThink EK410</a></div>
   </aside>
 
   <div class="main" id="main">
@@ -1139,15 +1161,15 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
             <button class="btn solid" type="button" id="btnMqttSave" data-i18n="common.save">保存</button>
           </div>
         </div>
-        <div class="net-card" id="provCard">
-          <h2 class="card-title" data-i18n="prov.title">配网方式</h2>
-          <p class="card-lede" data-i18n="prov.hint">SoftAP 与 BLE 互斥。热点配网时常驻 MQTT 会暂停以省内存；测 MQTT 需已连家里 Wi‑Fi（APSTA）。</p>
-          <div class="actions" style="flex-wrap:wrap;gap:8px">
-            <button class="btn" type="button" id="btnOpenSoftAp" data-i18n="prov.open_ap">开启 SoftAP</button>
-            <button class="btn" type="button" id="btnOpenBleNet" data-i18n="prov.open_ble">开启 BLE（NeoLink）</button>
-          </div>
-          <p class="card-lede" id="provErrHint" hidden></p>
+      </div>
+      <div class="prov-foot" id="provCard">
+        <h2 class="prov-title" data-i18n="prov.title">配网方式</h2>
+        <p class="prov-hint" data-i18n="prov.hint">SoftAP 与 BLE 二选一。先连家里 Wi‑Fi，再保存/测试 MQTT；连接时页面可能短暂无响应。</p>
+        <div class="actions">
+          <button class="btn" type="button" id="btnOpenSoftAp" data-i18n="prov.open_ap">开启 SoftAP</button>
+          <button class="btn" type="button" id="btnOpenBleNet" data-i18n="prov.open_ble">开启 BLE（NeoLink）</button>
         </div>
+        <p class="prov-hint" id="provErrHint" hidden></p>
       </div>
     </section>
 
@@ -1431,6 +1453,7 @@ Edge e-paper · 1600×1200
           <div class="row"><label style="min-width:88px">MAC</label><span class="grow meta-val">—</span></div>
           <div class="row"><label style="min-width:88px" data-i18n="ov.fw">固件</label><span class="grow meta-val">0.1.0-dev</span></div>
           <div class="row"><label style="min-width:88px" data-i18n="ov.part">分区</label><span class="grow meta-val">ota_0</span></div>
+          <div class="row"><label style="min-width:88px" data-i18n="sys.source">源码</label><a class="grow meta-val" href="https://github.com/camthink-ai/EK410" target="_blank" rel="noopener">github.com/camthink-ai/EK410</a></div>
         </div>
 
         <div class="sys-block">
@@ -1541,7 +1564,7 @@ zh:{
   "preview.tag":"显示预览 · 六色 / 布局","preview.phone":"手机","preview.tablet":"平板","preview.desktop":"桌面",
   "nav.overview":"概览","nav.network":"网络","nav.display":"显示","nav.system":"系统",
   "banner.title":"配网热点已开启","banner.desc":"SSID 为 EK410_xxxxxx（设备 MAC 后缀，与设备名 EK410-deviceId 不同）；密码 12345678。配置中保持开启，可主动关闭。","banner.close":"关闭热点","banner.ble":"改用 BLE","toast.ap_closed":"热点已关闭","toast.ap_lost":"热点已关闭或连接断开，请改连家里 Wi‑Fi 后用设备 IP 打开。","toast.ble_start":"正在开启 BLE 配网…","toast.ble_ok":"BLE 已开启，请用 NeoLink 连接","toast.ble_busy":"MQTT 正忙（大图遥测），请稍后再开 SoftAP/BLE","toast.mqtt_busy":"MQTT 正忙，配置未保存，请稍后再试","toast.mqtt_saved_softap":"配置已保存，请先连接上游 Wi‑Fi","toast.mqtt_softap_connect":"已保存，正在连接 MQTT…","toast.mqtt_wait":"正在连接 MQTT，请稍候…","toast.mqtt_wait_progress":"正在连接 MQTT…（约 {0} 秒）","toast.mqtt_softap_pause":"连接中：热点网页可能短暂无响应，请稍候…","toast.mqtt_ok":"MQTT 已连接","toast.mqtt_fail":"MQTT 未连接","toast.mqtt_infra":"MQTT 后台未就绪，请重启设备","toast.mqtt_outcome_pending":"仍在连接或网页曾短暂中断，请看概览 MQTT 状态","toast.mqtt_save_unknown":"网页短暂中断，请看概览是否已连接，勿连点","toast.mqtt_warn_port":"端口与协议可能不匹配，仍要保存吗？","toast.sleep_deferred_ap":"已保存；SoftAP 开启时休眠暂不生效，关热点后自动排程","toast.sleep_deferred_sta":"已保存；连上家里 Wi‑Fi 后开始计时休眠（一直连不上则最多约 10 分钟后休眠）","toast.ota_downloading":"正在下载固件，请勿断电…","toast.ota_failed":"固件升级失败","toast.img_unreadable":"无法解码这张图片，请换 PNG 或 JPG","toast.display_done":"刷屏完成","toast.display_fail":"刷屏失败，请查看事件日志","toast.ota_pending":"OTA 待确认：请保持联网直至状态消失",
-  "prov.title":"配网方式","prov.hint":"SoftAP 与 BLE 互斥。先连家里 Wi‑Fi，再保存/测试 MQTT；连接时网页可能短暂无响应，成功后可保持 SoftAP 并看到已连接。","prov.open_ap":"开启 SoftAP","prov.open_ble":"开启 BLE（NeoLink）",
+  "prov.title":"配网方式","prov.hint":"SoftAP 与 BLE 二选一。先连家里 Wi‑Fi，再保存/测试 MQTT；连接时页面可能短暂无响应。","prov.open_ap":"开启 SoftAP","prov.open_ble":"开启 BLE（NeoLink）",
   "ov.mqtt_paused":"MQTT 需先连家里 Wi‑Fi","ov.mqtt_heap":"MQTT 堆不足推迟","ov.mqtt_web_first":"配网页优先，MQTT 即将恢复","ov.mqtt_connecting":"MQTT 连接中","ov.bat_na":"电量不可用",
   "ov.wlan_off":"WLAN 未连接","ov.wlan_on":"WLAN 已连接","ov.mqtt_off":"MQTT 未连接","ov.mqtt_on":"MQTT 已连接","ov.ap_on":"热点开启","ov.ap_off":"热点关闭",
   "ov.uptime_val":"2 分钟","ov.uptime":"运行","ov.cfg_net":"配置网络","ov.edit_screen":"编辑画面",
@@ -1592,7 +1615,7 @@ zh:{
   "md.fg":"文字",
   "md.note":"右侧为屏幕布局预览（非富文本）。H1→大字 · 段落→正文 · 列表→多行。",
   "md.sample":"# CamThink EK410\n\n边缘墨水屏 · 1600×1200\n\n- Wi‑Fi / MQTT 配网\n- 六色显示\n",
-  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_log":"事件日志","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。切换后立即保存。","sys.log_hint":"关键事件（配网 / Wi‑Fi / MQTT / 刷屏 / 休眠），约 48KB 或 7 天自动裁剪。用于现场排查。","sys.log_unavailable":"当前分区表无事件日志（旧机应用 OTA 后常见）。完整烧录后可用。","sys.log_size":"大小","sys.log_dl":"下载日志","sys.log_clear":"清空","toast.log_cleared":"事件日志已清空","toast.log_unavailable":"事件日志不可用","toast.queue_full":"设备忙，请稍后再试","toast.sleep_pending":"设备正在进入休眠","toast.oom":"设备内存不足","toast.img_qual_saved":"图片质量已保存","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.wake_sec":"在线窗（秒）","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.pwr_save":"保存工作模式","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.ota_url":"URL 升级","sys.ota_upload":"上传升级","sys.ota_file":"固件文件","sys.ota_progress":"进度","sys.ota_hint":"推荐上传本地固件包；也可填远程 HTTPS URL。升级后重启，新固件自检通过才保留，否则自动回滚。","toast.ota_uploading":"正在上传固件…","toast.ota_ok_reboot":"上传成功，设备重启中…","toast.ota_need_file":"请先选择 .bin 固件文件","toast.ota_bad_file":"文件过小或不是固件包","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开 — 点「保存工作模式」生效","toast.mode_cycle":"已选定时刷新 — 点「保存工作模式」生效","toast.mode_hibernate":"已选休眠 — 保存后将深睡","toast.sys_saved":"系统设置已保存","toast.pwr_saved":"工作模式已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
+  "sys.sec_prefs":"偏好","sys.sec_info":"设备信息","sys.sec_log":"事件日志","sys.sec_update":"名称与升级","sys.sec_danger":"危险操作","sys.source":"源码","sys.lang":"语言","sys.img_qual":"URL 图片","sys.img_qual_quality":"效果优先","sys.img_qual_speed":"速度优先","sys.img_qual_hint":"仅影响设备侧 URL 解码（display_url / 唤醒图）。网页本地上传仍为全分辨率。切换后立即保存。","sys.log_hint":"关键事件（配网 / Wi‑Fi / MQTT / 刷屏 / 休眠），约 48KB 或 7 天自动裁剪。用于现场排查。","sys.log_unavailable":"当前分区表无事件日志（旧机应用 OTA 后常见）。完整烧录后可用。","sys.log_size":"大小","sys.log_dl":"下载日志","sys.log_clear":"清空","toast.log_cleared":"事件日志已清空","toast.log_unavailable":"事件日志不可用","toast.queue_full":"设备忙，请稍后再试","toast.sleep_pending":"设备正在进入休眠","toast.oom":"设备内存不足","toast.img_qual_saved":"图片质量已保存","sys.work_mode":"工作模式","sys.work_hint":"默认常开。定时刷新省电轮播；休眠=关机语义，MAIN 唤醒。","sys.mode_always":"常开","sys.mode_always_desc":"Wi‑Fi / MQTT 保持在线；墨水屏静态保持最后一帧，随时可推送更新。","sys.mode_cycle":"定时刷新","sys.mode_cycle_desc":"醒来后在线一段时间（可设窗口、拉唤醒图 / 收指令），然后深度睡眠 N 分钟。适合看板轮播。","sys.mode_hibernate":"休眠","sys.mode_hibernate_desc":"保存后立刻深睡直至短按 MAIN 唤醒；画面保留。适合电池「关机」。","sys.wake_sec":"在线窗（秒）","sys.sleep_min":"周期（分）","sys.wake":"唤醒图","sys.wake_hint":"可选。每次醒来先拉取并全刷该帧，再进入在线窗口。","sys.pwr_save":"保存工作模式","sys.sleep_now":"立即休眠","sys.sleep_now_tip":"设备将深度睡眠，短按 MAIN 唤醒。当前画面会保留。","sys.device":"设备","sys.name":"设备名","sys.ota":"升级","sys.ota_url":"URL 升级","sys.ota_upload":"上传升级","sys.ota_file":"固件文件","sys.ota_progress":"进度","sys.ota_hint":"推荐上传本地固件包；也可填远程 HTTPS URL。升级后重启，新固件自检通过才保留，否则自动回滚。","toast.ota_uploading":"正在上传固件…","toast.ota_ok_reboot":"上传成功，设备重启中…","toast.ota_need_file":"请先选择 .bin 固件文件","toast.ota_bad_file":"文件过小或不是固件包","sys.reboot":"重启设备","sys.factory":"恢复出厂","toast.mode_always":"已选常开 — 点「保存工作模式」生效","toast.mode_cycle":"已选定时刷新 — 点「保存工作模式」生效","toast.mode_hibernate":"已选休眠 — 保存后将深睡","toast.sys_saved":"系统设置已保存","toast.pwr_saved":"工作模式已保存","toast.sleeping":"正在休眠…","ov.sleep_cycle":"{0} 分钟","ov.sleep_off":"休眠",
   "toast.guide_on":"已显示安全区 / 中线","toast.guide_off":"已隐藏布局辅助",
   "toast.color_eink":"预览：Spectra 6 量化","toast.color_source":"预览：原色（未量化）",
   "toast.mode_image":"图片：预览量化与布局","toast.mode_editor":"编辑器：布局 + 六色","toast.mode_md":"Markdown：映射到屏布局",
@@ -1607,7 +1630,7 @@ en:{
   "preview.tag":"Display preview · 6-color / layout","preview.phone":"Phone","preview.tablet":"Tablet","preview.desktop":"Desktop",
   "nav.overview":"Overview","nav.network":"Network","nav.display":"Display","nav.system":"System",
   "banner.title":"SoftAP is on","banner.desc":"SSID EK410_xxxxxx (MAC suffix — not the EK410-deviceId name); password 12345678. Stays on while configuring.","banner.close":"Close SoftAP","banner.ble":"Use BLE","toast.ap_closed":"Hotspot closed","toast.ap_lost":"Hotspot closed or link lost. Rejoin home Wi‑Fi and open the device IP.","toast.ble_start":"Starting BLE provisioning…","toast.ble_ok":"BLE on — connect with NeoLink","toast.ble_busy":"MQTT busy (large telemetry) — retry SoftAP/BLE later","toast.mqtt_busy":"MQTT busy — config not saved, retry shortly","toast.mqtt_saved_softap":"Saved — join upstream Wi‑Fi first","toast.mqtt_softap_connect":"Saved — connecting MQTT…","toast.mqtt_wait":"Connecting MQTT…","toast.mqtt_wait_progress":"Connecting MQTT… (~{0}s left)","toast.mqtt_softap_pause":"Connecting — SoftAP page may pause briefly…","toast.mqtt_ok":"MQTT connected","toast.mqtt_fail":"MQTT not connected","toast.mqtt_infra":"MQTT backend not ready — reboot device","toast.mqtt_outcome_pending":"Still connecting or page paused — check overview MQTT status","toast.mqtt_save_unknown":"Page paused briefly — check overview; do not tap again","toast.mqtt_warn_port":"Port and protocol may mismatch. Save anyway?","toast.sleep_deferred_ap":"Saved; sleep waits until SoftAP closes","toast.sleep_deferred_sta":"Saved; sleep starts when home Wi‑Fi is up (at most ~10 min if it never connects)","toast.ota_downloading":"Downloading firmware — keep the device powered…","toast.ota_failed":"Firmware update failed","toast.img_unreadable":"Cannot decode this image — try PNG or JPG","toast.display_done":"Display refresh done","toast.display_fail":"Display failed — check event log","toast.ota_pending":"OTA pending verify — stay online until cleared",
-  "prov.title":"Provisioning","prov.hint":"SoftAP and BLE are mutually exclusive. Join home Wi‑Fi first, then save/test MQTT; the page may pause briefly while connecting, then stay on SoftAP with mqttConnected.","prov.open_ap":"Open SoftAP","prov.open_ble":"Open BLE (NeoLink)",
+  "prov.title":"Provisioning","prov.hint":"SoftAP and BLE are alternatives. Join home Wi‑Fi first, then save/test MQTT; the page may pause briefly while connecting.","prov.open_ap":"Open SoftAP","prov.open_ble":"Open BLE (NeoLink)",
   "ov.mqtt_paused":"MQTT needs home Wi‑Fi","ov.mqtt_heap":"MQTT deferred (heap)","ov.mqtt_web_first":"SoftAP web first — MQTT resumes soon","ov.mqtt_connecting":"MQTT connecting","ov.bat_na":"Battery N/A",
   "ov.wlan_off":"WLAN disconnected","ov.wlan_on":"WLAN connected","ov.mqtt_off":"MQTT disconnected","ov.mqtt_on":"MQTT connected","ov.ap_on":"Hotspot on","ov.ap_off":"Hotspot off",
   "ov.uptime_val":"2 min","ov.uptime":"Uptime","ov.cfg_net":"Configure network","ov.edit_screen":"Edit screen",
@@ -1658,7 +1681,7 @@ en:{
   "md.fg":"Text",
   "md.note":"Right side is screen layout preview (not rich text). H1→large · paragraph→body · list→lines.",
   "md.sample":"# CamThink EK410\n\nEdge e‑paper · 1600×1200\n\n- Wi‑Fi / MQTT setup\n- 6‑color display\n",
-  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_log":"Event log","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Changes save immediately.","sys.log_hint":"Critical events (prov / Wi‑Fi / MQTT / refresh / sleep). Capped ~48KB or 7 days. For field debug.","sys.log_unavailable":"Event log partition missing (common after app-only OTA on older tables). Full flash enables it.","sys.log_size":"Size","sys.log_dl":"Download log","sys.log_clear":"Clear","toast.log_cleared":"Event log cleared","toast.log_unavailable":"Event log unavailable","toast.queue_full":"Device busy — try again","toast.sleep_pending":"Device is entering sleep","toast.oom":"Device out of memory","toast.img_qual_saved":"Image quality saved","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"Stay online for a configurable window after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.wake_sec":"Online window (s)","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.pwr_save":"Save work mode","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.ota_url":"URL update","sys.ota_upload":"Upload update","sys.ota_file":"Firmware file","sys.ota_progress":"Progress","sys.ota_hint":"Prefer uploading a local .bin; HTTPS URL also works. Device reboots; new image is kept only after self-check, else bootloader rolls back.","toast.ota_uploading":"Uploading firmware…","toast.ota_ok_reboot":"Upload OK — rebooting…","toast.ota_need_file":"Choose a .bin firmware file first","toast.ota_bad_file":"File too small or not a firmware image","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected — tap Save work mode","toast.mode_cycle":"Timed refresh selected — tap Save work mode","toast.mode_hibernate":"Hibernate selected — save will deep-sleep","toast.sys_saved":"System settings saved","toast.pwr_saved":"Work mode saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
+  "sys.sec_prefs":"Preferences","sys.sec_info":"Device info","sys.sec_log":"Event log","sys.sec_update":"Name & update","sys.sec_danger":"Danger zone","sys.source":"Source","sys.lang":"Language","sys.img_qual":"URL image","sys.img_qual_quality":"Quality","sys.img_qual_speed":"Speed","sys.img_qual_hint":"Affects on-device URL decode only (display_url / wake image). SoftAP local upload stays full-resolution. Changes save immediately.","sys.log_hint":"Critical events (prov / Wi‑Fi / MQTT / refresh / sleep). Capped ~48KB or 7 days. For field debug.","sys.log_unavailable":"Event log partition missing (common after app-only OTA on older tables). Full flash enables it.","sys.log_size":"Size","sys.log_dl":"Download log","sys.log_clear":"Clear","toast.log_cleared":"Event log cleared","toast.log_unavailable":"Event log unavailable","toast.queue_full":"Device busy — try again","toast.sleep_pending":"Device is entering sleep","toast.oom":"Device out of memory","toast.img_qual_saved":"Image quality saved","sys.work_mode":"Work mode","sys.work_hint":"Default always-on. Timed refresh for battery dashboards; hibernate = off until MAIN.","sys.mode_always":"Always on","sys.mode_always_desc":"Wi‑Fi / MQTT stay online. The e‑ink panel holds the last frame and accepts pushes anytime.","sys.mode_cycle":"Timed refresh","sys.mode_cycle_desc":"Stay online for a configurable window after wake (optional wake image / commands), then deep sleep for N minutes. Good for dashboards.","sys.mode_hibernate":"Hibernate","sys.mode_hibernate_desc":"On save, deep-sleep until a short MAIN press. Panel art is kept. Battery “power off”.","sys.wake_sec":"Online window (s)","sys.sleep_min":"Period (min)","sys.wake":"Wake image","sys.wake_hint":"Optional. Fetched and full-refreshed on each wake before the online window.","sys.pwr_save":"Save work mode","sys.sleep_now":"Sleep now","sys.sleep_now_tip":"Device will deep-sleep. Short-press MAIN to wake. Current panel is kept.","sys.device":"Device","sys.name":"Device name","sys.ota":"Update","sys.ota_url":"URL update","sys.ota_upload":"Upload update","sys.ota_file":"Firmware file","sys.ota_progress":"Progress","sys.ota_hint":"Prefer uploading a local .bin; HTTPS URL also works. Device reboots; new image is kept only after self-check, else bootloader rolls back.","toast.ota_uploading":"Uploading firmware…","toast.ota_ok_reboot":"Upload OK — rebooting…","toast.ota_need_file":"Choose a .bin firmware file first","toast.ota_bad_file":"File too small or not a firmware image","sys.reboot":"Reboot","sys.factory":"Factory reset","toast.mode_always":"Always-on selected — tap Save work mode","toast.mode_cycle":"Timed refresh selected — tap Save work mode","toast.mode_hibernate":"Hibernate selected — save will deep-sleep","toast.sys_saved":"System settings saved","toast.pwr_saved":"Work mode saved","toast.sleeping":"Sleeping…","ov.sleep_cycle":"{0} min","ov.sleep_off":"Hibernate",
   "toast.guide_on":"Layout guides on","toast.guide_off":"Layout guides off",
   "toast.color_eink":"Preview: Spectra 6 quantized","toast.color_source":"Preview: original (not quantized)",
   "toast.mode_image":"Image: quantize & layout preview","toast.mode_editor":"Editor: layout + 6‑color","toast.mode_md":"Markdown: mapped to screen layout",

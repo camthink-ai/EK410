@@ -124,6 +124,11 @@ void app_epd_mqtt_ack_next(const char *cmd);
  * Returns 0 queued, -1 queue full, -2 sleep pending, -3 other. */
 int app_epd_url_async(const char *url);
 
+/* Queue a URL OTA: it downloads on the render task (see ota_url_run). The
+ * caller has claimed the OTA, stopped MQTT and cancelled sleep first.
+ * Same return codes as app_epd_url_async. */
+int app_epd_ota_async(const char *url);
+
 /** Map app_epd_*_async return code to a short error token for HTTP/MQTT. */
 static inline const char *app_epd_queue_err(int rc)
 {

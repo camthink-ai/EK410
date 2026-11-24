@@ -1,5 +1,7 @@
 # SoftAP / LAN HTTP API
 
+Source: [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 Base URL: SoftAP `http://192.168.4.1`, or the device's STA IP after joining home Wi‑Fi.
 
 Most JSON handlers return a flat object. Errors: `{"code":1,"msg":"..."}`.
@@ -14,12 +16,13 @@ Companion: [API（中文）](zh/api.md)
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/v1/system/getDevInfo` | `devName`, `devMac`, `deviceId`, `fwVersion`, `ip`, `wifiConnected`, `wifiState`, `mqttConnected`, `mqttStarted`, `mqttReason`, `mqttLastError`, `httpServerUp`, `softapUp`, `bleProvUp`, `softApSsid` (plus `softApPass` while the SoftAP is up), `provisioned`, `panelOk`, `displayBusy`, `powerMode`, `sleepMin`, `wakeSec`, `uptime_s`, `batterySense` / `batteryMv` / `batteryPercent`, `otaPartition`, `otaPendingVerify`, **`otaState`** (`idle` \| `running` \| `failed`) and `otaError` after a failed attempt, plus diagnostics `heap` (`free`, `minFree`, `freeInt`, `minFreeInt`, `largestInt`, `freeSpiram`, `largestSpiram` — bytes) and `stackMin` (smallest free stack ever seen, bytes, per long-lived task) |
+| GET | `/api/v1/system/getDevInfo` | `devName`, `devMac`, `deviceId`, `fwVersion`, `ip`, `wifiConnected`, `wifiState`, `mqttConnected`, `mqttStarted`, `mqttReason`, `mqttLastError`, `httpServerUp`, `softapUp`, `bleProvUp`, `softApSsid` (plus `softApPass` while the SoftAP is up), `provisioned`, `panelOk`, `displayBusy`, `powerMode`, `sleepMin`, `wakeSec`, `uptime_s`, `batterySense` / `batteryMv` / `batteryPercent`, `otaPartition`, `otaPendingVerify`, **`otaState`** (`idle` \| `running` \| `failed`) and `otaError` after a failed attempt |
+| GET | `/api/v1/system/getDiag` | On-demand diagnostics for validating a build on hardware: `heap` (`free`, `minFree`, `freeInt`, `minFreeInt`, `largestInt`, `freeSpiram`, `largestSpiram` — bytes) and `stackMin` (smallest free stack ever seen, bytes, per long-lived task) |
 | POST | `/api/v1/system/setDevInfo` | `{devName}` — 1..32 bytes of UTF‑8; longer names are rejected (`devName too long (max 32 bytes)`) |
 | POST | `/api/v1/system/setDevReset` | reboot |
 | POST | `/api/v1/system/setDevFactory` | wipe config, BLE bonds and the event log (keeps `deviceId`), then reboot |
-| POST | `/api/v1/system/setDevUpgrade` | `{url}` — HTTPS-only OTA. Replies `{code:0}` **before** the download: poll `getDevInfo.otaState`; `failed` carries `otaError`, otherwise the device reboots into the new image |
-| POST | `/api/v1/system/uploadFirmware` | raw `application/octet-stream` app image, 200 KB – 4 MB, `Content-Length` required |
+| POST | `/api/v1/system/setDevUpgrade` | `{url}` (≤ 511 chars) — HTTPS-only OTA. Replies `{code:0}` **before** the download: poll `getDevInfo.otaState`; `failed` carries `otaError`, otherwise the device reboots into the new image. A failed attempt restores MQTT and the sleep schedule by itself |
+| POST | `/api/v1/system/uploadFirmware` | raw `application/octet-stream` app image, 200 KB – 4 MB, `Content-Length` required; refused with `ota busy` while another OTA is running |
 | GET | `/api/v1/system/getEventLogMeta` | `{present,bytes,seq,capBytes,keepDays,timeOk}` |
 | GET | `/api/v1/system/eventLog` | text/plain download |
 | POST | `/api/v1/system/clearEventLog` | wipe the log (`event log clear failed` on error) |
@@ -48,7 +51,7 @@ Companion: [API（中文）](zh/api.md)
 | POST | `/api/v1/display/renderText` | `{text,color,bg,scale}` |
 | POST | `/api/v1/display/renderCanvas` | `{bg,items[]}` text / rect / image / qr (≤ 48 items, ≤ 2 QR) |
 | POST | `/api/v1/display/uploadFrame` | raw **960000**-byte native frame (layout below) |
-| POST | `/api/v1/display/displayUrl` | `{url}` device fetch + decode + refresh (JPEG / PNG / raw; http and https) |
+| POST | `/api/v1/display/displayUrl` | `{url}` device fetch + decode + refresh (JPEG / PNG / raw; http and https). Follows up to 5 redirects (an https URL only redirects to https). Bodies are buffered in PSRAM: nominal cap 1280 KB. If one free block is not enough (e.g. a web-poll TCP control block split the heap), the file is read into up to three pieces and JPEG/PNG decode from those pieces in order; a raw 960000-byte frame uses the same path. A file that still cannot fit is rejected before the body is read and the previous frame stays (`file >1280KB limit`, `need …KB, got …KB in pieces`). Only baseline JPEG is decoded; a progressive JPEG fails with `JPEG decode fail` |
 | POST | `/api/v1/display/proxyImage` | `{url}` → image bytes for the **web preview** |
 | GET | `/api/v1/display/getLastFrameMeta` | `{present,seq,source,savedUs,bytes,crc32}` |
 | GET | `/api/v1/display/lastFrame` | raw **960000**-byte native 4bpp frame (same layout as `uploadFrame`) |

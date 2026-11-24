@@ -1,5 +1,7 @@
 # EK410 单固件自动化测试方案
 
+源码：[github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 **发布验收使用同一份 `ek410.bin`。** 用这份镜像验证 SoftAP、BLE、MQTT、刷屏、睡眠和 OTA。三层门禁：
 
 | 门禁 | 入口 | 用途 |
@@ -23,11 +25,11 @@
 
 ## 修复核对（candidate 档）
 
-`candidate` 档还会执行 `tools/fix_verification.py`：逐项在设备上核对本版的修复，旧固件上会报失败——深层 JSON 被拒绝、`devName` 长度限制、MQTT 密码不回传、URL 升级失败通过 `otaState` 可见、用待发布镜像做一次本地上传 OTA 往返。加 `--verify-url`（设备能访问的图片地址）可跑 URL 刷图压力；`--power` 额外核对 `sleepMin` 上限。`getDevInfo` 带有 `heap` 与 `stackMin`（各任务最小剩余栈，字节），每轮压力前后都读一下。
+`candidate` 档还会执行 `tools/fix_verification.py`：逐项在设备上核对本版的修复，旧固件上会报失败——深层 JSON 被拒绝、`devName` 长度限制、MQTT 密码不回传、URL 升级失败通过 `otaState` 可见**且 MQTT 随后恢复**、用待发布镜像做一次本地上传 OTA 往返。加 `--verify-url`（设备能访问的图片地址）可跑 URL 刷图压力，同时核对每轮之后 MQTT 恢复、PSRAM 不逐轮减少；加 `--verify-raw-url`（960000 字节原生帧地址）核对原生帧夹在普通图片之间也能显示——这是画质最好的路径，需要一整块约 940 KB 的 PSRAM；`--power` 额外核对 `sleepMin` 上限。`GET /api/v1/system/getDiag` 带有 `heap` 与 `stackMin`（各任务最小剩余栈，字节），每轮压力前后都读一下。ESP32-C61 在 Wi-Fi、网页服务、MQTT 都起来的稳态下，`heap.freeInt` 应保持在约 15 KB 以上，`largestInt` 在 8 KB 以上（低于 8 KB 时 MQTT 起不来）。
 
 ```bash
-python3 tools/qa_gate.py --tier candidate --port PORT --host IP --mqtt-password '…' --verify-url http://PC:8000/t.png
-python3 tools/fix_verification.py --host IP --url http://PC:8000/t.png --rounds 20 --firmware dist/ek410.bin
+python3 tools/qa_gate.py --tier candidate --port PORT --host IP --mqtt-password '…' --verify-url http://PC:8000/t.png --verify-raw-url http://PC:8000/frame.bin
+python3 tools/fix_verification.py --host IP --url http://PC:8000/t.png --rounds 20 --raw-url http://PC:8000/frame.bin --firmware dist/ek410.bin
 ```
 
 ---

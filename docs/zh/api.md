@@ -1,5 +1,7 @@
 # SoftAP / 局域网 HTTP API
 
+源码：[github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 基址：SoftAP `http://192.168.4.1`，或入网后的设备 STA IP。
 
 多数接口直接返回 JSON 对象；错误形如 `{"code":1,"msg":"..."}`。
@@ -14,12 +16,13 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/system/getDevInfo` | `devName`、`devMac`、`deviceId`、`fwVersion`、`ip`、`wifiConnected`、`wifiState`、`mqttConnected`、`mqttStarted`、`mqttReason`、`mqttLastError`、`httpServerUp`、`softapUp`、`bleProvUp`、`softApSsid`（热点开启时另有 `softApPass`）、`provisioned`、`panelOk`、`displayBusy`、`powerMode`、`sleepMin`、`wakeSec`、`uptime_s`、`batterySense` / `batteryMv` / `batteryPercent`、`otaPartition`、`otaPendingVerify`，以及 **`otaState`**（`idle` \| `running` \| `failed`）与失败后的 `otaError`；另有诊断字段 `heap`（`free`、`minFree`、`freeInt`、`minFreeInt`、`largestInt`、`freeSpiram`、`largestSpiram`，单位字节）和 `stackMin`（各常驻任务历史上最小剩余栈，字节） |
+| GET | `/api/v1/system/getDevInfo` | `devName`、`devMac`、`deviceId`、`fwVersion`、`ip`、`wifiConnected`、`wifiState`、`mqttConnected`、`mqttStarted`、`mqttReason`、`mqttLastError`、`httpServerUp`、`softapUp`、`bleProvUp`、`softApSsid`（热点开启时另有 `softApPass`）、`provisioned`、`panelOk`、`displayBusy`、`powerMode`、`sleepMin`、`wakeSec`、`uptime_s`、`batterySense` / `batteryMv` / `batteryPercent`、`otaPartition`、`otaPendingVerify`，以及 **`otaState`**（`idle` \| `running` \| `failed`）与失败后的 `otaError` |
+| GET | `/api/v1/system/getDiag` | 按需读取的现场诊断（上机验证用）：`heap`（`free`、`minFree`、`freeInt`、`minFreeInt`、`largestInt`、`freeSpiram`、`largestSpiram`，单位字节）和 `stackMin`（各常驻任务历史上最小剩余栈，字节） |
 | POST | `/api/v1/system/setDevInfo` | `{devName}`，UTF‑8 编码 1..32 字节；超长返回错误（`devName too long (max 32 bytes)`） |
 | POST | `/api/v1/system/setDevReset` | 重启 |
 | POST | `/api/v1/system/setDevFactory` | 清除配置、蓝牙配对与事件日志（保留 `deviceId`），然后重启 |
-| POST | `/api/v1/system/setDevUpgrade` | `{url}`，仅 HTTPS OTA。下载开始**之前**就返回 `{code:0}`：请轮询 `getDevInfo.otaState`，`failed` 时带 `otaError`，否则设备重启进入新固件 |
-| POST | `/api/v1/system/uploadFirmware` | 原始 `application/octet-stream` 应用镜像，200 KB – 4 MB，必须带 `Content-Length` |
+| POST | `/api/v1/system/setDevUpgrade` | `{url}`（≤ 511 字符），仅 HTTPS OTA。下载开始**之前**就返回 `{code:0}`：请轮询 `getDevInfo.otaState`，`failed` 时带 `otaError`，否则设备重启进入新固件。升级失败后设备自行恢复 MQTT 与休眠排程 |
+| POST | `/api/v1/system/uploadFirmware` | 原始 `application/octet-stream` 应用镜像，200 KB – 4 MB，必须带 `Content-Length`；另有升级在进行时返回 `ota busy` |
 | GET | `/api/v1/system/getEventLogMeta` | `{present,bytes,seq,capBytes,keepDays,timeOk}` |
 | GET | `/api/v1/system/eventLog` | text/plain 下载 |
 | POST | `/api/v1/system/clearEventLog` | 清空日志（失败返回 `event log clear failed`） |
@@ -48,7 +51,7 @@
 | POST | `/api/v1/display/renderText` | `{text,color,bg,scale}` |
 | POST | `/api/v1/display/renderCanvas` | `{bg,items[]}` 文本 / 矩形 / 图片 / 二维码（≤ 48 项，≤ 2 个二维码） |
 | POST | `/api/v1/display/uploadFrame` | 原始 **960000** 字节原生帧（布局见下） |
-| POST | `/api/v1/display/displayUrl` | `{url}` 设备自拉、解码并刷新（JPEG / PNG / raw；http 与 https） |
+| POST | `/api/v1/display/displayUrl` | `{url}` 设备自拉、解码并刷新（JPEG / PNG / raw；http 与 https）。跟随最多 5 次跳转（https 地址只跳到 https）。响应体缓存在 PSRAM：名义上限 1280 KB。若单块不够（例如网页轮询留下的 TCP 控制块把堆切开），则分最多 3 段读入，JPEG/PNG 按回调顺序从分段缓冲解码；960000 字节原生帧同样走分段。仍装不下的文件在读正文前拒绝，屏幕保留上一画面（`file >1280KB limit`、`need …KB, got …KB in pieces`）。只支持基线 JPEG，渐进式 JPEG 报 `JPEG decode fail` |
 | POST | `/api/v1/display/proxyImage` | `{url}` → 图片字节，供**网页预览** |
 | GET | `/api/v1/display/getLastFrameMeta` | `{present,seq,source,savedUs,bytes,crc32}` |
 | GET | `/api/v1/display/lastFrame` | 原始 **960000** 字节 native 4bpp（与 `uploadFrame` 同布局） |

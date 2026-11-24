@@ -1,6 +1,6 @@
 # EK410 Hardware Notes
 
-Companion: [硬件说明（中文）](zh/hardware.md)
+Companion: [硬件说明（中文）](zh/hardware.md) · Source: [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
 
 | Item | Value |
 |------|--------|
@@ -33,4 +33,4 @@ Companion: [硬件说明（中文）](zh/hardware.md)
 ## Power / LED
 
 - Battery sense: ADC GPIO4, enable via AW9523B
-- Status RGB: AW9523B (`led.c`); red blink = fault / OTA fail paths
+- Status RGB: AW9523B (`led.c`); red pulse = fault / OTA fail paths (never sticky)

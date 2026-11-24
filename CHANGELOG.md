@@ -12,12 +12,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [1.3.10] — 2026-11-24
 
-Release-readiness audit of 1.3.9. Every change below is from static review plus
-host checks (clean build, host unit tests); **none of it has been validated on
-hardware yet** — run `tools/qa_gate.py` candidate + 72 h soak before shipping.
+Release-readiness audit of 1.3.9, plus what the first on-device run exposed.
+Validated on **one** ESP32-C61HR2 bench unit (STA + web server + MQTT over
+TCP): clean build from `sdkconfig.defaults`, host tests, an 18-step display /
+stack soak, a follow-up 13-step URL soak (large baseline JPEG and raw frames
+after a display, HTTP redirects, progressive / oversize / truncated rejects —
+zero reboots, MQTT back after every step), `tools/fix_verification.py`
+**10/10** (including `--url`, `--raw-url`, local-upload OTA round trip, and
+`--power`), and a real-HTTPS URL OTA **failure** path (TLS to a missing GitHub
+release asset → `otaState=failed`, MQTT restored). Image: `dist/ek410.bin`
+sha256 prefix `5fc910f9736a`.
+
+**Known on hardware, not fixed in this release** (details in
+`docs/c61_memory_allocation_report.md` §11.5):
+
+- **Progressive JPEG is not decodable** (`JPEG decode fail`): the ROM decoder
+  only handles baseline JPEG, and many web images are progressive.
+- PSRAM can still fragment after a successful display (largest free block
+  often ~0.5–0.8 MB). URL bodies are now read in up to three pieces and
+  JPEG/PNG decode from those pieces, so the fragmentation no longer rejects
+  a ~0.9 MB baseline JPEG or a 960000-byte raw frame.
+
+**Not validated on hardware:** MQTTS, SoftAP and BLE provisioning, CYCLE
+sleep and the wake URL on battery, MQTT downlink commands, a *successful*
+URL OTA (failure path with real HTTPS was checked), more than one unit, and
+the 72 h soak. Run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 
 ### Fixed
 
+- **Internal RAM ran out with Wi-Fi, the web server and MQTT up** (found on hardware; 1.3.9 behaves the same). The render task reserved a 32 KB stack while its deepest measured path needs 3.6 KB, which left 5.4 KB of internal RAM in blocks of at most 3.3 KB: the first stop of MQTT — every URL image display, OTA attempt or broker change — left no block ≥ 8 KB, so MQTT stayed down (`deferred_heap`) until reboot; an HTTPS image got down to 1.4 KB, failed to read and took the web server and the network with it; a URL OTA could not create its 12 KB task (`task spawn failed`). With a 16 KB render stack and cJSON nodes in PSRAM the largest block at MQTT start went from 8.7 KB to 19.4 KB and the steady state from 5.4 KB / 3.3 KB (free / largest) to 21.8 KB / 13.3 KB.
+- **MQTT task stack had 168 bytes left after connecting**, and a downlink command (`ping` → preview telemetry) nests deeper still. Stack 3072 → 4096, and the status / telemetry / ack publishers no longer keep 380-byte config structs on it.
+- **System event task had ~600 bytes of stack left** after the `GOT_IP` chain that runs on every (re)connect — web server start, MQTT start, sleep schedule, OTA self-check. Stack 2304 → 3072 (`sdkconfig.defaults`).
+- **Large URL images failed with `download OOM`** (an 857 KB JPEG after a few displays): the whole-body buffer was allocated only after the headers, by which time the incoming data had split the free PSRAM block. It is now reserved before the transfer and cut back to `Content-Length` as soon as the headers are in. The splitting that appeared *after* a display is the next bullet.
+- **A raw frame or large JPEG/PNG fetched by URL was rejected after a successful display** (`need 937KB, max block 832KB` / `need …KB, max block …KB`; found on hardware). Web UI polls leave a 208-byte TCP control block that splits free PSRAM for two minutes. URL bodies are now read into up to three blocks after the headers (no leftover 64 KB hold-back on the first piece — TLS already owns its buffers). JPEG/PNG decoders already read through callbacks, so they consume the pieces in order; a raw frame streams the same way.
+- **Render-job messages and small objects split the free PSRAM** (found on hardware). The ~19 KB job message was taken from the heap on every job, and lwIP, MQTT and cJSON put their few-hundred-byte objects in PSRAM too; allocated right above MQTT's buffers they stayed there as splitters. Job messages now come from three slots reserved at init, and a 20 KB hole below them takes the small objects. The largest free block before a JPEG/PNG download is ~1.0 MB whenever no poll is in `TIME_WAIT` (it used to be 826 KB from the first display on); an image larger than the block at that moment is rejected as `need …KB, max block …KB`.
+- **`displayUrl` and `proxyImage` did not follow redirects** (`HTTP status 302`), and CDN, signed and short links all redirect: `esp_http_client` only follows them inside `esp_http_client_perform()`. The open / read sequence now follows up to 5 hops with IDF's own `esp_http_client_set_redirection()` — relative or absolute targets, http → https; an https page still cannot downgrade to http.
+- **Sleep or a frame upload could start while an OTA was writing flash.** Both are refused while an OTA is running.
 - **URL image display corrupted the PSRAM heap on every JPEG/PNG** (HTTP `displayUrl`, MQTT `display_url`, CYCLE `wakeUrl`): `epd_url_frame()` freed the dithered ink buffer before streaming it and freed it again. Regression since 1.3.4.
 - **Deeply nested JSON rebooted the device** on every HTTP route, CT-Prov (HTTP and BLE) and MQTT downlink (cJSON recursion vs. 4–5 KB task stacks). Input is depth-bounded before it is parsed.
 - **`setDevInfo` with a `devName` of 4000+ bytes aborted** in NVS. Names are limited to 32 bytes and rejected with an error.
@@ -28,7 +58,8 @@ hardware yet** — run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 - Hibernate saved under SoftAP is entered when the hotspot closes (the UI already said so).
 - MQTT `sleep` / `set_power` follow-up error acks carry the requesting command; timer-driven entries no longer ack.
 - **MQTT was recreated 3 s into an OTA or URL image download** that had just stopped it for heap. Both hold the restart until they release.
-- **URL OTA failure was invisible**: `getDevInfo` reports `otaState` / `otaError`; the web UI polls them instead of showing "success".
+- **URL OTA failure was invisible**: `getDevInfo` reports `otaState` / `otaError`; the web UI polls them instead of showing "success". A failed attempt restores MQTT and the sleep schedule by itself.
+- **URL OTA downloads on the render task** — the one task with a deep enough stack for HTTPS — instead of spawning a dedicated 12 KB task.
 - Web UI: the device-name field is no longer reverted by the status poll while typing; the image-quality toggle no longer saves an unsaved work mode (it could hibernate the unit); System → Save does not post power defaults when the power form failed to load; a unit in `always` mode with a leftover `sleepMin` is shown as `always` (it used to be shown as cycle, and System → Save then switched it to timed sleep); editor file names are HTML-escaped; undecodable image uploads and blocked `localStorage` report instead of failing silently; overview uptime is live.
 - Factory gesture needs both keys held for the whole 6 s. `wifi_ble_prov_enter()` is re-entrancy safe. A failed SoftAP open restores the CYCLE window; SoftAP close always arms the reconnect backoff.
 - `sleepMin` is clamped (≤ 1 year) and a timer-wake setup failure no longer aborts into a reboot loop.
@@ -54,14 +85,23 @@ hardware yet** — run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 ### Added
 
 - `docs/security.md` / `docs/zh/security.md`: what the unauthenticated LAN/SoftAP API exposes, and the decisions to take before mass production.
-- `getDevInfo` diagnostics: `heap` (`free`, `minFree`, `freeInt`, `minFreeInt`, `largestInt`, `freeSpiram`, `largestSpiram`) and `stackMin` (smallest free stack ever seen, in bytes, per long-lived task) — the numbers to watch when validating a build on hardware.
+- `GET /api/v1/system/getDiag`: `heap` (`free`, `minFree`, `freeInt`, `minFreeInt`, `largestInt`, `freeSpiram`, `largestSpiram`) and `stackMin` (smallest free stack ever seen, in bytes, per long-lived task) — the numbers to watch when validating a build on hardware. On demand, not in `getDevInfo`: the web UI polls that every few seconds, and the ~20 extra nodes per reply cost 5 KB of internal RAM in the first 1.3.10 candidate (it dropped to 8 bytes free during a poll).
 - Host regression tests: `python3 tools/run_host_tests.py` (`tools/tests/`: JSON depth guard, native frame layout, QA gate semantics, embedded page in sync / deterministic / i18n consistent, font tables, repo hygiene). `tools/build_release.sh` runs them before building.
-- `tools/fix_verification.py`: checks every fix of this release on a real device over HTTP — JSON depth, `devName` limit, MQTT password hidden, failed URL OTA reported, URL display soak, local-upload OTA round trip, `sleepMin` clamp — and fails on 1.3.9 firmware. Part of `qa_gate.py --tier candidate` (`--verify-url`, `--verify-rounds`).
+- `tools/fix_verification.py`: checks every fix of this release on a real device over HTTP — JSON depth, `devName` limit, MQTT password hidden, failed URL OTA reported **with MQTT back afterwards**, MQTT back after every URL display, internal-heap headroom, local-upload OTA round trip, `sleepMin` clamp — and fails on 1.3.9 firmware. Part of `qa_gate.py --tier candidate` (`--verify-url`, `--verify-rounds`).
 - QA gate: `firmware_binding` case (device `fwVersion` must equal the image's version), an all-skipped run is not `ok`, `--mqtt-password` pass-through.
 - `tools/frame_convert.py` now writes the real native layout (CS0/CS1 halves, 90° rotated) — its old output was scrambled on the panel.
 
 ### 中文
 
+- **内部 RAM 在 Wi-Fi + 网页服务 + MQTT 下耗尽**（真机发现，1.3.9 同样如此）。刷屏任务配了 32 KB 栈，而真机上最深的路径只用 3.6 KB；省下来的空间本可以让整机稳态从 5.4 KB 空闲（最大块 3.3 KB）变成 21.8 KB（最大块 13.3 KB）。此前 MQTT 第一次停止（每次 URL 刷图、每次升级、每次改 broker 配置）之后就再也起不来（`deferred_heap`）直到重启；HTTPS 取图把内部 RAM 压到 1.4 KB、读取失败，并连带网页和局域网掉线；URL 升级建不出 12 KB 的任务（`task spawn failed`）。MQTT 启动前最大连续块从 8.7 KB 提高到 19.4 KB。
+- **MQTT 任务连接成功后栈只剩 168 字节**，下行命令（`ping` 触发带预览的遥测）嵌套更深。栈 3072 → 4096，状态 / 遥测 / 应答发布不再把 380 字节的配置结构体放在该栈上。
+- **系统事件任务栈只剩约 600 字节**：每次（重）联网都要在它上面跑完起网页、起 MQTT、休眠排程、OTA 自检这一串。栈 2304 → 3072（`sdkconfig.defaults`）。
+- **大图 URL 刷图报 `download OOM`**（连刷几张后，857 KB 的 JPEG）：整块图片缓冲过去是在收到响应头之后才分配，那时传过来的数据已经把空闲块切碎。现在在传输开始前先预留、一读到 `Content-Length` 就收缩到实际大小；放不下的文件报 `need 857KB, max block …KB`。
+- **URL 取原生帧或大 JPEG/PNG 在成功刷过一张图之后被拒**（`need 937KB, max block 832KB` 等，真机发现）。网页轮询留下的 TCP 控制块会把空闲 PSRAM 切开；现在响应头之后按空闲块分最多 3 段读入（第一段不再预留 64 KB——TLS 缓冲此时已分配），JPEG/PNG 经回调顺序读分段缓冲，原生帧同样流式刷屏。
+- **渲染任务消息和小对象把空闲 PSRAM 切开**（真机发现）。约 19 KB 的任务消息每次都从堆上分配，lwIP、MQTT、cJSON 的几百字节对象也都在 PSRAM 里；它们一旦落在 MQTT 缓冲区上方，就成了分割空闲区的隔板。现在消息改用启动时预留的 3 个槽位，其下方留一个 20 KB 的空洞收留小对象。
+- **`displayUrl` / `proxyImage` 不跟随跳转**（`HTTP status 302`）：CDN、签名地址、短链接都会跳转，而 `esp_http_client` 只在 `esp_http_client_perform()` 里处理。现在跟随最多 5 跳（复用 IDF 的 `esp_http_client_set_redirection()`，支持相对与绝对地址、http → https；https 页面仍不能降级到 http）。
+- **升级写 Flash 期间可能进入休眠或被原图上传打断**：升级进行中两者都会被拒绝。
+- URL 升级改为在刷屏任务上下载（整机唯一栈足够深的任务），不再新建 12 KB 专用任务；失败后自行恢复 MQTT 与休眠排程。
 - **URL 刷图堆损坏**（HTTP / MQTT / CYCLE 唤醒图）：码流缓冲被提前释放又二次释放，1.3.4 起的回归。
 - **深层嵌套 JSON 导致重启**：HTTP、CT-Prov（含 BLE）、MQTT 下行全部受影响，解析前限制嵌套深度。
 - **`devName` 超 4000 字节触发 abort**：限制 32 字节并返回错误。
@@ -76,9 +116,11 @@ hardware yet** — run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 - 汉字点阵改用 **Noto Sans CJK SC**、ASCII 点阵改用 **Noto Sans Mono CJK SC**（均为 OFL 1.1）；恢复 qrcodegen MIT 声明。
 - 新增安全说明文档；QA gate 绑定设备实际固件版本、全跳过不算通过；`frame_convert.py` 改为真实的原生帧布局。
 - 未配置 MQTT broker 时不再每 5 秒空转重试；保存新配置后清除上一次的错误，测试连接不会误报旧错误。
-- `getDevInfo` 新增 `heap`（堆余量）与 `stackMin`（各任务最小剩余栈）诊断字段。
-- 新增主机回归测试 `python3 tools/run_host_tests.py`（发布脚本会自动跑），以及上机核对工具 `tools/fix_verification.py`（已接入 `qa_gate.py --tier candidate`，在 1.3.9 固件上会逐项报失败）。
-- 以上均为静态审查 + 主机检查的结果，**尚未上机验证**。
+- 新增按需读取的诊断接口 `GET /api/v1/system/getDiag`：`heap`（堆余量）与 `stackMin`（各任务最小剩余栈）。不放进 `getDevInfo`——网页每隔几秒轮询它，1.3.10 首版把诊断塞进去后每次轮询多耗 5 KB 内部 RAM。
+- 新增主机回归测试 `python3 tools/run_host_tests.py`（发布脚本会自动跑），以及上机核对工具 `tools/fix_verification.py`（已接入 `qa_gate.py --tier candidate`，在 1.3.9 固件上会逐项报失败；同时核对每次 URL 刷图和升级失败后 MQTT 恢复、内部 RAM 余量）。
+- 上机验证范围：**一台** ESP32-C61HR2 台架机（STA + 网页服务 + TCP MQTT）——干净编译、主机测试、18 步 + 13 步 URL 刷屏 soak（大图 / 原生帧夹在刷图之后、跳转、畸形图按预期失败；零重启，每步后 MQTT 恢复）、`tools/fix_verification.py` **10/10**（含 `--url` / `--raw-url` / 本地上传 OTA 往返 / `--power`）、真实 HTTPS URL 升级**失败**路径（TLS 后失败，`otaState=failed`，MQTT 恢复）。镜像 sha256 前缀 `5fc910f9736a`。
+- **真机上发现、本版未修**（详见 `docs/c61_memory_allocation_report.md` 第 11.5 节）：**渐进式 JPEG 无法解码**（报 `JPEG decode fail`）；刷图后 PSRAM 最大连续块仍可能变小，但 URL 正文已改为最多 3 段读入并由 JPEG/PNG 回调消费，业务上不再因此拒图。
+- **尚未上机验证**：MQTTS、SoftAP 与 BLE 配网、CYCLE 休眠与电池下的唤醒图、MQTT 下行命令、URL 升级的**成功**路径、多台设备、72 小时长测。
 
 ## [1.3.9] — 2026-11-23
 

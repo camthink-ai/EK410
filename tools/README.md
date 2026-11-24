@@ -1,5 +1,7 @@
 # Tools
 
+Repository: [https://github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 | Script | Purpose |
 |--------|---------|
 | `gen_www.py` | Embed `main/www/index.html` → `main/www_html.h` |
@@ -9,8 +11,8 @@
 | `ct_prov_xor_test.py` | SoftAP ↔ BLE in-process XOR smoke over serial |
 | `ct_prov_softap_test.py` | SoftAP CT-Prov smoke helper |
 | `release_smoke.py` | Release suite: identity + CT-Prov + XOR + MQTT-busy / config consistency. `--mqtt-password` for the broker-change step (skipped without it) |
-| `qa_gate.py` | Unified QA gate (`smoke` / `candidate` / `soak`) + JSON report. Binds the device `fwVersion` to the image, an all-skipped run is not `ok`, forwards `--mqtt-password`; `candidate` also runs `fix_verification.py` |
-| `fix_verification.py` | Checks every 1.3.10 fix on a real device over HTTP (fails on 1.3.9): JSON depth, `devName` limit, MQTT password hidden, failed URL OTA reported, `--url` display soak, `--firmware` local OTA round trip, `--power` `sleepMin` clamp |
+| `qa_gate.py` | Unified QA gate (`smoke` / `candidate` / `soak`) + JSON report. Binds the device `fwVersion` to the image, an all-skipped run is not `ok`, forwards `--mqtt-password`; `candidate` also runs `fix_verification.py` (`--verify-url`, `--verify-rounds`, `--verify-raw-url`) |
+| `fix_verification.py` | Checks every 1.3.10 fix on a real device over HTTP (fails on 1.3.9): JSON depth rejected, `devName` limit, MQTT password hidden, internal-heap headroom (`getDiag`), failed URL OTA reported with MQTT back afterwards, `--url` display soak with MQTT back after each display and no PSRAM loss between displays, `--raw-url` raw frame displayed between ordinary images, `--firmware` local OTA round trip, `--power` `sleepMin` clamp |
 | `run_host_tests.py` | Host regression tests, no device / no ESP-IDF (~10 s); `build_release.sh` runs them |
 | `tests/` | The tests behind the runner: JSON depth guard (C), native frame layout, QA gate semantics, embedded web page, font tables, repo hygiene |
 | `qa_lib/` | Result model, firmware SHA / embedded version, power-meter stub |
@@ -58,6 +60,9 @@ EK410_MONO_FONT=/path/to/NotoSansMonoCJKsc-Regular.otf python3 tools/gen_font.py
 # On-device verification of the 1.3.10 fixes (device IP; LAN or 192.168.4.1)
 python3 tools/fix_verification.py --host IP
 python3 tools/fix_verification.py --host IP --url http://PC:8000/t.png --rounds 20 --firmware dist/ek410.bin
+# --raw-url: a raw 960000-byte native frame the device can fetch, displayed between ordinary images
+python3 tools/fix_verification.py --host IP --url http://PC:8000/t.png --raw-url http://PC:8000/frame.bin
+python3 tools/qa_gate.py --tier candidate --port PORT --host IP --verify-url http://PC:8000/t.png --verify-raw-url http://PC:8000/frame.bin
 ```
 
 QA plan: [docs/qa_automation.md](../docs/qa_automation.md) · [docs/zh/qa_automation.md](../docs/zh/qa_automation.md).  

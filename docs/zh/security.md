@@ -1,5 +1,7 @@
 # 安全说明
 
+源码：[github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 对应固件 1.3.10。在把设备部署到实验室之外、或进行首次量产烧录之前请先阅读。
 
 ## 已有的保护

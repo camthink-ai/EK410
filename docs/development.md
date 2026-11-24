@@ -2,11 +2,20 @@
 
 Companion: [开发说明（中文）](zh/development.md)
 
+Repository: [https://github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 ## Requirements
 
 - ESP-IDF **5.5.x** (see `main/idf_component.yml`: `>=5.3.0`)
 - Target: `esp32c61`
 - Python 3.11 recommended for the IDF virtualenv
+
+## Clone
+
+```bash
+git clone https://github.com/camthink-ai/EK410.git
+cd EK410
+```
 
 ## Build & flash
 

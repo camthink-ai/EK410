@@ -331,6 +331,7 @@ def _run_fix_verify(
     firmware: Path,
     url: str,
     rounds: int,
+    raw_url: str,
 ) -> None:
     """tools/fix_verification.py: every 1.3.10 fix checked on the device,
     including a local-upload OTA round trip with the image under test."""
@@ -339,6 +340,8 @@ def _run_fix_verify(
             "--firmware", str(firmware)]
     if url:
         args += ["--url", url, "--rounds", str(rounds)]
+    if raw_url:
+        args += ["--raw-url", raw_url]
     rc, out = _run_script("fix_verification.py", args, timeout=1800)
     report.add(_classify_script(rc, out, "fix_verification", t0))
     print(out[-4000:] if out else "", end="" if (out or "").endswith("\n") else "\n")
@@ -406,6 +409,8 @@ def main() -> int:
                     help="image URL the device can fetch — adds the URL display soak to fix_verification")
     ap.add_argument("--verify-rounds", type=int, default=10,
                     help="URL displays in the fix_verification soak")
+    ap.add_argument("--verify-raw-url", default="",
+                    help="URL of a raw 960000-byte frame the device can fetch — adds the raw-frame check")
     ap.add_argument("--hours", type=float, default=72.0, help="soak duration")
     ap.add_argument(
         "--dist",
@@ -475,7 +480,8 @@ def main() -> int:
             report.add(CaseResult("release_smoke", Status.FAIL_FIXTURE, "missing --port"))
         if args.host:
             _run_stress(report, args.port, args.host, args.stress_rounds)
-            _run_fix_verify(report, args.host, args.dist, args.verify_url, args.verify_rounds)
+            _run_fix_verify(report, args.host, args.dist, args.verify_url, args.verify_rounds,
+                            args.verify_raw_url)
         else:
             report.add(CaseResult("stability_stress", Status.SKIPPED, "no --host"))
             report.add(CaseResult("fix_verification", Status.SKIPPED, "no --host"))

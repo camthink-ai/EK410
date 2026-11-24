@@ -7,7 +7,7 @@
 
 **CamThink** 7.09″ Spectra 6 电子墨水屏固件。
 
-[English](README.md) · [变更记录](CHANGELOG.md) · [文档](docs/) · [许可](LICENSE)
+[English](README.md) · [变更记录](CHANGELOG.md) · [文档](docs/) · [许可](LICENSE) · [GitHub](https://github.com/camthink-ai/EK410)
 
 | | |
 |---|---|
@@ -16,6 +16,13 @@
 | **面板** | Spectra 6 · 逻辑 1600×1200 · 六色 |
 | **固件** | [`VERSION`](VERSION) → **1.3.10** |
 | **平台** | [NeoMind](https://wiki.camthink.ai) · 设备类型 `ek410_Eink` |
+| **源码** | [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410) |
+
+<p align="center">
+  <img src="assets/readme/EK410-Front-01-Alpine-Lake.jpg" alt="EK410 Spectra 6 — 高山湖" width="48%" />
+  &nbsp;
+  <img src="assets/readme/EK410-Front-05-Tiger.jpg" alt="EK410 Spectra 6 — 老虎" width="48%" />
+</p>
 
 ---
 

@@ -1,5 +1,7 @@
 # Documentation
 
+Source: [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 | Topic | English | 中文 |
 |-------|---------|------|
 | Hardware | [hardware.md](hardware.md) | [zh/hardware.md](zh/hardware.md) |

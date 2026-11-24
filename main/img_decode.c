@@ -501,11 +501,74 @@ int img_rgb_dither_codes(uint8_t *rgb, int w, int h, uint8_t **codes_out, int *c
     return 0;
 }
 
+/* ---------- JPEG / PNG source (one block or up to IMG_DECODE_MAX_PARTS) ---------- */
+
+typedef struct {
+    const uint8_t *part[IMG_DECODE_MAX_PARTS];
+    size_t plen[IMG_DECODE_MAX_PARTS];
+    int nparts;
+    size_t len, pos;
+} img_src_t;
+
+static int img_src_parts(img_src_t *s, const uint8_t *const *parts, const size_t *part_lens,
+                         int nparts, size_t len)
+{
+    memset(s, 0, sizeof(*s));
+    if (!parts || !part_lens || nparts < 1 || nparts > IMG_DECODE_MAX_PARTS || len == 0) {
+        return -1;
+    }
+    size_t sum = 0;
+    for (int i = 0; i < nparts; i++) {
+        if (!parts[i] || part_lens[i] == 0) {
+            return -1;
+        }
+        s->part[i] = parts[i];
+        s->plen[i] = part_lens[i];
+        sum += part_lens[i];
+    }
+    if (sum < len) {
+        return -1;
+    }
+    s->nparts = nparts;
+    s->len = len;
+    return 0;
+}
+
+/* Copy or skip `n` bytes from the logical stream at `pos`. Returns bytes done. */
+static size_t img_src_copy(img_src_t *s, size_t pos, void *dst, size_t n)
+{
+    size_t done = 0;
+    while (done < n && pos + done < s->len) {
+        size_t off = pos + done;
+        size_t room = 0;
+        const uint8_t *p = NULL;
+        for (int i = 0; i < s->nparts; i++) {
+            if (off < s->plen[i]) {
+                p = s->part[i] + off;
+                room = s->plen[i] - off;
+                break;
+            }
+            off -= s->plen[i];
+        }
+        if (!p || room == 0) {
+            break;
+        }
+        size_t take = (n - done) < room ? (n - done) : room;
+        if (pos + done + take > s->len) {
+            take = s->len - (pos + done);
+        }
+        if (dst) {
+            memcpy((uint8_t *)dst + done, p, take);
+        }
+        done += take;
+    }
+    return done;
+}
+
 /* ---------- JPEG ---------- */
 
 typedef struct {
-    const uint8_t *data;
-    size_t len, pos;
+    img_src_t src;
     uint8_t *rgb;
     int tw, th;   /* output size written into rgb */
     int sw, sh;   /* decoder output size (frame >> scale) */
@@ -522,20 +585,13 @@ typedef struct {
 static UINT jpeg_in(JDEC *jd, BYTE *buff, UINT nbyte)
 {
     jpeg_io_t *io = (jpeg_io_t *)jd->device;
-    if (!buff) {
-        if (io->pos + nbyte > io->len) {
-            nbyte = (UINT)(io->len - io->pos);
-        }
-        io->pos += nbyte;
-        return nbyte;
-    }
-    size_t left = io->len - io->pos;
+    size_t left = io->src.len - io->src.pos;
     if (nbyte > left) {
         nbyte = (UINT)left;
     }
-    memcpy(buff, io->data + io->pos, nbyte);
-    io->pos += nbyte;
-    return nbyte;
+    size_t got = img_src_copy(&io->src, io->src.pos, buff, nbyte);
+    io->src.pos += got;
+    return (UINT)got;
 }
 
 static UINT jpeg_out_rgb(JDEC *jd, void *bitmap, JRECT *rect)
@@ -566,10 +622,10 @@ static UINT jpeg_out_rgb(JDEC *jd, void *bitmap, JRECT *rect)
     return 1;
 }
 
-static int decode_jpeg_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, int *w_out,
-                           int *h_out, size_t budget)
+static int decode_jpeg_rgb_src(img_src_t *src, uint8_t **rgb_out, int *w_out, int *h_out,
+                               size_t budget)
 {
-    jpeg_io_t io = {.data = data, .len = len, .pos = 0, .sub = 1};
+    jpeg_io_t io = {.src = *src, .sub = 1};
     JDEC jd;
     const UINT pool_sz = 48 * 1024;
     void *pool = spiram_alloc(pool_sz);
@@ -668,26 +724,24 @@ static int decode_jpeg_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, i
 
 /* ---------- PNG ---------- */
 
-typedef struct {
-    const uint8_t *data;
-    size_t len, pos;
-} png_mem_t;
-
 static void png_read_fn(png_structp png_ptr, png_bytep out, png_size_t need)
 {
-    png_mem_t *m = (png_mem_t *)png_get_io_ptr(png_ptr);
+    img_src_t *m = (img_src_t *)png_get_io_ptr(png_ptr);
     if (m->pos + need > m->len) {
         png_error(png_ptr, "PNG read past end");
         return;
     }
-    memcpy(out, m->data + m->pos, need);
-    m->pos += need;
+    size_t got = img_src_copy(m, m->pos, out, need);
+    m->pos += got;
+    if (got != need) {
+        png_error(png_ptr, "PNG read short");
+    }
 }
 
-static int decode_png_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, int *w_out,
-                          int *h_out, size_t budget)
+static int decode_png_rgb_src(img_src_t *src, uint8_t **rgb_out, int *w_out, int *h_out,
+                              size_t budget)
 {
-    png_mem_t mem = {.data = data, .len = len, .pos = 0};
+    img_src_t mem = *src;
     png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
     if (!png_ptr) {
         return -1;
@@ -841,19 +895,25 @@ static int decode_png_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, in
     return 0;
 }
 
-int img_decode_to_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, int *w_out, int *h_out,
-                      img_proc_mode_t mode)
+int img_decode_to_rgb_parts(const uint8_t *const *parts, const size_t *part_lens, int nparts,
+                            size_t len, uint8_t **rgb_out, int *w_out, int *h_out,
+                            img_proc_mode_t mode)
 {
-    if (!data || !rgb_out || !w_out || !h_out || len == 0) {
+    if (!rgb_out || !w_out || !h_out || len == 0) {
         return -1;
     }
     *rgb_out = NULL;
+    img_src_t src;
+    if (img_src_parts(&src, parts, part_lens, nparts, len) != 0) {
+        return -1;
+    }
     size_t budget = rgb_budget_for(mode);
-    switch (img_sniff_format(data, len)) {
+    /* Sniff from the first bytes of the logical stream (always in part 0). */
+    switch (img_sniff_format(src.part[0], src.plen[0] < 16 ? src.plen[0] : 16)) {
     case IMG_FMT_JPEG:
-        return decode_jpeg_rgb(data, len, rgb_out, w_out, h_out, budget);
+        return decode_jpeg_rgb_src(&src, rgb_out, w_out, h_out, budget);
     case IMG_FMT_PNG:
-        return decode_png_rgb(data, len, rgb_out, w_out, h_out, budget);
+        return decode_png_rgb_src(&src, rgb_out, w_out, h_out, budget);
     case IMG_FMT_WEBP:
         ESP_LOGE(TAG, "WebP not supported on-device (use platform convert)");
         return -1;
@@ -864,6 +924,17 @@ int img_decode_to_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, int *w
         ESP_LOGE(TAG, "unknown image format (%u bytes)", (unsigned)len);
         return -1;
     }
+}
+
+int img_decode_to_rgb(const uint8_t *data, size_t len, uint8_t **rgb_out, int *w_out, int *h_out,
+                      img_proc_mode_t mode)
+{
+    if (!data || !rgb_out || !w_out || !h_out || len == 0) {
+        return -1;
+    }
+    const uint8_t *parts[1] = { data };
+    size_t plens[1] = { len };
+    return img_decode_to_rgb_parts(parts, plens, 1, len, rgb_out, w_out, h_out, mode);
 }
 
 int img_rgb_dither_alloc_fb(uint8_t *rgb, int w, int h, uint8_t **fb_out, img_proc_mode_t mode)
