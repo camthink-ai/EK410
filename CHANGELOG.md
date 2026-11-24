@@ -10,6 +10,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.3.10] — 2026-11-24
+
+Release-readiness audit of 1.3.9. Every change below is from static review plus
+host checks (clean build, host unit tests); **none of it has been validated on
+hardware yet** — run `tools/qa_gate.py` candidate + 72 h soak before shipping.
+
+### Fixed
+
+- **URL image display corrupted the PSRAM heap on every JPEG/PNG** (HTTP `displayUrl`, MQTT `display_url`, CYCLE `wakeUrl`): `epd_url_frame()` freed the dithered ink buffer before streaming it and freed it again. Regression since 1.3.4.
+- **Deeply nested JSON rebooted the device** on every HTTP route, CT-Prov (HTTP and BLE) and MQTT downlink (cJSON recursion vs. 4–5 KB task stacks). Input is depth-bounded before it is parsed.
+- **`setDevInfo` with a `devName` of 4000+ bytes aborted** in NVS. Names are limited to 32 bytes and rejected with an error.
+- **JPEG size arithmetic wrapped in 32 bits**: a crafted SOF could allocate a small buffer and overflow it. Sizes are 64-bit with dimension caps. Large JPEGs (> ~7.9 MP, forced SPEED) now display by integer subsampling after the 1/8 decode instead of failing.
+- **PNG decode errors leaked the RGB and row buffers** (up to 720 KB PSRAM per failed URL).
+- **CYCLE could stay awake for the rest of a boot** — battery drain: after a short button press, after a BLE/SoftAP window closed without STA, or when the boot never got an IP. The window is re-armed on key release and on the next `GOT_IP`; an offline boot falls back to the max window.
+- `sleep_go` re-checks provisioning after the panel wait: SoftAP opened during a long refresh was cut by the sleep.
+- Hibernate saved under SoftAP is entered when the hotspot closes (the UI already said so).
+- MQTT `sleep` / `set_power` follow-up error acks carry the requesting command; timer-driven entries no longer ack.
+- **MQTT was recreated 3 s into an OTA or URL image download** that had just stopped it for heap. Both hold the restart until they release.
+- **URL OTA failure was invisible**: `getDevInfo` reports `otaState` / `otaError`; the web UI polls them instead of showing "success".
+- Web UI: the device-name field is no longer reverted by the status poll while typing; the image-quality toggle no longer saves an unsaved work mode (it could hibernate the unit); System → Save does not post power defaults when the power form failed to load; a unit in `always` mode with a leftover `sleepMin` is shown as `always` (it used to be shown as cycle, and System → Save then switched it to timed sleep); editor file names are HTML-escaped; undecodable image uploads and blocked `localStorage` report instead of failing silently; overview uptime is live.
+- Factory gesture needs both keys held for the whole 6 s. `wifi_ble_prov_enter()` is re-entrancy safe. A failed SoftAP open restores the CYCLE window; SoftAP close always arms the reconnect backoff.
+- `sleepMin` is clamped (≤ 1 year) and a timer-wake setup failure no longer aborts into a reboot loop.
+- Power / devName / factory-reset NVS writes return errors instead of `ESP_ERROR_CHECK` aborts. `clearEventLog` and factory reset report real results.
+- SoftAP / BLE provisioning windows close after 15 min even while a client is attached.
+- `proxyImage` jobs dropped from the queue answer with an error instead of HTTP 200 + empty body; waiter/runner hand-off is race-free.
+- MQTT error events are logged once per changed failure (5 min) — a dead broker used to erase event-log sector 0 ~2000×/day.
+- `lastfrm` skips the 1 MB erase when the frame is unchanged.
+- Factory reset also wipes the NimBLE bond store.
+- Panel refresh BUSY timeout 40 s → 60 s; AW9523B I2C uses a 100 ms timeout; canvas text ignores `\r` and other control characters; CT-Prov `config.set` rejects unknown sections before applying anything; a busy wake-URL queue no longer runs HTTPS on the 2.3 KB event task.
+- MQTT no longer retries every 5 s when no broker is configured. A saved broker config clears the previous attempt's error, so "Test connection" cannot report the old failure for the new config. `ota_upload_abort()` keeps retrying for its mutex instead of leaving OTA busy until reboot. CT-Prov's MQTT save adds no stack on the 4 KB BLE worker.
+- Web UI: the "hotspot lost" banner needs three missed polls (the MQTT bring-up pause raised a false alarm); overview placeholders show "—" instead of mock values (including a hard-coded MAC).
+
+### Changed
+
+- **`wakeSec` default is 120 s again** (it had silently become 600 between 1.3.0 and 1.3.2); README, API docs and the web UI now agree.
+- **`getMqttParam` no longer returns the MQTT password** (`hasPassword` instead, like the Wi-Fi password). A blank password keeps the stored one only for the same broker and username; changing either clears it and `setMqttParam` answers with a `warn`. QA tools take `--mqtt-password` for the cases that change the broker or publish downlink.
+- `setPowerParam` with neither `mode` nor `sleepMin` leaves the sleep schedule untouched.
+- Rollback gate: a pending-verify image is confirmed only once the panel probe passed and the unit is reachable (web up or STA online).
+- Release build is explicitly `-Og` (see `sdkconfig.defaults`); the Wi-Fi buffer options were removed from `sdkconfig.defaults` — the runtime table in `wifi.c` is authoritative.
+- Font bitmaps come from **Noto Sans CJK SC** (16×16 CJK) and **Noto Sans Mono CJK SC** (8×16 ASCII), both SIL OFL 1.1, instead of macOS system fonts; `qrcodegen.min.js` carries its MIT notice again.
+
+### Added
+
+- `docs/security.md` / `docs/zh/security.md`: what the unauthenticated LAN/SoftAP API exposes, and the decisions to take before mass production.
+- `getDevInfo` diagnostics: `heap` (`free`, `minFree`, `freeInt`, `minFreeInt`, `largestInt`, `freeSpiram`, `largestSpiram`) and `stackMin` (smallest free stack ever seen, in bytes, per long-lived task) — the numbers to watch when validating a build on hardware.
+- Host regression tests: `python3 tools/run_host_tests.py` (`tools/tests/`: JSON depth guard, native frame layout, QA gate semantics, embedded page in sync / deterministic / i18n consistent, font tables, repo hygiene). `tools/build_release.sh` runs them before building.
+- `tools/fix_verification.py`: checks every fix of this release on a real device over HTTP — JSON depth, `devName` limit, MQTT password hidden, failed URL OTA reported, URL display soak, local-upload OTA round trip, `sleepMin` clamp — and fails on 1.3.9 firmware. Part of `qa_gate.py --tier candidate` (`--verify-url`, `--verify-rounds`).
+- QA gate: `firmware_binding` case (device `fwVersion` must equal the image's version), an all-skipped run is not `ok`, `--mqtt-password` pass-through.
+- `tools/frame_convert.py` now writes the real native layout (CS0/CS1 halves, 90° rotated) — its old output was scrambled on the panel.
+
+### 中文
+
+- **URL 刷图堆损坏**（HTTP / MQTT / CYCLE 唤醒图）：码流缓冲被提前释放又二次释放，1.3.4 起的回归。
+- **深层嵌套 JSON 导致重启**：HTTP、CT-Prov（含 BLE）、MQTT 下行全部受影响，解析前限制嵌套深度。
+- **`devName` 超 4000 字节触发 abort**：限制 32 字节并返回错误。
+- **JPEG 尺寸计算 32 位回绕可堆溢出**：改 64 位并限制尺寸；大照片改为 1/8 解码后整数抽样，不再直接失败。
+- **PNG 解码失败泄漏** RGB 缓冲。
+- **CYCLE 多条路径永不休眠**（短按按键、配网关闭时未联网、开机拿不到 IP）：按键松开和联网时补布防，离线开机用最大窗口兜底。
+- OTA / URL 下载期间 MQTT 不再被 3 秒自动重试拉起；URL 升级失败网页如实提示并轮询 `otaState`。
+- 网页：设备名不再被轮询冲掉；画质开关不再连带保存未确认的工作模式；常开设备不再因残留的 `sleepMin` 被显示成定时刷新（此前点保存会把设备切到定时休眠）；上传不可解码图片、浏览器禁用存储不再静默失败；运行时长显示真实值。
+- 出厂手势需双键持续按住；BLE 进入防重入；`sleepMin` 加上限且定时器失败不再重启循环；NVS 写入失败不再 abort；配网窗口 15 分钟硬上限；出厂重置同时清除蓝牙配对。
+- **`wakeSec` 默认恢复为 120 秒**（此前被悄悄改成 600）。
+- **`getMqttParam` 不再回传 MQTT 密码**（改为 `hasPassword`）；更换 broker 或用户名时空密码不再沿用旧密码，QA 工具新增 `--mqtt-password`。
+- 汉字点阵改用 **Noto Sans CJK SC**、ASCII 点阵改用 **Noto Sans Mono CJK SC**（均为 OFL 1.1）；恢复 qrcodegen MIT 声明。
+- 新增安全说明文档；QA gate 绑定设备实际固件版本、全跳过不算通过；`frame_convert.py` 改为真实的原生帧布局。
+- 未配置 MQTT broker 时不再每 5 秒空转重试；保存新配置后清除上一次的错误，测试连接不会误报旧错误。
+- `getDevInfo` 新增 `heap`（堆余量）与 `stackMin`（各任务最小剩余栈）诊断字段。
+- 新增主机回归测试 `python3 tools/run_host_tests.py`（发布脚本会自动跑），以及上机核对工具 `tools/fix_verification.py`（已接入 `qa_gate.py --tier candidate`，在 1.3.9 固件上会逐项报失败）。
+- 以上均为静态审查 + 主机检查的结果，**尚未上机验证**。
+
 ## [1.3.9] — 2026-11-23
 
 ### Fixed

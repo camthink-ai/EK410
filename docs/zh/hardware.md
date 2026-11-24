@@ -24,9 +24,10 @@
 
 ## 按键
 
-- **MAIN** 短按 / 长按开 SoftAP（约 2.5s）
-- **PAGE** 翻页拨杆
-- **芯片 BOOT** GPIO9 — 仅strapping，不是 SoftAP 键
+- **MAIN** 长按约 2.5s 开 SoftAP；短按本身无动作（只会取消 / 重新布防 CYCLE 窗口），见 `button.c`
+- **PAGE** 翻页拨杆（同一 GPIO）— 长按约 2.5s 开 / 关 BLE CT-Prov
+- **MAIN + PAGE** 同时按住约 6s 恢复出厂（双键需全程按住）
+- **芯片 BOOT** GPIO9 — 启动模式选择脚。开机约 50ms 采样一次：低电平 → 检修用恢复出厂。复位全程按住会进入 ROM 下载模式
 - 硬件 **RESET** — EN/RST
 
 ## 电源 / 指示灯

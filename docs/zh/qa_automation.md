@@ -12,6 +12,24 @@
 
 机器可读结果由 `qa_gate.py` 写出 JSON：每条用例 `status` 为 `pass` / `fail_device` / `fail_fixture` / `skipped` / `invalid`（硬件断联或测量缺失 → `invalid`，不算通过也不算设备失败）。
 
+两条门禁规则：
+
+- **报告绑定被测镜像**：`firmware_binding` 用例比对设备上报的 `fwVersion` 与镜像内嵌版本，不一致记 `fail_device`，报告无法为设备没在跑的固件背书。
+- **全跳过不算通过**：一条 `pass` 都没有的运行 `ok=false`（退出码 1），即使没有任何失败。
+
+设备不再通过 HTTP 回传 MQTT 密码（`getMqttParam` 只给 `hasPassword`）。改 broker / 下行发布相关用例需要显式传 `--mqtt-password`，否则这些用例记为跳过而不是失败。
+
+主机回归测试（无需设备）：`python3 tools/run_host_tests.py`，覆盖 JSON 嵌套深度防护、原生帧布局、QA 门禁语义、内嵌网页与源码同步、字库表；`build_release.sh` 构建前会自动执行。
+
+## 修复核对（candidate 档）
+
+`candidate` 档还会执行 `tools/fix_verification.py`：逐项在设备上核对本版的修复，旧固件上会报失败——深层 JSON 被拒绝、`devName` 长度限制、MQTT 密码不回传、URL 升级失败通过 `otaState` 可见、用待发布镜像做一次本地上传 OTA 往返。加 `--verify-url`（设备能访问的图片地址）可跑 URL 刷图压力；`--power` 额外核对 `sleepMin` 上限。`getDevInfo` 带有 `heap` 与 `stackMin`（各任务最小剩余栈，字节），每轮压力前后都读一下。
+
+```bash
+python3 tools/qa_gate.py --tier candidate --port PORT --host IP --mqtt-password '…' --verify-url http://PC:8000/t.png
+python3 tools/fix_verification.py --host IP --url http://PC:8000/t.png --rounds 20 --firmware dist/ek410.bin
+```
+
 ---
 
 ## 1. 测试台和数据记录

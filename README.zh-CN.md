@@ -2,7 +2,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
-[![Version](https://img.shields.io/badge/version-1.3.9-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.3.10-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Dual--License-red)](LICENSE)
 
 **CamThink** 7.09″ Spectra 6 电子墨水屏固件。
@@ -14,7 +14,7 @@
 | **产品** | EK410 · CamThink 电子墨水屏 |
 | **主控** | ESP32-C61HR2 · 16MB Flash · 2MB PSRAM |
 | **面板** | Spectra 6 · 逻辑 1600×1200 · 六色 |
-| **固件** | [`VERSION`](VERSION) → **1.3.9** |
+| **固件** | [`VERSION`](VERSION) → **1.3.10** |
 | **平台** | [NeoMind](https://wiki.camthink.ai) · 设备类型 `ek410_Eink` |
 
 ---
@@ -62,21 +62,24 @@ MQTT / 唤醒 URL 仍走设备侧 `displayUrl`。
 |------|------|
 | **MAIN** 长按约 2.5s | 开 SoftAP（`EK410_<MAC6>` / `12345678` → `http://192.168.4.1`）· 蓝 |
 | **PAGE** 长按约 2.5s | 进入 / 退出 BLE CT-Prov · 青 |
-| **MAIN+PAGE** 长按约 6s | 恢复出厂（保留 device id） |
+| **MAIN+PAGE** 长按约 6s | 恢复出厂（保留 device id；双键需持续按住满 6 秒） |
 | 深睡 **MAIN** | 唤醒 → SoftAP |
 | 深睡 **PAGE** | 唤醒 → BLE |
 | 深睡定时器 | cycle 唤醒（可选唤醒图 + 在线窗） |
 | 硬件 **RESET** | 退出 SoftAP/BLE handoff · 恢复上次画面 |
-| 芯片 **BOOT**（IO9）复位时按住 | 恢复出厂 |
+| 芯片 **BOOT**（IO9） | 开机约 50 ms 时读到低电平则恢复出厂（检修用）。IO9 是启动模式选择脚：复位全程按住会进入 ROM 下载模式 |
 
 | 灯色 | 含义 |
 |------|------|
-| 蓝闪 | SoftAP / 正在连 Wi‑Fi |
+| 蓝闪 | SoftAP 配网 |
+| 橙闪 | 正在连接 / 重连 Wi‑Fi |
 | 青闪 | BLE 配网 |
-| 绿灯常亮 | 正常运行（STA 已连接） |
+| 绿灯常亮 | 正常运行（STA 已连接）或未配网待机 |
+| 红色短闪 | 故障（配网 / OTA / 面板），不会常亮 |
+| 紫色快闪 | OTA 进行中 |
 | 深睡灭灯 | LED 与面板供电已关闭 |
 
-SoftAP / BLE 空闲自动关闭：**2 分钟**（有操作会续期）。
+SoftAP / BLE 空闲自动关闭：**2 分钟**（有操作会续期）；即使仍有客户端连着，最长 **15 分钟**也会关闭。
 
 ---
 
@@ -84,9 +87,9 @@ SoftAP / BLE 空闲自动关闭：**2 分钟**（有操作会续期）。
 
 | 模式 | 行为 |
 |------|------|
-| `always` | 常醒；`sleepNow` → 深睡至 MAIN |
-| `cycle` | 醒来后在线 `wakeSec` 秒（30–600，默认 **120**），再睡 `sleepMin` 分钟 |
-| `hibernate` | 睡到 MAIN（保存参数时可能立刻睡） |
+| `always` | 常醒；`sleepNow` → 深睡，MAIN（→ SoftAP）或 PAGE（→ BLE）唤醒 |
+| `cycle` | 醒来后在线 `wakeSec` 秒（30–600，默认 **120**），再睡 `sleepMin` 分钟。开机后一直连不上网络也会在最长窗口（600 秒）后休眠，路由器不在也不会耗尽电池 |
+| `hibernate` | 睡到 MAIN/PAGE（保存参数时可能立刻睡；SoftAP 下保存则在热点关闭时睡） |
 
 ---
 
@@ -137,12 +140,12 @@ EK410/
 | [`VERSION`](VERSION) | 权威版本号 |
 | [`main/version.h`](main/version.h) | 固件内嵌 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 发布说明 |
-| Git tag | `v1.3.9` |
+| Git tag | `v1.3.10` |
 
 ```bash
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.9
-git tag -a v1.3.9 -m "EK410 v1.3.9"
+python3 tools/bump_version.py 1.3.10
+git tag -a v1.3.10 -m "EK410 v1.3.10"
 ```
 
 ---
@@ -155,6 +158,7 @@ git tag -a v1.3.9 -m "EK410 v1.3.9"
 | HTTP API | [docs/zh/api.md](docs/zh/api.md) | [docs/api.md](docs/api.md) |
 | CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | — | [docs/ct_prov.md](docs/ct_prov.md) |
 | 开发 | [docs/zh/development.md](docs/zh/development.md) | [docs/development.md](docs/development.md) |
+| 安全说明 | [docs/zh/security.md](docs/zh/security.md) | [docs/security.md](docs/security.md) |
 | 工具 | [tools/README.md](tools/README.md) | — |
 
 ---

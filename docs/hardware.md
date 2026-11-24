@@ -24,9 +24,10 @@ Companion: [硬件说明（中文）](zh/hardware.md)
 
 ## Buttons
 
-- **MAIN** short / long (SoftAP ~2.5s) — see `button.c`
-- **PAGE** rocker (same GPIO)
-- **Chip BOOT** GPIO9 — strapping only, not SoftAP
+- **MAIN** hold ~2.5 s → SoftAP; a short press has no action of its own (it only cancels / re-arms the CYCLE window) — see `button.c`
+- **PAGE** rocker (same GPIO) — hold ~2.5 s → BLE CT-Prov on / off
+- **MAIN + PAGE** held together ~6 s → factory reset (both keys for the whole time)
+- **Chip BOOT** GPIO9 — boot-mode strap. Sampled once ~50 ms after boot: low → service factory reset. Held across a reset it enters the ROM download mode instead
 - Hardware **RESET** — EN/RST, not a firmware GPIO
 
 ## Power / LED
