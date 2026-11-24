@@ -6,9 +6,14 @@ Writes machine-readable JSON (and optional JSONL). Power cases are
 invalid/skipped until EK410_POWER_BACKEND is configured.
 
 Exit codes:
-  0  all cases pass (skipped/invalid OK)
+  0  every executed case passed, at least one case actually passed
+     (skipped/invalid do not fail the gate; an all-skipped run is not ok)
   1  at least one fail_device or fail_fixture
   2  gate setup error (missing firmware, bad args)
+
+The device's reported fwVersion must equal the version embedded in the image
+under test (case "firmware_binding"), so a report cannot certify a build the
+device is not running.
 
 Examples:
   python3 tools/qa_gate.py --tier smoke --port /dev/cu.wchusbserial3130 --host 192.168.31.42
@@ -33,13 +38,18 @@ from qa_lib.firmware import firmware_meta  # noqa: E402
 from qa_lib.power import open_power_meter_from_env  # noqa: E402
 from qa_lib.result import CaseResult, Status, SuiteReport  # noqa: E402
 
+# Forwarded to the sub-scripts that accept them (set from --mqtt-password).
+_FORWARD_ARGS: list[str] = []
+_FORWARD_TO = ("release_smoke.py", "stability_stress.py")
+
 
 def _run_script(
     script: str,
     args: list[str],
     timeout: float | None,
 ) -> tuple[int, str]:
-    cmd = [sys.executable, str(TOOLS / script), *args]
+    extra = _FORWARD_ARGS if script in _FORWARD_TO else []
+    cmd = [sys.executable, str(TOOLS / script), *args, *extra]
     try:
         p = subprocess.run(
             cmd,
@@ -99,7 +109,8 @@ def _case_firmware_sha(report: SuiteReport, dist: Path, build: Path | None) -> N
         return
     report.firmware_sha256 = meta["sha256"]
     report.firmware_path = meta["path"]
-    detail = f"sha256={meta['sha256_12']}… bytes={meta['bytes']}"
+    report.firmware_version = meta.get("app_version") or ""
+    detail = f"sha256={meta['sha256_12']}… bytes={meta['bytes']} version={report.firmware_version or '?'}"
     if build and build.is_file():
         bmeta = firmware_meta(build)
         if bmeta["sha256"] != meta["sha256"]:
@@ -140,6 +151,27 @@ def _case_devinfo(report: SuiteReport, host: str) -> None:
                 )
             )
             return
+        # Bind the report to what the device really runs: the image under
+        # test embeds its VERSION in esp_app_desc.
+        want = report.firmware_version
+        got = str(info.get("fwVersion") or "")
+        if not want:
+            report.add(
+                CaseResult("firmware_binding", Status.SKIPPED, "image has no app version", time.time() - t0)
+            )
+        elif got != want:
+            report.add(
+                CaseResult(
+                    "firmware_binding",
+                    Status.FAIL_DEVICE,
+                    f"device runs fwVersion={got!r}, gate targets image version {want!r}",
+                    time.time() - t0,
+                )
+            )
+        else:
+            report.add(
+                CaseResult("firmware_binding", Status.PASS, f"device fwVersion == image version {got}", time.time() - t0)
+            )
         report.add(
             CaseResult(
                 "getDevInfo",
@@ -293,6 +325,28 @@ def _run_stress(report: SuiteReport, port: str, host: str, rounds: int) -> None:
     print(out[-6000:] if out else "", end="" if (out or "").endswith("\n") else "\n")
 
 
+def _run_fix_verify(
+    report: SuiteReport,
+    host: str,
+    firmware: Path,
+    url: str,
+    rounds: int,
+    raw_url: str,
+) -> None:
+    """tools/fix_verification.py: every 1.3.10 fix checked on the device,
+    including a local-upload OTA round trip with the image under test."""
+    t0 = time.time()
+    args = ["--host", host, "--expect-version", report.firmware_version,
+            "--firmware", str(firmware)]
+    if url:
+        args += ["--url", url, "--rounds", str(rounds)]
+    if raw_url:
+        args += ["--raw-url", raw_url]
+    rc, out = _run_script("fix_verification.py", args, timeout=1800)
+    report.add(_classify_script(rc, out, "fix_verification", t0))
+    print(out[-4000:] if out else "", end="" if (out or "").endswith("\n") else "\n")
+
+
 def _run_soak(report: SuiteReport, port: str, host: str, hours: float, stress_rounds: int) -> None:
     deadline = time.time() + max(0.05, hours) * 3600.0
     n = 0
@@ -343,8 +397,20 @@ def main() -> int:
     ap.add_argument("--host", default="", help="STA IP, e.g. 192.168.31.42")
     ap.add_argument("--idle-sec", type=int, default=18)
     ap.add_argument("--skip-reset", action="store_true")
+    ap.add_argument(
+        "--mqtt-password",
+        default="",
+        help="forwarded to release_smoke / stability_stress for the cases that "
+             "change the broker or publish downlink (device password is write-only)",
+    )
     ap.add_argument("--xor-rounds", type=int, default=3, help="candidate XOR repeats")
     ap.add_argument("--stress-rounds", type=int, default=4)
+    ap.add_argument("--verify-url", default="",
+                    help="image URL the device can fetch — adds the URL display soak to fix_verification")
+    ap.add_argument("--verify-rounds", type=int, default=10,
+                    help="URL displays in the fix_verification soak")
+    ap.add_argument("--verify-raw-url", default="",
+                    help="URL of a raw 960000-byte frame the device can fetch — adds the raw-frame check")
     ap.add_argument("--hours", type=float, default=72.0, help="soak duration")
     ap.add_argument(
         "--dist",
@@ -366,6 +432,11 @@ def main() -> int:
         help="do not even probe power stub (record skipped)",
     )
     args = ap.parse_args()
+
+    global _FORWARD_ARGS
+    _FORWARD_ARGS.clear()
+    if args.mqtt_password:
+        _FORWARD_ARGS += ["--mqtt-password", args.mqtt_password]
 
     if args.tier in ("smoke", "candidate") and not args.port:
         print("FAIL: --port required for smoke/candidate", file=sys.stderr)
@@ -409,8 +480,11 @@ def main() -> int:
             report.add(CaseResult("release_smoke", Status.FAIL_FIXTURE, "missing --port"))
         if args.host:
             _run_stress(report, args.port, args.host, args.stress_rounds)
+            _run_fix_verify(report, args.host, args.dist, args.verify_url, args.verify_rounds,
+                            args.verify_raw_url)
         else:
             report.add(CaseResult("stability_stress", Status.SKIPPED, "no --host"))
+            report.add(CaseResult("fix_verification", Status.SKIPPED, "no --host"))
     elif args.tier == "soak":
         if not args.host and not args.port:
             report.add(CaseResult("soak", Status.FAIL_FIXTURE, "need --host and/or --port"))

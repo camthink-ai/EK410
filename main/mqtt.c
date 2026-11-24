@@ -29,6 +29,8 @@
 #include "cJSON.h"
 
 #include "mqtt.h"
+#include "json_guard.h"
+#include "ota.h"
 #include "config.h"
 #include "wifi.h"
 #include "http.h"
@@ -74,6 +76,49 @@ static char s_lwtMsg[192];
 static char s_lastFail[96];
 static volatile bool s_connectRefused;
 
+/* mqtt_stop() re-arms a 3 s start-retry on STA. URL image TLS and OTA stop
+ * the client precisely to free internal RAM for a second TLS session, so
+ * they hold the restart off until they release. */
+static uint8_t s_holdCount;
+
+void mqtt_hold(void)
+{
+    s_holdCount++;
+}
+
+void mqtt_release(void)
+{
+    if (s_holdCount) {
+        s_holdCount--;
+    }
+}
+
+static bool mqtt_restart_blocked(void)
+{
+    return s_holdCount > 0 || ota_busy();
+}
+
+/* A dead broker retries every 5 s and every error used to cost an evtlog line
+ * (a sector-0 erase per 8 events ≈ 2000/day). Log a changed failure at once,
+ * an unchanged one at most every 5 min. */
+static int32_t s_lastErrType = -1;
+static int32_t s_lastErrTls = -1;
+static int64_t s_lastErrLogUs;
+static bool s_errLoggedThisAttempt;
+
+static bool mqtt_err_should_log(int32_t type, int32_t tls)
+{
+    int64_t now = esp_timer_get_time();
+    if (type != s_lastErrType || tls != s_lastErrTls ||
+        now - s_lastErrLogUs > 300000000LL) {
+        s_lastErrType = type;
+        s_lastErrTls = tls;
+        s_lastErrLogUs = now;
+        return true;
+    }
+    return false;
+}
+
 static void mqtt_clear_fail(void)
 {
     s_lastFail[0] = '\0';
@@ -87,11 +132,20 @@ static void mqtt_set_fail(const char *msg)
     }
     strlcpy(s_lastFail, msg, sizeof(s_lastFail));
 }
+
+void mqtt_forget_error(void)
+{
+    /* Called when a new broker config is saved: the previous attempt's
+     * failure is no longer a verdict on anything. */
+    mqtt_clear_fail();
+}
 #define MQTT_START_MIN_HEAP 48000
 /* Task stacks must live in internal RAM on ESP32-C61 (PSRAM stacks break create). */
 /* TCP client task stack. 2304 overflowed after CONNECTED (Stack protection
- * fault). 3072 is the proven floor; SoftAP may defer start until heap frees. */
-#define MQTT_TASK_STACK_TCP 3072
+ * fault); 3072 left only ~170 bytes there, and a downlink command (ping →
+ * preview telemetry publish) nests deeper still. SoftAP may defer start
+ * until heap frees. */
+#define MQTT_TASK_STACK_TCP 4096
 #define MQTT_TASK_STACK_TLS 8192
 #define MQTT_TASK_STACK_SLACK 256
 
@@ -198,10 +252,12 @@ static void publish_status(const char *state, int retain)
     if (g_MQ.topicUp[0] == '\0') {
         return;
     }
-    devInfo_t info;
-    mqttAttr_t mqtt;
-    cfg_get_dev_info(&info);
-    cfg_get_mqtt_attr(&mqtt);
+    /* Called from MQTT_EVENT_CONNECTED on the small mqtt_task stack: take the
+     * two fields without building a devInfo_t + mqttAttr_t (380 bytes). */
+    char deviceId[sizeof(((devInfo_t *)0)->deviceId)];
+    char clientId[sizeof(((mqttAttr_t *)0)->clientId)];
+    cfg_device_id(deviceId, sizeof(deviceId));
+    cfg_mqtt_client_id(clientId, sizeof(clientId));
     /* cJSON escapes quotes (panel/devName/detail) — snprintf broke on 7.09". */
     cJSON *root = cJSON_CreateObject();
     if (!root) {
@@ -209,8 +265,8 @@ static void publish_status(const char *state, int retain)
     }
     cJSON_AddStringToObject(root, "type", "status");
     cJSON_AddStringToObject(root, "state", state ? state : "offline");
-    cJSON_AddStringToObject(root, "clientId", mqtt.clientId);
-    cJSON_AddStringToObject(root, "deviceId", info.deviceId);
+    cJSON_AddStringToObject(root, "clientId", clientId);
+    cJSON_AddStringToObject(root, "deviceId", deviceId);
     cJSON_AddNumberToObject(root, "ts", (double)now_s());
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -225,15 +281,19 @@ bool mqtt_publish_telemetry(void)
     if (!g_MQ.client || !g_MQ.isConnected) {
         return false;
     }
-    devInfo_t info;
-    mqttAttr_t mqtt;
+    /* A downlink "ping" reaches this from mqtt_task: no devInfo_t / mqttAttr_t
+     * locals on that stack — take the published fields on their own. */
+    char devName[sizeof(((devInfo_t *)0)->devName)];
+    char deviceId[sizeof(((devInfo_t *)0)->deviceId)];
+    char clientId[sizeof(((mqttAttr_t *)0)->clientId)];
     wifi_ap_record_t ap;
     int rssi = 0;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         rssi = ap.rssi;
     }
-    cfg_get_dev_info(&info);
-    cfg_get_mqtt_attr(&mqtt);
+    cfg_dev_name(devName, sizeof(devName));
+    cfg_device_id(deviceId, sizeof(deviceId));
+    cfg_mqtt_client_id(clientId, sizeof(clientId));
 
     int bat_mv = battery_read_mv();
     int bat = (bat_mv >= 0) ? battery_soc_from_mv(bat_mv) : -1;
@@ -248,15 +308,15 @@ bool mqtt_publish_telemetry(void)
     (void)last_frame_get_meta(&frame);
 
     cJSON_AddStringToObject(root, "type", "telemetry");
-    cJSON_AddStringToObject(root, "devName", info.devName);
-    cJSON_AddStringToObject(root, "deviceId", info.deviceId);
-    cJSON_AddStringToObject(root, "clientId", mqtt.clientId);
+    cJSON_AddStringToObject(root, "devName", devName);
+    cJSON_AddStringToObject(root, "deviceId", deviceId);
+    cJSON_AddStringToObject(root, "clientId", clientId);
     cJSON_AddStringToObject(root, "ip", ip);
     cJSON_AddNumberToObject(root, "rssi_dbm", rssi);
     cJSON_AddNumberToObject(root, "heap_free", (double)esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "uptime_s", (double)now_s());
-    cJSON_AddStringToObject(root, "fwVersion", info.fwVersion);
-    cJSON_AddStringToObject(root, "panel", info.panel);
+    cJSON_AddStringToObject(root, "fwVersion", cfg_fw_version());
+    cJSON_AddStringToObject(root, "panel", cfg_panel_name());
     if (bat >= 0 && bat_mv >= 0) {
         cJSON_AddNumberToObject(root, "battery_percent", bat);
         cJSON_AddNumberToObject(root, "battery_mv", bat_mv);
@@ -354,15 +414,18 @@ void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detai
     if (!g_MQ.client) {
         return;
     }
-    devInfo_t info;
-    cfg_get_dev_info(&info);
+    /* Reached from the downlink handler on mqtt_task: no devInfo_t local. */
+    char devName[sizeof(((devInfo_t *)0)->devName)];
+    char deviceId[sizeof(((devInfo_t *)0)->deviceId)];
+    cfg_dev_name(devName, sizeof(devName));
+    cfg_device_id(deviceId, sizeof(deviceId));
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         return;
     }
     cJSON_AddStringToObject(root, "type", "cmd_ack");
-    cJSON_AddStringToObject(root, "devName", info.devName);
-    cJSON_AddStringToObject(root, "deviceId", info.deviceId);
+    cJSON_AddStringToObject(root, "devName", devName);
+    cJSON_AddStringToObject(root, "deviceId", deviceId);
     cJSON_AddStringToObject(root, "last_cmd", cmd ? cmd : "");
     cJSON_AddStringToObject(root, "cmd_status", status ? status : "");
     cJSON_AddStringToObject(root, "detail", detail ? detail : "");
@@ -382,7 +445,7 @@ void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detai
 
 static void handle_command(const char *raw, int len)
 {
-    cJSON *root = cJSON_ParseWithLength(raw, len);
+    cJSON *root = json_guard_parse_len(raw, (size_t)len);
     if (!root) {
         ESP_LOGW(TAG, "bad JSON on downlink");
         mqtt_publish_cmd_ack("parse", "error", "invalid JSON");
@@ -493,11 +556,14 @@ static void handle_command(const char *raw, int len)
     } else if (!strcasecmp(cmd, "sleep_now") || !strcasecmp(cmd, "sleep")) {
         if (wifi_softap_is_up()) {
             mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
-        } else if (!sleep_now()) {
-            mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
         } else {
-            /* sleep_go waits on the panel first — MQTT still up for this ack. */
-            mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
+            sleep_set_ack_cmd(cmd); /* follow-up error ack if the entry aborts */
+            if (!sleep_now()) {
+                mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
+            } else {
+                /* sleep_go waits on the panel first — MQTT still up for this ack. */
+                mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
+            }
         }
     } else if (!strcasecmp(cmd, "set_power")) {
         powerAttr_t pwr;
@@ -524,7 +590,11 @@ static void handle_command(const char *raw, int len)
         } else if (cJSON_IsNumber(iq)) {
             pwr.imageQuality = (iq->valueint == 0) ? IMG_QUALITY_SPEED : IMG_QUALITY_QUALITY;
         }
-        cfg_set_power_attr(&pwr);
+        if (cfg_set_power_attr(&pwr) != ESP_OK) {
+            mqtt_publish_cmd_ack(cmd, "error", "power save failed");
+            cJSON_Delete(root);
+            return;
+        }
         cfg_get_power_attr(&pwr);
         if (pwr.mode == POWER_MODE_CYCLE) {
             if (!wifi_softap_is_up() && wifi_sta_is_connected()) {
@@ -536,10 +606,13 @@ static void handle_command(const char *raw, int len)
         } else if (pwr.mode == POWER_MODE_HIBERNATE) {
             if (wifi_softap_is_up()) {
                 mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
-            } else if (!sleep_now()) {
-                mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
             } else {
-                mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
+                sleep_set_ack_cmd(cmd);
+                if (!sleep_now()) {
+                    mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
+                } else {
+                    mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
+                }
             }
         } else {
             sleep_cancel();
@@ -752,9 +825,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     esp_mqtt_event_handle_t event = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED: {
-        mqttAttr_t mqtt;
-        cfg_get_mqtt_attr(&mqtt);
-        int qos = (mqtt.qos >= 0 && mqtt.qos <= 2) ? mqtt.qos : 1;
+        int qos = cfg_mqtt_qos(); /* not a 270-byte mqttAttr_t on this stack */
         ESP_LOGI(TAG, "connected — sub %s (qos %d)", g_MQ.topicDown, qos);
         int sub = esp_mqtt_client_subscribe(g_MQ.client, g_MQ.topicDown, qos);
         if (sub < 0) {
@@ -780,7 +851,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "disconnected");
-        evtlog_event("MQTT", "disconnected");
+        if (!s_errLoggedThisAttempt) {
+            evtlog_event("MQTT", "disconnected");
+        }
+        s_errLoggedThisAttempt = false;
         g_MQ.isConnected = false;
         rx_reset();
         break;
@@ -796,9 +870,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                      event->error_handle->error_type,
                      event->error_handle->esp_tls_last_esp_err,
                      event->error_handle->esp_tls_stack_err);
-            evtlog_event("MQTT", "error type=%d tls=0x%x",
-                         event->error_handle->error_type,
-                         event->error_handle->esp_tls_last_esp_err);
+            s_errLoggedThisAttempt = mqtt_err_should_log(
+                (int32_t)event->error_handle->error_type,
+                (int32_t)event->error_handle->esp_tls_last_esp_err);
+            if (s_errLoggedThisAttempt) {
+                evtlog_event("MQTT", "error type=%d tls=0x%x",
+                             event->error_handle->error_type,
+                             event->error_handle->esp_tls_last_esp_err);
+            }
             if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
                 s_connectRefused = true;
                 switch (event->error_handle->connect_return_code) {
@@ -826,7 +905,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             }
         } else {
             ESP_LOGE(TAG, "error (no detail)");
-            evtlog_event("MQTT", "error (no detail)");
+            s_errLoggedThisAttempt = mqtt_err_should_log(-1, 0);
+            if (s_errLoggedThisAttempt) {
+                evtlog_event("MQTT", "error (no detail)");
+            }
         }
         break;
     default:
@@ -1077,8 +1159,8 @@ static void mqtt_bringup_task(void *arg)
         }
         s_bringupPending = false;
 
-        if (wifi_ble_prov_busy()) {
-            /* Kick was consumed; BLE exit restores MQTT. No timer while busy. */
+        if (wifi_ble_prov_busy() || mqtt_restart_blocked()) {
+            /* Kick was consumed; BLE exit / URL TLS / OTA release restores MQTT. */
             continue;
         }
 
@@ -1168,6 +1250,10 @@ static void mqtt_bringup_task(void *arg)
             mqtt_clear_fail();
             esp_timer_stop(s_telemetryTimer);
             esp_timer_start_periodic(s_telemetryTimer, TELEMETRY_PERIOD_US);
+        } else if (peek.host[0] == '\0') {
+            /* Not a transient failure: retrying every 5 s would only spin
+             * (and log) until config.set / setMqttParam calls mqtt_start(). */
+            ESP_LOGI(TAG, "no broker host — MQTT idle until configured");
         } else {
             mqtt_arm_start_retry_us(5000000ULL);
         }
@@ -1189,7 +1275,7 @@ static void mqtt_arm_start_retry_us(uint64_t delay_us)
     if (!s_startRetryTimer || !s_mqttInfraOk) {
         return;
     }
-    if (wifi_ble_prov_busy()) {
+    if (wifi_ble_prov_busy() || mqtt_restart_blocked()) {
         return;
     }
     if (g_MQ.client) {
@@ -1214,10 +1300,15 @@ void mqtt_kick_start_retry(int delay_ms)
 
 void mqtt_restore_after_temp_stop(void)
 {
-    if (!wifi_sta_is_connected() || wifi_ble_prov_busy()) {
+    if (!wifi_sta_is_connected() || wifi_ble_prov_busy() || mqtt_restart_blocked()) {
         return;
     }
-    if (mqtt_is_started()) {
+    if (!s_mqttInfraOk || mqtt_is_started()) {
+        return;
+    }
+    /* No broker configured: there is nothing to bring back — do not sit
+     * through five 1.2 s attempts in the caller's (httpd) task. */
+    if (cfg_mqtt_host_empty()) {
         return;
     }
     for (int i = 0; i < 5; i++) {
@@ -1241,6 +1332,10 @@ void mqtt_start(void)
         if (s_startRetryTimer) {
             esp_timer_stop(s_startRetryTimer);
         }
+        return;
+    }
+    if (mqtt_restart_blocked()) {
+        /* URL TLS / OTA owns the heap until it releases and restores MQTT. */
         return;
     }
     if (!s_mqttInfraOk || !s_bringupSem) {

@@ -19,7 +19,9 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
+#include "cJSON.h"
 
 #include "config.h"
 #include "wifi.h"
@@ -83,8 +85,34 @@ static void boot_apply_sleep_wake_provisioning(void)
     }
 }
 
+/**
+ * cJSON nodes are ~64 bytes and, with CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024,
+ * every one of them (and every short key string) comes from internal RAM. A
+ * getDevInfo reply is ~60 nodes (~5 KB): with the internal heap this unit has
+ * beside Wi-Fi, httpd and MQTT, a reply that carried diagnostics used to take
+ * the free internal RAM down to single-digit bytes. Prefer PSRAM for
+ * everything cJSON allocates; the call falls back to internal RAM when PSRAM
+ * is exhausted.
+ */
+static void *json_alloc(size_t n)
+{
+    /* PSRAM first; internal RAM only once PSRAM is exhausted. */
+    return n ? heap_caps_malloc_prefer(n, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                       MALLOC_CAP_8BIT)
+             : NULL;
+}
+
+static void json_mem_init(void)
+{
+    /* Before the first cJSON user. IDF's cJSON has no realloc hook: with
+     * custom hooks it grows its print buffers through allocate + memcpy. */
+    cJSON_Hooks hooks = { .malloc_fn = json_alloc, .free_fn = free };
+    cJSON_InitHooks(&hooks);
+}
+
 void app_main(void)
 {
+    json_mem_init();
     config_open();
     led_open();
     sleep_capture_wake_cause();
@@ -167,21 +195,25 @@ void app_main(void)
         }
     } else if (hasWifi) {
         ESP_LOGI(TAG, "Wi-Fi saved but not yet online — reconnect armed");
+        /* CYCLE: bound this boot even if the AP never answers (router down,
+         * wrong password) — GOT_IP later runs the normal wake path. */
+        sleep_arm_offline_fallback();
     } else {
         ESP_LOGI(TAG, "hold MAIN 2.5s=SoftAP, PAGE 2.5s=BLE (IO%d/IO%d); "
                  "from deep sleep: MAIN=SoftAP PAGE=BLE",
                  BTN_MAIN_GPIO, BTN_PAGE_GPIO);
+        sleep_arm_offline_fallback();
     }
 
     /* Deep-sleep MAIN → SoftAP, PAGE → BLE (consumes wake intent). */
     boot_apply_sleep_wake_provisioning();
 
-    /* Prefer httpd/panel; STA-online alone is enough (headless OK). GOT_IP /
-     * httpd watchdog also call ota_confirm_running() if deferred here. */
-    if (http_server_is_up() || app_epd_panel_ok() || online) {
-        ota_confirm_running();
-    } else {
-        ESP_LOGW(TAG, "deferring OTA confirm — no httpd/panel/STA yet");
+    /* Rollback gate: the pending-verify image is confirmed once the panel
+     * probe passed and the unit is reachable (web up or STA online). GOT_IP /
+     * httpd watchdog repeat the check if it is deferred here. */
+    ota_selfcheck(http_server_is_up());
+    if (!http_server_is_up() && !online) {
+        ESP_LOGW(TAG, "deferring OTA confirm — no httpd/STA yet");
     }
 
     {

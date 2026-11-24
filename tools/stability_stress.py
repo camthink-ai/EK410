@@ -569,7 +569,7 @@ def case_upload_frame(api: Api, st: Stats, watch: SerialWatch) -> None:
         st.mark("upload_frame", False, str(e))
 
 
-def case_mqtt_downlink(api: Api, st: Stats, watch: SerialWatch, mqtt: dict) -> None:
+def case_mqtt_downlink(api: Api, st: Stats, watch: SerialWatch, mqtt: dict, cli_password: str = "") -> None:
     print("\n[case] MQTT downlink commands (ping/clear/render_text/set_power/unknown)")
     try:
         import paho.mqtt.client as mqtt_lib  # type: ignore
@@ -581,7 +581,7 @@ def case_mqtt_downlink(api: Api, st: Stats, watch: SerialWatch, mqtt: dict) -> N
     port = int(mqtt.get("port") or 8883)
     transport = (mqtt.get("transport") or "mqtt").lower()
     user = mqtt.get("username") or ""
-    password = mqtt.get("password") or ""
+    password = cli_password or mqtt.get("password") or ""
     cid = mqtt.get("clientId") or ""
     topic = mqtt.get("topicDown") or ""
     if not topic and cid:
@@ -589,6 +589,11 @@ def case_mqtt_downlink(api: Api, st: Stats, watch: SerialWatch, mqtt: dict) -> N
         topic = f"device/ek410_Eink/{did}/downlink"
     if not host or not topic:
         st.mark("mqtt_downlink", False, "mqtt host/topicDown empty")
+        return
+    if user and mqtt.get("hasPassword") and not password:
+        # The device no longer reveals its password: without it this client
+        # cannot authenticate, which is a missing input, not a device fault.
+        print("  SKIP mqtt_downlink — stored MQTT password is write-only; pass --mqtt-password to run")
         return
     # Ensure connected
     try:
@@ -767,6 +772,11 @@ def main() -> int:
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--skip-upload", action="store_true", help="skip 960KB frame upload")
     ap.add_argument("--skip-wifi-wrong", action="store_true", help="skip wrong-password Wi-Fi try")
+    ap.add_argument(
+        "--mqtt-password",
+        default="",
+        help="MQTT password for the broker-downlink case (getMqttParam only reports hasPassword)",
+    )
     args = ap.parse_args()
 
     watch = SerialWatch(args.port)
@@ -807,7 +817,7 @@ def main() -> int:
     case_power_param_safe(api, st)
     case_wifi_scan(api, st, rounds=max(2, args.rounds // 2))
     case_mqtt_boundary(api, st, rounds=max(2, args.rounds // 2))
-    case_mqtt_downlink(api, st, watch, {**restore_mqtt, **mq0})
+    case_mqtt_downlink(api, st, watch, {**restore_mqtt, **mq0}, cli_password=args.mqtt_password)
     # upload after downlink drain, before render-busy flood (needs panel lock)
     if not args.skip_upload:
         case_upload_frame(api, st, watch)

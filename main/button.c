@@ -171,7 +171,6 @@ static void button_task(void *arg)
     const int DEBOUNCE_MS = 60;
     const int BOTH_PROMOTE_MS = 400;
     int sampleMs = 0;
-    int prevLock = LOCK_NONE;
 
     while (1) {
         bool mainRaw = main_down();
@@ -225,9 +224,11 @@ static void button_task(void *arg)
             /* Only restore idle LED on short press; long-press owns cyan/blue. */
             if (lock != LOCK_NONE && !apFired && !bleFired && !factoryFired) {
                 wifi_led_refresh();
+                /* The press above cancelled the CYCLE window: a tap that fired
+                 * no gesture must put it back, or the unit never sleeps again. */
+                sleep_kick();
             }
             lock = LOCK_NONE;
-            prevLock = LOCK_NONE;
             mainHeldMs = pageHeldMs = bothHeldMs = secondKeyMs = 0;
             apFired = bleFired = factoryFired = false;
             pageWasDown = false;
@@ -259,15 +260,22 @@ static void button_task(void *arg)
         }
 
         /* LED only on long-press action — short PAGE/MAIN must not flash cyan/blue. */
-        prevLock = lock;
-
         if (lock == LOCK_BOTH) {
-            bothHeldMs += POLL_MS;
+            /* LOCK_BOTH latches on a ≥400 ms second key: count only while BOTH
+             * keys are still down, so a brushed PAGE tap cannot arm a factory
+             * reset that completes on MAIN alone. */
+            if (main && page) {
+                bothHeldMs += POLL_MS;
+            } else {
+                bothHeldMs = 0;
+            }
             if (bothHeldMs >= HOLD_FACTORY_MS && !factoryFired) {
                 factoryFired = true;
                 ESP_LOGW(TAG, "MAIN+PAGE 6s: factory reset");
                 led_set(LEDC_ERR_R, LED_BLINK_FAST);
-                cfg_factory_reset();
+                if (cfg_factory_reset() != ESP_OK) {
+                    ESP_LOGE(TAG, "factory reset NVS failed — restarting anyway");
+                }
                 vTaskDelay(pdMS_TO_TICKS(400));
                 esp_restart();
             }

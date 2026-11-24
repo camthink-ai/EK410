@@ -282,6 +282,11 @@ static int utf8_decode(const char *s, int *advance, uint32_t *cp)
 
 static int cell_w_for_cp(uint32_t cp)
 {
+    /* C0 controls other than the '\n' the loops stop at (e.g. the '\r' of a
+     * CRLF payload) take no cell — they used to draw a trailing '?'. */
+    if (cp < 0x20 || cp == 0x7F) {
+        return 0;
+    }
     if (cp < 0x80 || ascii_fallback_cp(cp)) {
         return FONT_W;
     }

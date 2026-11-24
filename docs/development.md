@@ -2,11 +2,20 @@
 
 Companion: [开发说明（中文）](zh/development.md)
 
+Repository: [https://github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 ## Requirements
 
 - ESP-IDF **5.5.x** (see `main/idf_component.yml`: `>=5.3.0`)
 - Target: `esp32c61`
 - Python 3.11 recommended for the IDF virtualenv
+
+## Clone
+
+```bash
+git clone https://github.com/camthink-ai/EK410.git
+cd EK410
+```
 
 ## Build & flash
 
@@ -50,10 +59,10 @@ python3 tools/gen_www.py
 ```bash
 python3 tools/bump_version.py --show
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.5
+python3 tools/bump_version.py X.Y.Z
 # edit CHANGELOG.md, commit, then:
-git tag -a v1.3.5 -m "EK410 v1.3.5"
-git push origin main --tags
+git tag -a vX.Y.Z -m "EK410 vX.Y.Z"
+git push origin main --tags   # once a remote is configured
 ```
 
 Rules:
@@ -61,7 +70,7 @@ Rules:
 - **MAJOR** — breaking MQTT/HTTP contracts or panel protocol
 - **MINOR** — new features, backward compatible
 - **PATCH** — fixes / polish
-- Git tags: `v` + SemVer (`v1.3.5`)
+- Git tags: `v` + SemVer (`vX.Y.Z`, e.g. `v1.3.10`)
 - Do not change `deviceId` generation lightly — it is the NeoMind identity
 
 ## Tools

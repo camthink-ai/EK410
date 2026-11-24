@@ -16,6 +16,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
 #include "esp_https_ota.h"
@@ -23,6 +24,11 @@
 #include "esp_partition.h"
 
 #include "ota.h"
+#include "wifi.h"
+#include "app_epd.h"
+#include "led.h"
+#include "mqtt.h"
+#include "sleep.h"
 
 #define TAG "-->OTA"
 #define OTA_IMAGE_MAGIC 0xE9
@@ -33,6 +39,102 @@ static const esp_partition_t *s_otaPart;
 static size_t s_otaWritten;
 static bool s_otaActive;
 static bool s_otaSawMagic;
+/* URL OTA downloads for minutes while holding s_otaMu: tracked separately so
+ * mqtt.c and the upload handler can ask "is flash being written" lock-free. */
+static volatile bool s_urlOtaRunning;
+static volatile ota_state_t s_otaState;
+static char s_otaErr[64];
+
+static void ota_set_fail(const char *err)
+{
+    strlcpy(s_otaErr, (err && err[0]) ? err : "failed", sizeof(s_otaErr));
+    s_otaState = OTA_STATE_FAILED;
+}
+
+static void ota_set_running(void)
+{
+    s_otaErr[0] = '\0';
+    s_otaState = OTA_STATE_RUNNING;
+}
+
+bool ota_busy(void)
+{
+    return s_otaActive || s_urlOtaRunning;
+}
+
+bool ota_url_claim(void)
+{
+    if (ota_busy()) {
+        return false;
+    }
+    s_urlOtaRunning = true;
+    ota_set_running();
+    return true;
+}
+
+void ota_url_release(const char *err)
+{
+    s_urlOtaRunning = false;
+    if (err && err[0]) {
+        ota_set_fail(err);
+    } else {
+        s_otaState = OTA_STATE_IDLE;
+    }
+}
+
+void ota_restore_runtime(void)
+{
+    wifi_led_refresh();
+    mqtt_restore_after_temp_stop();
+    sleep_kick();
+}
+
+void ota_url_run(const char *url)
+{
+    char err[48] = "";
+    if (!url || !url[0]) {
+        ota_url_release("no url");
+        ota_restore_runtime();
+        return;
+    }
+    ESP_LOGW(TAG, "OTA start: %s", url);
+    led_set(LEDC_OTA_R, LED_BLINK_FAST); /* purple: upgrading */
+    int rc = ota_start(url, err, sizeof(err));
+    if (rc == 0) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+    }
+    ESP_LOGE(TAG, "OTA failed: %s", err);
+    led_pulse(LEDC_ERR_R, 2000);
+    /* Publish the failure before MQTT comes back: the web UI polls otaState. */
+    ota_url_release(err[0] ? err : "download failed");
+    ota_restore_runtime();
+}
+
+ota_state_t ota_state(void)
+{
+    return s_otaState;
+}
+
+const char *ota_state_str(void)
+{
+    return (s_otaState == OTA_STATE_RUNNING) ? "running"
+           : (s_otaState == OTA_STATE_FAILED) ? "failed"
+                                              : "idle";
+}
+
+const char *ota_last_error(void)
+{
+    return s_otaErr;
+}
+
+void ota_clear_error(void)
+{
+    if (s_otaState == OTA_STATE_FAILED) {
+        s_otaState = OTA_STATE_IDLE;
+        s_otaErr[0] = '\0';
+    }
+}
 
 static void ota_mu_ensure(void)
 {
@@ -135,6 +237,7 @@ int ota_upload_begin(size_t image_len, char *errBuf, int errLen)
     s_otaWritten = 0;
     s_otaSawMagic = false;
     s_otaActive = true;
+    ota_set_running();
     ESP_LOGI(TAG, "upload begin → %s offset=0x%lx size=%u (expect %u)",
              update->label, (unsigned long)update->address,
              (unsigned)update->size, (unsigned)image_len);
@@ -181,7 +284,13 @@ int ota_upload_write(const void *data, size_t len)
 void ota_upload_abort(void)
 {
     ota_mu_ensure();
-    if (!s_otaMu || xSemaphoreTake(s_otaMu, pdMS_TO_TICKS(2000)) != pdTRUE) {
+    if (!s_otaMu) {
+        return;
+    }
+    /* A stuck active flag would refuse every later OTA until reboot, so keep
+     * trying: finish() holds the mutex for seconds while it validates. */
+    if (xSemaphoreTake(s_otaMu, pdMS_TO_TICKS(10000)) != pdTRUE) {
+        ESP_LOGE(TAG, "upload abort: mutex busy for 10 s — OTA stays busy until reboot");
         return;
     }
     if (s_otaActive) {
@@ -192,6 +301,7 @@ void ota_upload_abort(void)
         s_otaPart = NULL;
         s_otaWritten = 0;
         s_otaSawMagic = false;
+        ota_set_fail("upload aborted");
     }
     xSemaphoreGive(s_otaMu);
 }
@@ -229,6 +339,7 @@ int ota_upload_finish(char *errBuf, int errLen)
         s_otaPart = NULL;
         s_otaWritten = 0;
         s_otaSawMagic = false;
+        ota_set_fail(errBuf);
         xSemaphoreGive(s_otaMu);
         return -1;
     }
@@ -244,6 +355,7 @@ int ota_upload_finish(char *errBuf, int errLen)
         s_otaPart = NULL;
         s_otaWritten = 0;
         s_otaSawMagic = false;
+        ota_set_fail(errBuf);
         xSemaphoreGive(s_otaMu);
         return -1;
     }
@@ -275,6 +387,20 @@ void ota_confirm_running(void)
                      err == ESP_OK ? "valid" : esp_err_to_name(err));
         }
     }
+}
+
+void ota_selfcheck(bool web_up)
+{
+    /* A still-pending image is rolled back on the next reset, and a CYCLE
+     * unit may be up for only ~30 s before it sleeps — so no grace timers:
+     * a healthy unit must pass right here, on its first reachability. */
+    if (!web_up && !wifi_sta_is_connected()) {
+        return;
+    }
+    if (!app_epd_panel_ok() && !web_up) {
+        return; /* headless unit: confirm once the web server is reachable */
+    }
+    ota_confirm_running();
 }
 
 void ota_get_status(char *running, int runningLen, bool *pendingRollback)

@@ -1,5 +1,7 @@
 # CT-Prov / NeoLinker compatibility (EK410)
 
+Firmware source: [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410).
+
 EK410 implements the CamThink **CT-Prov/1** SoftAP HTTP binding used by
 [NeoLinker](https://github.com/camthink-ai/NeoLinker). SoftAP httpd and NimBLE
 share **one firmware image** and are **mutually exclusive** (never both up).

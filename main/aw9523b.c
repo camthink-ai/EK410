@@ -25,6 +25,9 @@ static const uint8_t s_dim_reg[16] = {
 
 static i2c_master_dev_handle_t s_dev  = NULL;
 static uint8_t                 s_addr  = AW9523B_I2C_ADDR;
+/* Finite bus timeout: a stuck bus must not park the caller forever — callers
+ * hold s_lock, and the sleep path powers the rails through this expander. */
+#define AW9523B_I2C_TIMEOUT_MS 100
 
 /* ── 引脚 → 寄存器/位 映射 ─────────────────────────────────────────────── */
 static uint8_t pin_bit(aw9523b_pin_t pin)
@@ -61,15 +64,14 @@ esp_err_t aw9523b_read_reg(uint8_t reg, uint8_t *val)
 {
     if (val == NULL) return ESP_ERR_INVALID_ARG;
     if (s_dev == NULL) return ESP_ERR_INVALID_STATE;
-    /* -1 = portMAX_DELAY，与 tmp1075/eta6963 风格一致 */
-    return i2c_master_transmit_receive(s_dev, &reg, 1, val, 1, -1);
+    return i2c_master_transmit_receive(s_dev, &reg, 1, val, 1, AW9523B_I2C_TIMEOUT_MS);
 }
 
 esp_err_t aw9523b_write_reg(uint8_t reg, uint8_t val)
 {
     if (s_dev == NULL) return ESP_ERR_INVALID_STATE;
     uint8_t buf[2] = { reg, val };
-    return i2c_master_transmit(s_dev, buf, sizeof(buf), -1);
+    return i2c_master_transmit(s_dev, buf, sizeof(buf), AW9523B_I2C_TIMEOUT_MS);
 }
 
 esp_err_t aw9523b_update_reg(uint8_t reg, uint8_t mask, uint8_t val)

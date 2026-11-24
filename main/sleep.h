@@ -29,8 +29,22 @@ sleep_wake_src_t sleep_consume_wake_src(void);
 
 /* If mode==CYCLE: schedule deep sleep after wake window. SoftAP/BLE cancel. */
 void sleep_arm_from_config(void);
-/* Once per boot after STA is online: optional wake URL + arm cycle (if CYCLE). */
+/* First time per boot that STA is online: optional wake URL + arm cycle (if
+ * CYCLE). Later calls re-arm a cancelled CYCLE window and run a hibernate
+ * that was saved while deferred. */
 void sleep_on_sta_online(void);
+/* CYCLE: bound this boot even when STA never gets an IP (router down, wrong
+ * password). Arms the window now; a later GOT_IP runs the normal wake path. */
+void sleep_arm_offline_fallback(void);
+/* A SoftAP / BLE window just closed: re-arm CYCLE, bound an offline boot,
+ * and run a hibernate that was saved while the window was up. */
+void sleep_on_prov_closed(void);
+/* Remember mode=hibernate saved while it could not run (SoftAP up / no STA);
+ * the next sleep_on_sta_online() / sleep_on_prov_closed() enters it. */
+void sleep_set_hibernate_pending(bool on);
+/* MQTT cmd that owns the next sleep_now(): if that entry aborts, it gets a
+ * follow-up error ack. Timer-driven entries never ack. */
+void sleep_set_ack_cmd(const char *cmd);
 void sleep_cancel(void);
 /* Refresh the CYCLE wake window (MQTT downlink / user activity). */
 void sleep_kick(void);

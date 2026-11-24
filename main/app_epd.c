@@ -37,6 +37,7 @@
 #include "splash.h"
 #include "img_decode.h"
 #include "mqtt.h"
+#include "ota.h"
 #include "wifi.h"
 #include "config.h"
 #include "last_frame.h"
@@ -50,6 +51,8 @@ static void url_tls_prepare(void)
     wifi_throughput_boost(true);
     /* Preview b64 (~160KB) + HTTPS body fight for the same 2MB SPIRAM. */
     last_frame_preview_drop();
+    /* Hold first: mqtt_stop itself arms a 3 s start-retry on STA. */
+    mqtt_hold();
     if (mqtt_stop_wait(4000) != 0) {
         ESP_LOGW(TAG, "url TLS prepare: mqtt still busy — proceed carefully");
     }
@@ -59,6 +62,8 @@ static void url_tls_prepare(void)
 static void url_tls_release(void)
 {
     wifi_throughput_boost(false);
+    /* Before any early return: a leaked hold would keep MQTT down for good. */
+    mqtt_release();
     /* Large HTTPS can leave httpd down and MQTT stopped. Restore LAN Web
      * first (non-SoftAP), then MQTT — SoftAP+STA must also restart MQTT
      * (bringup pauses httpd briefly); BLE exit restores itself. */
@@ -116,6 +121,9 @@ int app_epd_boot_paint_sync(void)
  * Soft cap keeps PSRAM headroom (body + QUALITY RGB ~720KB). Hard reject
  * before buffering so a huge URL cannot hang/OOM the device. */
 #define IMG_URL_MAX_BYTES (1280 * 1024)
+/* PSRAM kept free beside a reserved body for the HTTP client, TLS records and
+ * in-flight frames while the file is coming in. */
+#define URL_BODY_RESERVE (64 * 1024)
 /* Deadlines cover network + decode only. Final panel DRF has its own BUSY
  * timeout (~40s). Modem-sleep + large HTTPS used to stall past a short net
  * window (Module.png ~820KB → "URL net timeout" after TLS). */
@@ -125,6 +133,14 @@ int app_epd_boot_paint_sync(void)
 #define IMG_URL_FORCE_SPEED_BYTES  (700 * 1024)
 
 #define CHUNK_SIZE 8192
+
+/* Render task stack (internal RAM — FreeRTOS stacks cannot live in PSRAM on
+ * the C61). It carries the deepest TLS call chain in the firmware (URL image,
+ * proxyImage, URL OTA; esp_https_ota fits in 8 KB in IDF's own example) plus
+ * text wrapping, canvas and image decode. 16 KB leaves ~2x over the worst
+ * path measured on hardware; the 32 KB it used to reserve was more than the
+ * whole internal heap this unit has left with Wi-Fi, httpd and MQTT up. */
+#define RENDER_TASK_STACK 16384
 
 static char s_url_err[48];
 
@@ -145,7 +161,7 @@ static unsigned char *s_chunk; /* DMA-capable staging (also used per-line) */
 /* ---- async render queue (HTTP/MQTT callers must not block on a refresh) ---- */
 
 typedef struct {
-    int kind; /* 0 text … 8 splash, 9 SoftAP proxyImage, 10 lastfrm replay */
+    int kind; /* 0 text … 8 splash, 9 SoftAP proxyImage, 10 lastfrm replay, 11 URL OTA */
     bool persist_frame; /* save lastfrm after this job (user content only) */
     char mqtt_ack_cmd[24]; /* non-empty → completion cmd_ack after job */
     espd_render_t render;
@@ -156,6 +172,10 @@ typedef struct {
     epd_proxy_job_t *proxy;       /* kind 9 */
     SemaphoreHandle_t proxy_done; /* kind 9 */
 } render_msg_t;
+
+/* Serialises the proxy-job hand-off between its runner (render task or the
+ * queue-drop path) and a waiter timeout, so exactly one side frees the job. */
+static portMUX_TYPE s_proxyMux = portMUX_INITIALIZER_UNLOCKED;
 
 /* Sticky: next queue_render_owned copies into msg->mqtt_ack_cmd (MQTT path). */
 static char s_mqtt_ack_next[24];
@@ -178,6 +198,8 @@ static volatile bool s_displayBusy;
 static bool s_lastDisplayOk = true;
 
 #define EPD_COLOR_WHITE 0x11
+
+static void render_msg_free(render_msg_t *msg);
 
 static void stream_begin(unsigned char csx);
 static void stream_end(unsigned char csx);
@@ -391,10 +413,19 @@ static void render_task(void *arg)
         case 9:
             if (msg->proxy) {
                 epd_proxy_download(msg->proxy);
-                if (msg->proxy->orphaned) {
+                /* Hand-off under the lock: a waiter that timed out before
+                 * this point set `orphaned` and left the job to us; one that
+                 * times out after it sees `done` and frees the job itself. */
+                bool orphaned;
+                taskENTER_CRITICAL(&s_proxyMux);
+                orphaned = msg->proxy->orphaned;
+                msg->proxy->done = true;
+                taskEXIT_CRITICAL(&s_proxyMux);
+                if (orphaned) {
                     free(msg->proxy->data);
                     if (msg->proxy_done) {
                         vSemaphoreDelete(msg->proxy_done);
+                        msg->proxy_done = NULL;
                     }
                     free(msg->proxy);
                     msg->proxy = NULL;
@@ -414,12 +445,21 @@ static void render_task(void *arg)
             epd_boot_screen(msg->bootTitle, linePtrs, msg->render.count);
             break;
         }
+        case 11:
+            /* No panel work: the URL OTA only borrows this task for its
+             * HTTPS stack (see ota_url_run). */
+            if (s_acceptJobs) {
+                ota_url_run(msg->url);
+            } else {
+                ota_url_release("sleep pending");
+            }
+            break;
         default: {
             if (msg->persist_frame) {
                 app_epd_mark_frame_capture("text");
             }
             if (msg->render.text[0]) {
-                /* Wrap on this 32KB task — mqtt_cmd must not own wrap buffers. */
+                /* Wrap on this deep-stack task — mqtt_cmd must not own wrap buffers. */
                 epd_text_paragraph(msg->render.text, msg->render.fg, msg->render.bg,
                                    msg->render.scale);
             } else {
@@ -439,7 +479,7 @@ static void render_task(void *arg)
                                  s_lastDisplayOk ? "ok" : "error",
                                  s_lastDisplayOk ? "displayed" : "display failed");
         }
-        free(msg);
+        render_msg_free(msg);
         msg = NULL;
         s_displayBusy = false;
     }
@@ -456,9 +496,9 @@ bool app_epd_last_display_ok(void)
     return s_lastDisplayOk;
 }
 
-/* Build queue items on the heap — render_msg_t embeds canvas_t (~12KB with
- * 48 items) and must never be a stack local on mqtt_cmd / HTTP paths.
- * Ownership transfers to render_task (pointer queue). */
+/* Build queue items off the caller's stack — render_msg_t embeds canvas_t
+ * (~12KB with 48 items) and must never be a stack local on mqtt_cmd / HTTP
+ * paths. Ownership transfers to render_task (pointer queue). */
 void app_epd_mqtt_ack_next(const char *cmd)
 {
     if (cmd && cmd[0]) {
@@ -468,13 +508,65 @@ void app_epd_mqtt_ack_next(const char *cmd)
     }
 }
 
+/* Render job messages are ~19 KB each. They used to come from the heap on
+ * every job, and where a message lands decides how much contiguous PSRAM the
+ * next URL download gets: allocated while MQTT holds the low end of the free
+ * region (right after a display, when MQTT has just restarted), a message
+ * sat above it and split the free space in two once MQTT stopped for the
+ * download — 835 KB beside 245 KB, too small for a raw frame. Slots reserved
+ * once at init never move: one job running plus the two the queue holds. A
+ * request that finds no slot falls back to the heap, as before. */
+#define RENDER_MSG_SLOTS 3
+static render_msg_t *s_msgPool;
+static bool s_msgUsed[RENDER_MSG_SLOTS];
+static portMUX_TYPE s_msgMux = portMUX_INITIALIZER_UNLOCKED;
+
+/* Free hole kept below the message pool so small long-lived objects land
+ * there (see app_epd_init). The pool is never freed, so the hole cannot
+ * merge back into the big free region above it. Kept below 25 KB: the event
+ * log stages its whole 25–64 KB in one buffer when it compacts, and while
+ * such a buffer sat in a larger hole the next small objects went to the big
+ * region again. */
+#define SMALL_OBJ_NURSERY (20 * 1024)
+
 static render_msg_t *alloc_render_msg(int kind)
 {
-    render_msg_t *msg = calloc(1, sizeof(*msg));
+    render_msg_t *msg = NULL;
+    if (s_msgPool) {
+        taskENTER_CRITICAL(&s_msgMux);
+        for (int i = 0; i < RENDER_MSG_SLOTS; i++) {
+            if (!s_msgUsed[i]) {
+                s_msgUsed[i] = true;
+                msg = &s_msgPool[i];
+                break;
+            }
+        }
+        taskEXIT_CRITICAL(&s_msgMux);
+        if (msg) {
+            memset(msg, 0, sizeof(*msg));
+        }
+    }
+    if (!msg) {
+        msg = calloc(1, sizeof(*msg)); /* more jobs in flight than slots */
+    }
     if (msg) {
         msg->kind = kind;
     }
     return msg;
+}
+
+static void render_msg_free(render_msg_t *msg)
+{
+    if (!msg) {
+        return;
+    }
+    if (s_msgPool && msg >= s_msgPool && msg < s_msgPool + RENDER_MSG_SLOTS) {
+        taskENTER_CRITICAL(&s_msgMux);
+        s_msgUsed[msg - s_msgPool] = false;
+        taskEXIT_CRITICAL(&s_msgMux);
+        return;
+    }
+    free(msg);
 }
 
 /* 0=queued, -1=queue full, -2=sleep pending, -3=internal */
@@ -489,17 +581,17 @@ static int queue_render_owned(render_msg_t *msg, TickType_t wait)
     }
     if (!s_acceptJobs) {
         ESP_LOGW(TAG, "render rejected — sleep pending");
-        free(msg);
+        render_msg_free(msg);
         return -2;
     }
     if (!s_renderQueue) {
-        free(msg);
+        render_msg_free(msg);
         return -3;
     }
     BaseType_t ok = xQueueSend(s_renderQueue, &msg, wait);
     if (ok != pdTRUE) {
         ESP_LOGW(TAG, "render queue full");
-        free(msg);
+        render_msg_free(msg);
         return -1;
     }
     return 0;
@@ -522,19 +614,38 @@ static void render_queue_drop_pending(const char *reason)
         const char *why = (reason && reason[0]) ? reason : "superseded";
         if (msg->kind == 5) {
             mqtt_publish_cmd_ack("display_url", "error", why);
+        } else if (msg->kind == 11) {
+            /* An OTA that never started: report it, then let MQTT back. */
+            ota_url_release("cancelled before start");
+            mqtt_start();
         } else if (msg->mqtt_ack_cmd[0]) {
             mqtt_publish_cmd_ack(msg->mqtt_ack_cmd, "error", why);
         }
         if (msg->kind == 9 && msg->proxy) {
-            msg->proxy->orphaned = true;
-            if (msg->proxy_done) {
+            /* Dropped before the render task ever ran it: play the runner's
+             * hand-off here. The waiter reports job->err (a drop is not a
+             * 200) and frees the job — unless it already timed out. */
+            bool orphaned;
+            taskENTER_CRITICAL(&s_proxyMux);
+            strlcpy(msg->proxy->err, why, sizeof(msg->proxy->err));
+            msg->proxy->done = true;
+            orphaned = msg->proxy->orphaned;
+            taskEXIT_CRITICAL(&s_proxyMux);
+            if (orphaned) {
+                free(msg->proxy->data);
+                free(msg->proxy);
+                msg->proxy = NULL;
+                if (msg->proxy_done) {
+                    vSemaphoreDelete(msg->proxy_done);
+                    msg->proxy_done = NULL;
+                }
+            } else if (msg->proxy_done) {
                 xSemaphoreGive(msg->proxy_done);
             }
-            /* proxy buffer freed by waiter or orphan path — do not free data here */
         } else if (msg->proxy_done) {
             xSemaphoreGive(msg->proxy_done);
         }
-        free(msg);
+        render_msg_free(msg);
         msg = NULL;
         n++;
     }
@@ -563,7 +674,7 @@ int app_epd_render_async(const espd_render_t *render)
 {
     render_msg_t *msg = alloc_render_msg(0);
     if (!msg || !render) {
-        free(msg);
+        render_msg_free(msg);
         return -1;
     }
     msg->persist_frame = true;
@@ -649,7 +760,7 @@ int app_epd_boot_screen_async(const char *title, const char *const *lines, int c
         return -1;
     }
     if (strlen(title) >= sizeof(msg->bootTitle)) {
-        free(msg);
+        render_msg_free(msg);
         return -1;
     }
     strlcpy(msg->bootTitle, title, sizeof(msg->bootTitle));
@@ -752,7 +863,7 @@ int app_epd_url_async(const char *url)
     }
     msg->persist_frame = true;
     if (strlen(url) >= sizeof(msg->url)) {
-        free(msg);
+        render_msg_free(msg);
         return -1;
     }
     strlcpy(msg->url, url, sizeof(msg->url));
@@ -763,9 +874,30 @@ int app_epd_url_async(const char *url)
     return rc;
 }
 
-int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
+int app_epd_ota_async(const char *url)
 {
+    render_msg_t *msg = alloc_render_msg(11);
+    if (!msg || !url || strlen(url) >= sizeof(msg->url)) {
+        render_msg_free(msg);
+        return -3;
+    }
+    strlcpy(msg->url, url, sizeof(msg->url));
+    return queue_render_owned(msg, 0);
+}
+
+int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms, char *err_out, size_t err_len,
+                        bool *job_released)
+{
+    if (err_out && err_len) {
+        err_out[0] = '\0';
+    }
+    if (job_released) {
+        *job_released = false;
+    }
     if (!job || !job->url[0]) {
+        if (err_out && err_len) {
+            strlcpy(err_out, "bad job", err_len);
+        }
         return -1;
     }
     job->data = NULL;
@@ -773,16 +905,18 @@ int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
     job->ctype[0] = '\0';
     job->err[0] = '\0';
     job->orphaned = false;
+    job->done = false;
 
     SemaphoreHandle_t done = xSemaphoreCreateBinary();
-    if (!done) {
-        snprintf(job->err, sizeof(job->err), "OOM");
-        return -1;
-    }
-    render_msg_t *msg = alloc_render_msg(9);
-    if (!msg) {
-        vSemaphoreDelete(done);
-        snprintf(job->err, sizeof(job->err), "OOM");
+    render_msg_t *msg = done ? alloc_render_msg(9) : NULL;
+    if (!done || !msg) {
+        if (done) {
+            vSemaphoreDelete(done);
+        }
+        render_msg_free(msg);
+        if (err_out && err_len) {
+            strlcpy(err_out, "OOM", err_len);
+        }
         return -1;
     }
     msg->proxy = job;
@@ -790,15 +924,41 @@ int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
     /* Allow splash / prior URL job to finish — panel refresh is 20–40s. */
     if (queue_render_owned(msg, pdMS_TO_TICKS(60000)) != 0) {
         vSemaphoreDelete(done);
-        snprintf(job->err, sizeof(job->err), "render busy");
+        if (err_out && err_len) {
+            strlcpy(err_out, "render busy", err_len);
+        }
         return -1;
     }
     int wait = (timeout_ms > 0) ? timeout_ms : 90000;
     if (xSemaphoreTake(done, pdMS_TO_TICKS(wait)) != pdTRUE) {
         ESP_LOGE(TAG, "proxy fetch timeout");
-        snprintf(job->err, sizeof(job->err), "proxy timeout");
-        job->orphaned = true;
+        /* From here the caller must not touch *job. Decide ownership under
+         * the same lock the runner uses, or a completion racing this timeout
+         * leaves the job freed twice / never. */
+        bool completed = false;
+        taskENTER_CRITICAL(&s_proxyMux);
+        if (job->done) {
+            completed = true; /* runner is about to give `done`: consume and free */
+        } else {
+            job->orphaned = true; /* runner frees job + data when it finishes */
+        }
+        taskEXIT_CRITICAL(&s_proxyMux);
+        if (completed) {
+            xSemaphoreTake(done, portMAX_DELAY);
+            free(job->data);
+            free(job);
+            vSemaphoreDelete(done);
+        }
+        if (err_out && err_len) {
+            strlcpy(err_out, "proxy timeout", err_len);
+        }
+        if (job_released) {
+            *job_released = true;
+        }
         return -1;
+    }
+    if (err_out && err_len) {
+        strlcpy(err_out, job->err, err_len);
     }
     vSemaphoreDelete(done);
     return job->err[0] ? -1 : 0;
@@ -806,6 +966,41 @@ int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
 
 #define PROXY_FETCH_MAX (768 * 1024)
 #define PROXY_FETCH_CHUNK 4096
+
+/**
+ * esp_http_client follows redirects only inside esp_http_client_perform();
+ * the open → fetch_headers → read sequence used here stopped at the 3xx
+ * itself, and CDN, signed and short links all redirect. Follows up to
+ * URL_MAX_REDIRECTS hops with IDF's own esp_http_client_set_redirection()
+ * (relative or absolute targets, http → https; an https page cannot
+ * downgrade to http). Returns ESP_OK with the final status and
+ * Content-Length; *status is the 3xx itself when it could not be followed,
+ * so the caller reports it exactly as it did before.
+ */
+#define URL_MAX_REDIRECTS 5
+static esp_err_t url_open_follow(esp_http_client_handle_t client, int *status, long *clen)
+{
+    int st = 0;
+    long len = -1;
+    for (int hop = 0;; hop++) {
+        esp_err_t err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            return err;
+        }
+        len = esp_http_client_fetch_headers(client);
+        st = esp_http_client_get_status_code(client);
+        const bool redirect =
+            st == 301 || st == 302 || st == 303 || st == 307 || st == 308;
+        if (!redirect || hop == URL_MAX_REDIRECTS ||
+            esp_http_client_set_redirection(client) != ESP_OK) {
+            break;
+        }
+        esp_http_client_close(client);
+    }
+    *status = st;
+    *clen = len;
+    return ESP_OK;
+}
 
 static void epd_proxy_download(epd_proxy_job_t *job)
 {
@@ -830,14 +1025,14 @@ static void epd_proxy_download(epd_proxy_job_t *job)
         url_tls_release();
         return;
     }
-    if (esp_http_client_open(client, 0) != ESP_OK) {
+    long clen = -1;
+    int status = 0;
+    if (url_open_follow(client, &status, &clen) != ESP_OK) {
         snprintf(job->err, sizeof(job->err), "http open/TLS fail");
         esp_http_client_cleanup(client);
         url_tls_release();
         return;
     }
-    long clen = esp_http_client_fetch_headers(client);
-    int status = esp_http_client_get_status_code(client);
     if (status > 0 && (status < 200 || status >= 300)) {
         snprintf(job->err, sizeof(job->err), "HTTP status %d", status);
         goto out_close;
@@ -1038,9 +1233,30 @@ int app_epd_init(void)
     }
     if (!s_renderQueue) {
         s_renderQueue = xQueueCreate(2, sizeof(render_msg_t *));
-        /* display_url + SoftAP proxyImage share this TLS stack. A second
-         * large task starves httpd on C61 internal RAM (ESP_ERR_HTTPD_TASK). */
-        xTaskCreate(render_task, "epd_render", 32768, NULL, 4, NULL);
+        /* lwIP, MQTT and cJSON all prefer PSRAM on this unit, for the smallest
+         * objects too. Allocated while MQTT holds the low end of the free
+         * region — right after a display, when MQTT and the web server have
+         * just restarted — a TCP control block or a DNS entry sat above
+         * MQTT's buffers and split the free space in two once MQTT stopped
+         * for the next download (826 KB beside 230 KB; a raw frame needs
+         * 937 KB in one piece). TLSF serves a request from the smallest size
+         * class that has a free block: a hole below the pool takes those
+         * objects instead of the bottom of the big region above it. The hole
+         * is carved first and released once the pool sits above it, so it can
+         * never merge upwards. Same free memory, better place. */
+        void *nursery = heap_caps_malloc(SMALL_OBJ_NURSERY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        /* Reserved before Wi-Fi, MQTT and the frame buffer exist, so it sits
+         * at the bottom of PSRAM for good (see RENDER_MSG_SLOTS). */
+        s_msgPool = heap_caps_calloc(RENDER_MSG_SLOTS, sizeof(render_msg_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_msgPool) {
+            ESP_LOGW(TAG, "render message pool: no PSRAM — messages from the heap");
+        }
+        free(nursery);
+        /* display_url, SoftAP proxyImage and the URL OTA share this one TLS
+         * stack. A second large task starves httpd on C61 internal RAM
+         * (ESP_ERR_HTTPD_TASK). */
+        xTaskCreate(render_task, "epd_render", RENDER_TASK_STACK, NULL, 4, NULL);
     }
 
     /* SPI_CTL early so SGM3699 stays on EPD while CS/RST come up. */
@@ -1335,17 +1551,6 @@ void epd_boot_screen(const char *title, const char *const *lines, int line_count
 
 /* ---- HTTP frame streaming ---- */
 
-static unsigned char logical_fb_pixel(int lx, int ly, void *ctx)
-{
-    const uint8_t *fb = (const uint8_t *)ctx;
-    if (lx < 0 || ly < 0 || lx >= IMG_PANEL_W || ly >= IMG_PANEL_H) {
-        return 0x1;
-    }
-    size_t off = (size_t)ly * (IMG_PANEL_W / 2) + (size_t)(lx / 2);
-    uint8_t b = fb[off];
-    return (lx & 1) ? (b & 0x0F) : (b >> 4);
-}
-
 typedef struct {
     const uint8_t *codes;
     int sw, sh;
@@ -1357,24 +1562,94 @@ static unsigned char codes_cover_pixel(int lx, int ly, void *ctx)
     return img_codes_cover_pixel(c->codes, c->sw, c->sh, lx, ly);
 }
 
-static int stream_raw_native(const uint8_t *raw, size_t len)
+/* A URL body only has to be read in order. The web UI polls the device every
+ * few seconds, and each poll leaves a 208-byte TCP control block above MQTT's
+ * buffers for two minutes: once MQTT stopped for a download that cut the free
+ * PSRAM to 826 KB beside 230 KB — too small for a 937 KB raw frame or an
+ * ~857 KB JPEG in one piece. Bodies are therefore read into up to BODY_SEGS
+ * blocks. For a raw frame the blocks are taken after the response headers
+ * (TLS buffers already exist). JPEG/PNG use the same pieces: the decoders
+ * already read through callbacks. */
+#define BODY_SEGS 3
+typedef struct {
+    uint8_t *p;
+    size_t len;
+} body_seg_t;
+
+static void body_segs_free(body_seg_t *seg)
 {
-    if (len != (size_t)EPD_HALF_BYTES * 2) {
-        return -1;
+    for (int i = 0; i < BODY_SEGS; i++) {
+        free(seg[i].p);
+        seg[i].p = NULL;
+        seg[i].len = 0;
+    }
+}
+
+/* Fill `seg` with up to BODY_SEGS blocks covering `need` bytes. Each piece
+ * takes as much as the current largest free block allows (up to what is still
+ * needed). Call only after HTTP headers are in — TLS already holds its
+ * buffers, so do not hold URL_BODY_RESERVE back from the first piece. */
+static size_t body_segs_alloc(body_seg_t *seg, size_t need)
+{
+    size_t got = 0;
+    for (int i = 0; i < BODY_SEGS && got < need; i++) {
+        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        size_t want = need - got;
+        if (want > largest) {
+            want = largest;
+        }
+        if (want == 0) {
+            break;
+        }
+        seg[i].p = heap_caps_malloc(want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!seg[i].p) {
+            break;
+        }
+        seg[i].len = want;
+        got += want;
+    }
+    return got;
+}
+
+/* Byte `off` of the segmented body, and how many bytes are contiguous there. */
+static const uint8_t *body_seg_at(const body_seg_t *seg, size_t off, size_t *room)
+{
+    for (int i = 0; i < BODY_SEGS; i++) {
+        if (off < seg[i].len) {
+            *room = seg[i].len - off;
+            return seg[i].p + off;
+        }
+        off -= seg[i].len;
+    }
+    *room = 0;
+    return NULL;
+}
+
+static int stream_raw_native(body_seg_t *seg, size_t len)
+{
+    size_t room = 0;
+    if (len != (size_t)EPD_HALF_BYTES * 2 || !body_seg_at(seg, len - 1, &room)) {
+        return -1; /* the segments do not hold the whole frame */
     }
     const bool cap = last_frame_capturing();
     size_t off = 0;
     for (int csx = 0; csx < 2; csx++) {
         stream_begin(csx);
         for (unsigned long sent = 0; sent < EPD_HALF_BYTES;) {
-            int n = (int)((EPD_HALF_BYTES - sent) > CHUNK_SIZE ? CHUNK_SIZE
-                                                               : (EPD_HALF_BYTES - sent));
-            memcpy(s_chunk, raw + off, (size_t)n);
-            writeEpdData(s_chunk, n);
-            if (cap) {
-                last_frame_capture_write(s_chunk, (size_t)n);
+            size_t n = ((EPD_HALF_BYTES - sent) > CHUNK_SIZE) ? CHUNK_SIZE
+                                                              : (EPD_HALF_BYTES - sent);
+            /* A chunk may straddle a segment boundary. */
+            for (size_t done = 0; done < n;) {
+                const uint8_t *src = body_seg_at(seg, off, &room);
+                size_t take = (n - done) < room ? (n - done) : room;
+                memcpy(s_chunk + done, src, take);
+                done += take;
+                off += take;
             }
-            off += (size_t)n;
+            writeEpdData(s_chunk, (int)n);
+            if (cap) {
+                last_frame_capture_write(s_chunk, n);
+            }
             sent += n;
         }
         stream_end(csx);
@@ -1431,6 +1706,29 @@ int epd_url_frame(const char *url)
     const int64_t decode_deadline = t0 + (int64_t)IMG_URL_DECODE_DEADLINE_MS * 1000;
 
     url_tls_prepare();
+    /* A JPEG or PNG body needs one contiguous PSRAM block, and a large file is
+     * already on the wire while the headers are read: what gets buffered on
+     * the way splits the free block (an 857 KB JPEG failed next to 1.09 MB
+     * free in two pieces). Reserve the block before the transfer starts — MQTT
+     * and the frame preview are gone by now, so the free block is as large as
+     * it gets — and hand the unused tail back once the size is known. */
+    uint8_t *body = NULL;
+    body_seg_t seg[BODY_SEGS] = { 0 }; /* raw frames: the body in up to 3 blocks */
+    uint8_t *fb = NULL;
+    int ret = -1;
+    const size_t psram_largest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    size_t body_cap = (psram_largest > URL_BODY_RESERVE) ? psram_largest - URL_BODY_RESERVE : 0;
+    if (body_cap > IMG_URL_MAX_BYTES) {
+        body_cap = IMG_URL_MAX_BYTES;
+    }
+    body = body_cap ? heap_caps_malloc(body_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+    if (!body) {
+        url_fail("download OOM");
+        url_tls_release();
+        return -1;
+    }
+    url_heap_log("body_resvd");
     esp_http_client_config_t cfg = {
         .url = url,
         .timeout_ms = IMG_URL_HTTP_TIMEOUT_MS,
@@ -1444,15 +1742,14 @@ int epd_url_frame(const char *url)
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         url_fail("http init fail");
+        free(body);
         url_tls_release();
         return -1;
     }
 
-    uint8_t *body = NULL;
-    uint8_t *fb = NULL;
-    int ret = -1;
-
-    if (esp_http_client_open(client, 0) != ESP_OK) {
+    long clen = -1;
+    int status = 0;
+    if (url_open_follow(client, &status, &clen) != ESP_OK) {
         url_fail("http open/TLS fail");
         goto out;
     }
@@ -1460,8 +1757,6 @@ int epd_url_frame(const char *url)
         url_fail("URL net timeout");
         goto out_close;
     }
-    long clen = esp_http_client_fetch_headers(client);
-    int status = esp_http_client_get_status_code(client);
     ESP_LOGI(TAG, "url headers status=%d clen=%ld (%.1fs)",
              status, clen,
              (esp_timer_get_time() - t0) / 1e6);
@@ -1489,15 +1784,51 @@ int epd_url_frame(const char *url)
         }
     }
 
-    /* Large bodies must stay in PSRAM — internal malloc fallback steals TLS/Wi‑Fi
-     * headroom and looks like a random hang/OOM later. */
-    body = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!body) {
-        url_heap_log("body_oom");
-        url_fail("download OOM");
-        goto out_close;
+    if (clen > 0 && (size_t)clen == raw_need) {
+        /* Raw frame: give the reservation back and fill free blocks. */
+        free(body);
+        body = NULL;
+        size_t got = body_segs_alloc(seg, cap);
+        if (got < cap) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "need %uKB, got %uKB in pieces",
+                     (unsigned)(cap / 1024), (unsigned)(got / 1024));
+            url_fail(buf);
+            goto out_close;
+        }
+        url_heap_log("body_segs");
+    } else if (cap > body_cap) {
+        if (clen <= 0) {
+            cap = body_cap; /* unknown length: read what was reserved */
+            url_heap_log("body_alloc");
+        } else {
+            /* Known size the reserved block cannot hold (often a poll left a
+             * TCP control block that split PSRAM). Free the reservation and
+             * take up to BODY_SEGS pieces — JPEG/PNG decode from them in order. */
+            free(body);
+            body = NULL;
+            size_t got = body_segs_alloc(seg, cap);
+            if (got < cap) {
+                char buf[48];
+                snprintf(buf, sizeof(buf), "need %uKB, got %uKB in pieces",
+                         (unsigned)(cap / 1024), (unsigned)(got / 1024));
+                url_fail(buf);
+                goto out_close;
+            }
+            url_heap_log("body_segs");
+        }
+    } else {
+        /* Keep only what this file needs: a small image hands everything above
+         * it back before the body arrives, so TLS and the network keep their
+         * PSRAM. A shrink never moves the block; if it fails it just stays. */
+        {
+            uint8_t *fit = heap_caps_realloc(body, cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (fit) {
+                body = fit;
+            }
+        }
+        url_heap_log("body_alloc");
     }
-    url_heap_log("body_alloc");
 
     size_t total = 0;
     size_t last_log = 0;
@@ -1507,7 +1838,12 @@ int epd_url_frame(const char *url)
             goto out_close;
         }
         int want = (int)((cap - total) > CHUNK_SIZE ? CHUNK_SIZE : (cap - total));
-        int got = esp_http_client_read(client, (char *)body + total, want);
+        size_t room = 0;
+        uint8_t *dst = body ? body + total : (uint8_t *)body_seg_at(seg, total, &room);
+        if (!body && (size_t)want > room) {
+            want = (int)room; /* never read across a segment boundary */
+        }
+        int got = esp_http_client_read(client, (char *)dst, want);
         if (got < 0) {
             url_fail("http read error");
             goto out_close;
@@ -1557,15 +1893,16 @@ int epd_url_frame(const char *url)
     client = NULL;
     url_heap_log("tls_freed");
 
-    img_fmt_t fmt = img_sniff_format(body, total);
+    img_fmt_t fmt = img_sniff_format(body ? body : seg[0].p, total);
     if (fmt == IMG_FMT_RAW4BPP || (total == raw_need && fmt != IMG_FMT_JPEG && fmt != IMG_FMT_PNG)) {
         if (!s_acceptJobs) {
             url_fail("sleep pending");
             goto out;
         }
+        body_seg_t one = { body, total }; /* a raw frame that came in one block */
         epd_lock();
         last_frame_capture_begin("url");
-        ret = stream_raw_native(body, total);
+        ret = stream_raw_native(body ? &one : seg, total);
         if (ret == 0) {
             last_frame_capture_commit();
             ESP_LOGI(TAG, "raw 4bpp frame OK");
@@ -1590,11 +1927,30 @@ int epd_url_frame(const char *url)
         url_heap_log("pre_decode");
         uint8_t *rgb = NULL;
         int rw = 0, rh = 0;
-        if (img_decode_to_rgb(body, total, &rgb, &rw, &rh, use_proc) != 0) {
+        int dec_ok;
+        if (body) {
+            dec_ok = img_decode_to_rgb(body, total, &rgb, &rw, &rh, use_proc);
+        } else {
+            const uint8_t *parts[BODY_SEGS];
+            size_t plens[BODY_SEGS];
+            int nparts = 0;
+            for (int i = 0; i < BODY_SEGS; i++) {
+                if (!seg[i].p || seg[i].len == 0) {
+                    break;
+                }
+                parts[nparts] = seg[i].p;
+                plens[nparts] = seg[i].len;
+                nparts++;
+            }
+            dec_ok = img_decode_to_rgb_parts(parts, plens, nparts, total, &rgb, &rw, &rh,
+                                             use_proc);
+        }
+        if (dec_ok != 0) {
             url_fail(fmt == IMG_FMT_JPEG ? "JPEG decode fail" : "PNG decode fail");
         } else {
             free(body);
             body = NULL;
+            body_segs_free(seg);
             url_heap_log("post_decode");
             if (esp_timer_get_time() > decode_deadline) {
                 free(rgb);
@@ -1611,11 +1967,11 @@ int epd_url_frame(const char *url)
              * often fails after TLS download fragmentation on 2MB PSRAM. */
             uint8_t *codes = NULL;
             int cw = 0, ch = 0;
+            /* img_rgb_dither_codes consumes rgb: `codes` may be realloc(rgb)
+             * in place (SPEED). Never free rgb after this call — only codes. */
             if (img_rgb_dither_codes(rgb, rw, rh, &codes, &cw, &ch, use_proc) != 0) {
-                free(rgb);
                 url_fail("dither OOM/fail");
             } else {
-                free(rgb); /* dither owns the output codes; drop RGB early */
                 codes_cover_ctx_t cctx = {.codes = codes, .sw = cw, .sh = ch};
                 url_heap_log("pre_stream");
                 ESP_LOGI(TAG, "decode OK — stream cover %dx%d", cw, ch);
@@ -1657,6 +2013,7 @@ out:
         esp_http_client_cleanup(client);
     }
     free(body);
+    body_segs_free(seg);
     img_fb_release(fb);
     url_tls_release();
     return ret;

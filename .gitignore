@@ -58,3 +58,6 @@ flasher_args.json
 *.bak
 *.orig
 *.rej
+
+# Local wiki screenshot dumps (canonical copies live in wiki-documents/static)
+docs/wiki-screenshots/

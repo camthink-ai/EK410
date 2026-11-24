@@ -164,7 +164,7 @@ unsigned char spiTransmitCommand(unsigned char commandBuf)
     return (spi_tx(s_staging, 1) == ESP_OK) ? DONE : ERROR;
 }
 
-unsigned char spiTransmitData(unsigned char *dataBuffer, unsigned long dataLength)
+unsigned char spiTransmitData(const unsigned char *dataBuffer, unsigned long dataLength)
 {
     while (dataLength > 0) {
         unsigned long n = dataLength;
@@ -180,7 +180,7 @@ unsigned char spiTransmitData(unsigned char *dataBuffer, unsigned long dataLengt
     return DONE;
 }
 
-unsigned char spiTransmitLargeData(unsigned char commandBuf, unsigned char *dataBuffer, unsigned long dataLength)
+unsigned char spiTransmitLargeData(unsigned char commandBuf, const unsigned char *dataBuffer, unsigned long dataLength)
 {
     if (spiTransmitCommand(commandBuf) != DONE) {
         return ERROR;
@@ -188,7 +188,7 @@ unsigned char spiTransmitLargeData(unsigned char commandBuf, unsigned char *data
     return spiTransmitData(dataBuffer, dataLength);
 }
 
-unsigned char spiTransmit(unsigned char commandBuf, unsigned char *epdData, unsigned int dataLength)
+unsigned char spiTransmit(unsigned char commandBuf, const unsigned char *epdData, unsigned int dataLength)
 {
     if (dataLength == 0) {
         return spiTransmitCommand(commandBuf);

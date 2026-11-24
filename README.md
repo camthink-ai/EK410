@@ -2,20 +2,27 @@
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
-[![Version](https://img.shields.io/badge/version-1.3.9-blue)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.3.10-blue)](VERSION)
 [![License](https://img.shields.io/badge/license-Dual--License-red)](LICENSE)
 
 **CamThink** 7.09″ Spectra 6 e-ink display firmware.
 
-[中文文档](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [Docs](docs/) · [License](LICENSE)
+[中文文档](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [Docs](docs/) · [License](LICENSE) · [GitHub](https://github.com/camthink-ai/EK410)
 
 | | |
 |---|---|
 | **Product** | EK410 · CamThink E-Ink Display |
 | **SoC** | ESP32-C61HR2 · 16MB flash · 2MB PSRAM |
 | **Panel** | E Ink Spectra 6 · logical 1600×1200 · 6 colors |
-| **Firmware** | [`VERSION`](VERSION) → **1.3.9** |
+| **Firmware** | [`VERSION`](VERSION) → **1.3.10** |
 | **Platform** | [NeoMind](https://wiki.camthink.ai) · device type `ek410_Eink` |
+| **Source** | [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410) |
+
+<p align="center">
+  <img src="assets/readme/EK410-Front-01-Alpine-Lake.jpg" alt="EK410 Spectra 6 — Alpine Lake" width="48%" />
+  &nbsp;
+  <img src="assets/readme/EK410-Front-05-Tiger.jpg" alt="EK410 Spectra 6 — Tiger" width="48%" />
+</p>
 
 ---
 
@@ -62,21 +69,24 @@ MQTT / wake URL still use on-device `displayUrl`.
 |---------|--------|
 | **MAIN** hold ~2.5s | SoftAP on (`EK410_<MAC6>` / `12345678` → `http://192.168.4.1`) · blue |
 | **PAGE** hold ~2.5s | Enter / exit BLE CT-Prov · cyan |
-| **MAIN+PAGE** hold ~6s | Factory reset (device id preserved) |
+| **MAIN+PAGE** hold ~6s | Factory reset (device id preserved; both keys must stay down for the whole 6 s) |
 | Deep sleep **MAIN** | Wake → SoftAP |
 | Deep sleep **PAGE** | Wake → BLE |
 | Deep sleep timer | Cycle wake (optional wake URL + online window) |
 | Hardware **RESET** | Exit SoftAP/BLE handoff · restore last frame |
-| Chip **BOOT** (IO9) held at reset | Factory reset |
+| Chip **BOOT** (IO9) | Factory reset when it reads low ~50 ms after boot (service function). IO9 is the boot-mode strap: holding it across reset enters the ROM download mode instead |
 
 | LED | Meaning |
 |-----|---------|
-| Blue blink | SoftAP / Wi‑Fi joining |
+| Blue blink | SoftAP provisioning |
+| Orange blink | Wi‑Fi joining / reconnecting |
 | Cyan blink | BLE provisioning |
-| Green solid | Running OK (STA up) |
+| Green solid | Running OK (STA up) or unprovisioned idle |
+| Red pulse | Fault (provisioning / OTA / panel) — never sticky |
+| Purple fast blink | OTA in progress |
 | Off in deep sleep | LED + panel rail powered down |
 
-SoftAP / BLE idle auto-close: **2 minutes** (activity extends).
+SoftAP / BLE idle auto-close: **2 minutes** (activity extends), with a **15 minute** hard cap even while a client is still attached.
 
 ---
 
@@ -84,9 +94,9 @@ SoftAP / BLE idle auto-close: **2 minutes** (activity extends).
 
 | Mode | Behavior |
 |------|----------|
-| `always` | Stay awake; `sleepNow` → deep sleep until MAIN |
-| `cycle` | After wake, stay online `wakeSec` (30–600, default **120**), then sleep `sleepMin` minutes |
-| `hibernate` | Sleep until MAIN (save param may sleep immediately) |
+| `always` | Stay awake; `sleepNow` → deep sleep until MAIN (→ SoftAP) or PAGE (→ BLE) |
+| `cycle` | After wake, stay online `wakeSec` (30–600, default **120**), then sleep `sleepMin` minutes. A boot that never gets an IP still sleeps after the max window (600 s), so a missing router cannot drain the battery |
+| `hibernate` | Sleep until MAIN/PAGE (save param may sleep immediately; saved under SoftAP it sleeps when the hotspot closes) |
 
 ---
 
@@ -137,12 +147,12 @@ EK410/
 | [`VERSION`](VERSION) | Canonical SemVer |
 | [`main/version.h`](main/version.h) | Embedded string |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release notes |
-| Git tag | `v1.3.9` |
+| Git tag | `v1.3.10` |
 
 ```bash
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.9
-git tag -a v1.3.9 -m "EK410 v1.3.9"
+python3 tools/bump_version.py 1.3.10
+git tag -a v1.3.10 -m "EK410 v1.3.10"
 ```
 
 ---
@@ -155,6 +165,7 @@ git tag -a v1.3.9 -m "EK410 v1.3.9"
 | HTTP API | [docs/api.md](docs/api.md) | [docs/zh/api.md](docs/zh/api.md) |
 | CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | [docs/ct_prov.md](docs/ct_prov.md) | — |
 | Development | [docs/development.md](docs/development.md) | [docs/zh/development.md](docs/zh/development.md) |
+| Security | [docs/security.md](docs/security.md) | [docs/zh/security.md](docs/zh/security.md) |
 | Tools | [tools/README.md](tools/README.md) | — |
 
 ---

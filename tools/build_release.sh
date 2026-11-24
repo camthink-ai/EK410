@@ -13,8 +13,11 @@ fi
 DIST="$ROOT/dist"
 mkdir -p "$DIST"
 
-echo "==> Preflight: version + embed www"
+echo "==> Preflight: version + host tests + embed www"
 python3 "$ROOT/tools/bump_version.py" --check
+# JSON depth guard, native frame layout, QA gate semantics, embedded page in
+# sync with www/index.html, font tables — fails the build if any regressed.
+python3 "$ROOT/tools/run_host_tests.py"
 python3 "$ROOT/tools/gen_www.py"
 
 echo "==> Single image ek410 (SoftAP XOR BLE CT-Prov)"

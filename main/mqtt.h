@@ -23,6 +23,9 @@ void mqtt_open(void);
 bool mqtt_infra_ok(void);
 /** Last broker/TLS failure string for UI ("" if none). */
 const char *mqtt_last_error(void);
+/** Drop the remembered failure — for the moment a new broker config is
+ *  saved, so the UI cannot read the old attempt's error as the new verdict. */
+void mqtt_forget_error(void);
 void mqtt_start(void);   /* no-op if host empty or already started */
 /** Arm oneshot bring-up retry after stop/defer (survives cancelled timers). */
 void mqtt_kick_start_retry(int delay_ms);
@@ -32,6 +35,13 @@ void mqtt_kick_start_retry(int delay_ms);
  * radio or STA is down. SoftAP+STA is allowed (bringup pauses httpd).
  */
 void mqtt_restore_after_temp_stop(void);
+/**
+ * Hold the client down across a temporary mqtt_stop (URL image TLS, OTA):
+ * mqtt_stop's automatic start-retry and mqtt_start stay off until the paired
+ * mqtt_release. The releaser restores the client itself.
+ */
+void mqtt_hold(void);
+void mqtt_release(void);
 /**
  * Stop MQTT client under the module mutex.
  * Returns 0 if stopped (or already idle), -1 if mutex timed out — client

@@ -48,6 +48,7 @@
 #include "cJSON.h"
 
 #include "http.h"
+#include "json_guard.h"
 #include "config.h"
 #include "wifi.h"
 #include "mqtt.h"
@@ -72,6 +73,10 @@ static void softap_touch(void)
 static esp_err_t send_json(httpd_req_t *req, const char *str)
 {
     softap_touch();
+    /* cJSON_Print returns NULL on OOM — never strlen(NULL). */
+    if (!str) {
+        str = "{\"code\":1,\"msg\":\"out of memory\"}";
+    }
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, str);
 }
@@ -81,6 +86,30 @@ static esp_err_t send_err(httpd_req_t *req, const char *msg)
     char buf[96];
     snprintf(buf, sizeof(buf), "{\"code\":1,\"msg\":\"%s\"}", msg);
     return send_json(req, buf);
+}
+
+static char *read_body(httpd_req_t *req);
+
+/* Smallest free stack ever seen (bytes) for the tasks this firmware runs on
+ * its tightest budgets. Looked up by name through xTaskGetHandle(), so no
+ * task-list buffer is needed on the httpd stack. */
+static void add_stack_min(cJSON *obj)
+{
+    static const char *const kTasks[] = {
+        "httpd",     "mqtt_task", "mqtt_cmd", "mqtt_up",  "sys_evt",
+        "esp_timer", "epd_render", "button", "ct_ble",   "wifi",
+        "nimble_host", "led",
+    };
+    cJSON *sm = cJSON_AddObjectToObject(obj, "stackMin");
+    if (!sm) {
+        return;
+    }
+    for (size_t i = 0; i < sizeof(kTasks) / sizeof(kTasks[0]); i++) {
+        TaskHandle_t h = xTaskGetHandle(kTasks[i]);
+        if (h) {
+            cJSON_AddNumberToObject(sm, kTasks[i], uxTaskGetStackHighWaterMark(h));
+        }
+    }
 }
 
 static char *read_body(httpd_req_t *req)
@@ -192,11 +221,48 @@ static esp_err_t get_dev_info_handle(httpd_req_t *req)
     ota_get_status(running, sizeof(running), &pendingRollback);
     cJSON_AddStringToObject(obj, "otaPartition", running);
     cJSON_AddBoolToObject(obj, "otaPendingVerify", pendingRollback);
+    /* A URL OTA POST returns before its download: the web UI polls these. */
+    cJSON_AddStringToObject(obj, "otaState", ota_state_str());
+    if (ota_last_error()[0]) {
+        cJSON_AddStringToObject(obj, "otaError", ota_last_error());
+    }
     powerAttr_t p;
     cfg_get_power_attr(&p);
     cJSON_AddStringToObject(obj, "powerMode", power_mode_str(p.mode));
     cJSON_AddNumberToObject(obj, "sleepMin", p.sleepMin);
     cJSON_AddNumberToObject(obj, "wakeSec", p.wakeSec);
+    char *str = cJSON_PrintUnformatted(obj);
+    esp_err_t res = send_json(req, str);
+    cJSON_free(str);
+    cJSON_Delete(obj);
+    return res;
+}
+
+/* Field diagnostics, polled on demand: heap headroom and, per long-lived
+ * task, the smallest amount of stack ever left. Deliberately NOT part of
+ * getDevInfo — the web UI polls that every few seconds. */
+static esp_err_t get_diag_handle(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) {
+        return send_err(req, "oom");
+    }
+    cJSON *heap = cJSON_AddObjectToObject(obj, "heap");
+    if (heap) {
+        cJSON_AddNumberToObject(heap, "free", esp_get_free_heap_size());
+        cJSON_AddNumberToObject(heap, "minFree", esp_get_minimum_free_heap_size());
+        cJSON_AddNumberToObject(heap, "freeInt",
+                                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        cJSON_AddNumberToObject(heap, "minFreeInt",
+                                 heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+        cJSON_AddNumberToObject(heap, "largestInt",
+                                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        cJSON_AddNumberToObject(heap, "freeSpiram",
+                                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        cJSON_AddNumberToObject(heap, "largestSpiram",
+                                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    }
+    add_stack_min(obj);
     char *str = cJSON_PrintUnformatted(obj);
     esp_err_t res = send_json(req, str);
     cJSON_free(str);
@@ -210,15 +276,20 @@ static esp_err_t set_dev_info_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     cJSON *name = root ? cJSON_GetObjectItem(root, "devName") : NULL;
     if (!cJSON_IsString(name) || name->valuestring[0] == '\0') {
         cJSON_Delete(root);
         return send_err(req, "missing devName");
     }
-    cfg_set_dev_name(name->valuestring);
+    /* Stored in a 33-byte field: reject instead of saving an unreadable name. */
+    esp_err_t err = cfg_set_dev_name(name->valuestring);
     cJSON_Delete(root);
+    if (err != ESP_OK) {
+        return send_err(req, err == ESP_ERR_INVALID_ARG ? "devName too long (max 32 bytes)"
+                                                        : "devName save failed");
+    }
     return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
 }
 
@@ -232,7 +303,10 @@ static esp_err_t set_dev_reset_handle(httpd_req_t *req)
 
 static esp_err_t set_dev_factory_handle(httpd_req_t *req)
 {
-    cfg_factory_reset();
+    esp_err_t err = cfg_factory_reset();
+    if (err != ESP_OK) {
+        return send_err(req, "factory reset failed");
+    }
     send_json(req, "{\"code\":0,\"msg\":\"factory reset, rebooting\"}");
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
@@ -294,7 +368,7 @@ static esp_err_t set_wifi_param_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     cJSON *ssid = root ? cJSON_GetObjectItem(root, "ssid") : NULL;
     cJSON *pass = root ? cJSON_GetObjectItem(root, "password") : NULL;
@@ -364,7 +438,9 @@ static esp_err_t get_mqtt_param_handle(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "clientId", mqtt.clientId);
     cJSON_AddNumberToObject(obj, "qos", mqtt.qos);
     cJSON_AddStringToObject(obj, "username", mqtt.username);
-    cJSON_AddStringToObject(obj, "password", mqtt.password);
+    /* Secret is write-only like the Wi-Fi password: a blank field on save
+     * means "unchanged" (see setMqttParam). */
+    cJSON_AddBoolToObject(obj, "hasPassword", mqtt.password[0] != '\0');
     cJSON_AddStringToObject(obj, "topicUp", topicUp);
     cJSON_AddStringToObject(obj, "topicDown", topicDown);
     cJSON_AddNumberToObject(obj, "keepalive_s", 30);
@@ -385,7 +461,7 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     cJSON *host = root ? cJSON_GetObjectItem(root, "host") : NULL;
     cJSON *port = root ? cJSON_GetObjectItem(root, "port") : NULL;
@@ -455,6 +531,15 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
 
     mqttAttr_t prev;
     cfg_get_mqtt_attr(&prev);
+    /* A blank password keeps the stored secret only for the same account:
+     * never send it to a different broker or username. */
+    const bool passwordCleared =
+        !(cJSON_IsString(pass) && pass->valuestring[0] != '\0') &&
+        mqtt.password[0] != '\0' &&
+        (strcmp(prev.host, mqtt.host) != 0 || strcmp(prev.username, mqtt.username) != 0);
+    if (passwordCleared) {
+        mqtt.password[0] = '\0';
+    }
     const bool same_broker =
         prev.transport == mqtt.transport &&
         prev.port == mqtt.port &&
@@ -515,10 +600,20 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     } else {
         cJSON_AddStringToObject(resp, "msg", "ok");
     }
+    /* Fits the httpd task stack: both messages together stay under 90 chars. */
+    char warn[96] = "";
+    if (passwordCleared) {
+        strlcpy(warn, "password cleared: broker or username changed", sizeof(warn));
+    }
     if (mqtt.transport == MQTT_TRANSPORT_TCP && mqtt.port == 8883) {
-        cJSON_AddStringToObject(resp, "warn", "port 8883 with mqtt (expected mqtts?)");
+        snprintf(warn + strlen(warn), sizeof(warn) - strlen(warn),
+                 "%sport 8883 with mqtt (expected mqtts?)", warn[0] ? "; " : "");
     } else if (mqtt.transport == MQTT_TRANSPORT_TLS && mqtt.port == 1883) {
-        cJSON_AddStringToObject(resp, "warn", "port 1883 with mqtts (expected mqtt?)");
+        snprintf(warn + strlen(warn), sizeof(warn) - strlen(warn),
+                 "%sport 1883 with mqtts (expected mqtt?)", warn[0] ? "; " : "");
+    }
+    if (warn[0]) {
+        cJSON_AddStringToObject(resp, "warn", warn);
     }
     char *str = cJSON_PrintUnformatted(resp);
     esp_err_t res = send_json(req, str);
@@ -527,6 +622,9 @@ static esp_err_t set_mqtt_param_handle(httpd_req_t *req)
     if (will_start) {
         /* SoftAP web-first defer must not block an explicit save/test. */
         wifi_softap_mqtt_user_start();
+        /* The last attempt's failure (e.g. "bad username or password") must
+         * not be read back as the verdict on the config just saved. */
+        mqtt_forget_error();
         /* Let the SoftAP TCP stack flush the response before pause. */
         vTaskDelay(pdMS_TO_TICKS(80));
         mqtt_start();
@@ -604,7 +702,7 @@ static esp_err_t open_ble_handle(httpd_req_t *req)
     /* Optional {"idleSec":N} for CI auto-exit. */
     char *body = read_body(req);
     if (body) {
-        cJSON *root = cJSON_Parse(body);
+        cJSON *root = json_guard_parse(body);
         free(body);
         if (root) {
             cJSON *idle = cJSON_GetObjectItem(root, "idleSec");
@@ -702,7 +800,7 @@ static esp_err_t display_render_text_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     cJSON *t = root ? cJSON_GetObjectItem(root, "text") : NULL;
     cJSON *c = root ? cJSON_GetObjectItem(root, "color") : NULL;
@@ -750,7 +848,7 @@ static esp_err_t display_render_canvas_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     if (!root) {
         return send_err(req, "invalid JSON");
@@ -786,7 +884,7 @@ static esp_err_t display_url_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     cJSON *u = root ? cJSON_GetObjectItem(root, "url") : NULL;
     if (!cJSON_IsString(u) || !u->valuestring[0]) {
@@ -824,7 +922,7 @@ static esp_err_t display_proxy_image_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     cJSON *u = root ? cJSON_GetObjectItem(root, "url") : NULL;
     if (!cJSON_IsString(u) || !u->valuestring[0]) {
@@ -851,15 +949,16 @@ static esp_err_t display_proxy_image_handle(httpd_req_t *req)
 
     s_proxy_busy = true;
     ESP_LOGI(TAG, "proxyImage queue %.96s%s", job->url, strlen(job->url) > 96 ? "…" : "");
-    /* May wait behind splash/panel refresh (20–40s) then TLS download. */
-    int rc = app_epd_proxy_fetch(job, 90000);
+    /* May wait behind splash/panel refresh (20–40s) then TLS download. On
+     * failure job may already be freed: use the out-params, not *job. */
+    char perr[48] = "";
+    bool proxy_released = false;
+    int rc = app_epd_proxy_fetch(job, 90000, perr, sizeof(perr), &proxy_released);
     if (rc != 0) {
         char errcopy[48];
-        strlcpy(errcopy, job->err[0] ? job->err : "proxy fail", sizeof(errcopy));
+        strlcpy(errcopy, perr[0] ? perr : "proxy fail", sizeof(errcopy));
         ESP_LOGW(TAG, "proxyImage fail: %s", errcopy);
-        if (job->orphaned) {
-            /* Render task frees job + data when download finishes. */
-        } else {
+        if (!proxy_released) {
             free(job->data);
             free(job);
         }
@@ -881,6 +980,9 @@ static esp_err_t display_upload_frame_handle(httpd_req_t *req)
 {
     if (req->content_len != 960000) {
         return send_err(req, "body must be a raw 960000-byte frame");
+    }
+    if (ota_busy()) {
+        return send_err(req, "ota busy");
     }
     if (!app_epd_jobs_accepted()) {
         return send_err(req, "sleep pending");
@@ -989,43 +1091,16 @@ static esp_err_t display_last_frame_handle(httpd_req_t *req)
 
 /* ---------- OTA ---------- */
 
-/* URL + local OTA pause MQTT/sleep; on failure restore so the old image keeps
- * cloud connectivity and cycle sleep without a reboot. */
-static void ota_upload_restore_runtime(void)
-{
-    wifi_led_refresh();
-    mqtt_restore_after_temp_stop();
-    sleep_kick();
-}
-
-static void ota_task(void *arg)
-{
-    char *url = (char *)arg;
-    char err[48] = "";
-    ESP_LOGW(TAG, "OTA start: %s", url);
-    led_set(LEDC_OTA_R, LED_BLINK_FAST); /* purple: upgrading */
-    int rc = ota_start(url, err, sizeof(err));
-    if (rc == 0) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
-    }
-    ESP_LOGE(TAG, "OTA failed: %s", err);
-    led_pulse(LEDC_ERR_R, 2000);
-    ota_upload_restore_runtime();
-    free(url);
-    vTaskDelete(NULL);
-}
-
 static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
 {
-    if (ota_upload_is_active()) {
+    if (ota_busy()) {
         return send_err(req, "ota busy");
     }
     char *body = read_body(req);
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     cJSON *url = root ? cJSON_GetObjectItem(root, "url") : NULL;
     if (!cJSON_IsString(url) || strncmp(url->valuestring, "https://", 8) != 0) {
@@ -1037,16 +1112,32 @@ static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
     if (!urlCopy) {
         return send_err(req, "oom");
     }
+    if (strlen(urlCopy) >= 512) {
+        free(urlCopy);
+        return send_err(req, "url too long");
+    }
+    /* Claim BEFORE stopping MQTT: that stop arms a start-retry, which must
+     * already see the OTA and keep the client down until the download ends. */
+    if (!ota_url_claim()) {
+        free(urlCopy);
+        return send_err(req, "ota busy");
+    }
     /* Match local upload: free internal heap before HTTPS TLS + flash write. */
     if (mqtt_stop_wait(4000) != 0) {
         free(urlCopy);
+        ota_url_release(NULL);
         return send_err(req, "mqtt stop busy");
     }
     sleep_cancel(); /* don't sleep mid-upgrade */
-    if (xTaskCreate(ota_task, "ota", 12288, urlCopy, 5, NULL) != pdPASS) {
-        free(urlCopy);
-        ota_upload_restore_runtime();
-        return send_err(req, "task spawn failed");
+    /* The download runs on the render task: it owns the one deep TLS stack,
+     * and a dedicated 12 KB task could not be created on a unit with Wi-Fi,
+     * httpd and MQTT up (the request failed with "task spawn failed"). */
+    int rc = app_epd_ota_async(urlCopy);
+    free(urlCopy);
+    if (rc != 0) {
+        ota_url_release(NULL);
+        ota_restore_runtime();
+        return send_err(req, app_epd_queue_err(rc));
     }
     return send_json(req, "{\"code\":0,\"msg\":\"upgrading, device will reboot\"}");
 }
@@ -1056,7 +1147,7 @@ static esp_err_t set_dev_upgrade_handle(httpd_req_t *req)
 static esp_err_t upload_firmware_handle(httpd_req_t *req)
 {
     softap_touch();
-    if (ota_upload_is_active()) {
+    if (ota_busy()) {
         return send_err(req, "ota busy");
     }
     if (req->content_len <= 0) {
@@ -1078,7 +1169,7 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
 
     char err[64] = "";
     if (ota_upload_begin((size_t)req->content_len, err, sizeof(err)) != 0) {
-        ota_upload_restore_runtime();
+        ota_restore_runtime();
         return send_err(req, err[0] ? err : "ota begin failed");
     }
 
@@ -1090,7 +1181,7 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
     if (!buf) {
         ota_upload_abort();
         led_pulse(LEDC_ERR_R, 2000);
-        ota_upload_restore_runtime();
+        ota_restore_runtime();
         return send_err(req, "oom");
     }
 
@@ -1102,14 +1193,14 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
             free(buf);
             ota_upload_abort();
             led_pulse(LEDC_ERR_R, 2000);
-            ota_upload_restore_runtime();
+            ota_restore_runtime();
             return send_err(req, "upload interrupted");
         }
         if (ota_upload_write(buf, (size_t)got) != 0) {
             free(buf);
             ota_upload_abort();
             led_pulse(LEDC_ERR_R, 2000);
-            ota_upload_restore_runtime();
+            ota_restore_runtime();
             return send_err(req, "ota write failed (bad magic or flash)");
         }
         remaining -= got;
@@ -1119,7 +1210,7 @@ static esp_err_t upload_firmware_handle(httpd_req_t *req)
 
     if (ota_upload_finish(err, sizeof(err)) != 0) {
         led_pulse(LEDC_ERR_R, 2000);
-        ota_upload_restore_runtime();
+        ota_restore_runtime();
         return send_err(req, err[0] ? err : "ota validate failed");
     }
 
@@ -1159,7 +1250,7 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
     if (!body) {
         return send_err(req, "bad body");
     }
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = json_guard_parse(body);
     free(body);
     if (!root) {
         return send_err(req, "invalid JSON");
@@ -1199,16 +1290,31 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
     if ((v = cJSON_GetObjectItem(root, "ledGpio")) && cJSON_IsNumber(v) && v->valueint >= 0) {
         p.ledGpio = v->valueint;
     }
+    /* A body that names no mode only tunes fields (quality, wakeUrl, wakeSec):
+     * the stored sleep policy must not be re-applied as a fresh request. */
+    const bool policyGiven =
+        cJSON_IsString(cJSON_GetObjectItem(root, "mode")) ||
+        cJSON_IsNumber(cJSON_GetObjectItem(root, "sleepMin"));
     cJSON_Delete(root);
-    cfg_set_power_attr(&p);
+    esp_err_t perr = cfg_set_power_attr(&p);
     cfg_get_power_attr(&p); /* re-read normalized values */
+    if (perr != ESP_OK) {
+        return send_err(req, "power save failed");
+    }
     evtlog_event("SYS", "power mode=%s sleepMin=%d wakeSec=%d img=%s",
                  power_mode_str(p.mode), p.sleepMin, p.wakeSec,
                  img_quality_str(p.imageQuality));
 
     bool sleepSoon = false;
     const char *sleepDeferred = NULL;
-    if (p.mode == POWER_MODE_CYCLE) {
+    if (!policyGiven) {
+        /* Field-only edit: keep the current schedule as it is — at most
+         * refresh an already armed window (wakeSec may have changed). */
+        if (p.mode == POWER_MODE_CYCLE && sleep_is_armed()) {
+            sleep_arm_from_config();
+        }
+    } else if (p.mode == POWER_MODE_CYCLE) {
+        sleep_set_hibernate_pending(false);
         if (wifi_softap_is_up()) {
             ESP_LOGW(TAG, "SoftAP up — sleep schedule deferred until AP closes");
             sleep_cancel();
@@ -1219,15 +1325,20 @@ static esp_err_t set_power_param_handle(httpd_req_t *req)
             ESP_LOGW(TAG, "not online — sleep schedule deferred until GOT_IP");
             sleep_cancel();
             sleepDeferred = "no_sta";
+            /* Still bounded: sleep after the max window if STA never joins. */
+            sleep_arm_offline_fallback();
         }
     } else if (p.mode == POWER_MODE_HIBERNATE) {
         sleep_cancel();
         if (wifi_softap_is_up()) {
             sleepDeferred = "softap";
+            /* sleep_on_prov_closed() enters it when the hotspot closes. */
+            sleep_set_hibernate_pending(true);
         } else {
             sleepSoon = true;
         }
     } else {
+        sleep_set_hibernate_pending(false);
         sleep_cancel();
     }
     if (sleepSoon) {
@@ -1345,7 +1456,9 @@ static esp_err_t clear_event_log_handle(httpd_req_t *req)
     if (!m.present) {
         return send_err(req, "event log unavailable");
     }
-    evtlog_clear();
+    if (evtlog_clear() != 0) {
+        return send_err(req, "event log clear failed");
+    }
     return send_json(req, "{\"code\":0,\"msg\":\"ok\"}");
 }
 
@@ -1384,6 +1497,7 @@ static esp_err_t get_root_handler(httpd_req_t *req)
 static const httpd_uri_t g_handlers[] = {
     { .uri = "/", .method = HTTP_GET, .handler = get_root_handler },
     { .uri = "/api/v1/system/getDevInfo", .method = HTTP_GET, .handler = get_dev_info_handle },
+    { .uri = "/api/v1/system/getDiag", .method = HTTP_GET, .handler = get_diag_handle },
     { .uri = "/api/v1/system/setDevInfo", .method = HTTP_POST, .handler = set_dev_info_handle },
     { .uri = "/api/v1/system/setDevReset", .method = HTTP_POST, .handler = set_dev_reset_handle },
     { .uri = "/api/v1/system/setDevFactory", .method = HTTP_POST, .handler = set_dev_factory_handle },

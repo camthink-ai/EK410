@@ -28,8 +28,48 @@ void ota_upload_abort(void);
 int ota_upload_finish(char *errBuf, int errLen);
 bool ota_upload_is_active(void);
 
+/**
+ * Lifecycle reported by getDevInfo. A URL OTA POST returns before the
+ * download starts, so the web UI polls this to tell success from failure.
+ */
+typedef enum {
+    OTA_STATE_IDLE = 0,
+    OTA_STATE_RUNNING, /* URL download or local upload is writing flash */
+    OTA_STATE_FAILED,  /* last attempt failed — ota_last_error() says why */
+} ota_state_t;
+
+/* True while flash is being written (URL download or local upload). mqtt.c
+ * must not recreate its client meanwhile: OTA stops it for the heap. */
+bool ota_busy(void);
+/* Reserve the URL path — call BEFORE stopping MQTT so the stop's automatic
+ * start-retry already sees the OTA. False if another OTA is running. */
+bool ota_url_claim(void);
+/* Give the URL path back; a non-empty err records a failed attempt. */
+void ota_url_release(const char *err);
+/**
+ * Run a claimed URL OTA on the calling task. That must be the render task:
+ * HTTPS needs its deep stack (the URL image fetch uses the same one), and a
+ * dedicated OTA task can no longer be created once Wi-Fi, httpd and MQTT
+ * own the internal RAM. The caller stops MQTT and cancels sleep first.
+ * Reboots on success; on failure records the error and restores the runtime.
+ */
+void ota_url_run(const char *url);
+/* Bring LED, MQTT and the sleep schedule back after a failed OTA attempt. */
+void ota_restore_runtime(void);
+ota_state_t ota_state(void);
+const char *ota_state_str(void); /* "idle" | "running" | "failed" */
+const char *ota_last_error(void);
+void ota_clear_error(void);
+
 /* Mark the running app as valid so the bootloader keeps it (rollback guard). */
 void ota_confirm_running(void);
+/**
+ * Pending-verify gate for a freshly booted OTA image: call when the web
+ * server comes up (and once at the end of app_main). The image is confirmed
+ * once the panel probe passed and the unit is reachable for recovery (web up
+ * or STA online); a unit whose panel probe failed needs the web server up.
+ */
+void ota_selfcheck(bool web_up);
 
 /* Running partition name + pending-rollback state for the status API. */
 void ota_get_status(char *running, int runningLen, bool *pendingRollback);

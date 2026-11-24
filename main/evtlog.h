@@ -32,7 +32,8 @@ void evtlog_event(const char *tag, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
 void evtlog_get_meta(evtlog_meta_t *out);
-void evtlog_clear(void);
+/** Wipe the log. 0=ok, -1=unavailable/erase-write failed, -2=busy. */
+int evtlog_clear(void);
 
 /** Start SNTP once STA has IP (idempotent). Improves timestamps + 7-day trim. */
 void evtlog_time_start(void);

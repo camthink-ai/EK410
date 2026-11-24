@@ -4,7 +4,7 @@
  *
  * First boot (empty NVS) burns a random 8-hex deviceId used for:
  *   MQTT clientId = ek410-{deviceId}
- *   SoftAP SSID   = EK410_<MAC6> (last 3 bytes of STA MAC)
+ *   SoftAP SSID   = EK410_<MAC6> (last 3 bytes of SoftAP MAC; see ct_prov_softap_ssid)
  *   display name  = EK410-{deviceId}
  * NeoMind topics: device/ek410_Eink/{deviceId}/uplink|downlink
  */
@@ -360,14 +360,27 @@ void cfg_get_dev_info(devInfo_t *info)
     }
 }
 
-void cfg_set_dev_name(const char *name)
+esp_err_t cfg_set_dev_name(const char *name)
 {
+    /* Stored in the 33-byte devInfo_t.devName — NVS itself would take 4000,
+     * but cfg_get_dev_info could then never read it back. */
+    if (!name || name[0] == '\0' || strlen(name) >= sizeof(((devInfo_t *)0)->devName)) {
+        return ESP_ERR_INVALID_ARG;
+    }
     nvs_handle_t h;
-    ESP_ERROR_CHECK(nvs_open(NS, NVS_READWRITE, &h));
-    ESP_ERROR_CHECK(nvs_set_str(h, "name", name));
-    ESP_ERROR_CHECK(nvs_commit(h));
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_str(h, "name", name);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
     nvs_close(h);
-    ESP_LOGI(TAG, "dev name saved (%s)", name);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "dev name saved (%s)", name);
+    }
+    return err;
 }
 
 const char *power_mode_str(int mode)
@@ -440,6 +453,11 @@ void cfg_get_power_attr(powerAttr_t *p)
     int32_t v = 0;
     if (nvs_get_i32(h, "sleepmin", &v) == ESP_OK) {
         p->sleepMin = (int)v;
+        if (p->sleepMin < 0) {
+            p->sleepMin = 0;
+        } else if (p->sleepMin > POWER_SLEEP_MIN_MAX) {
+            p->sleepMin = POWER_SLEEP_MIN_MAX;
+        }
     }
     if (nvs_get_i32(h, "wakesec", &v) == ESP_OK) {
         p->wakeSec = clamp_wake_sec((int)v);
@@ -471,8 +489,103 @@ void cfg_get_power_attr(powerAttr_t *p)
     nvs_close(h);
 }
 
-void cfg_set_power_attr(const powerAttr_t *p)
+bool cfg_mqtt_host_empty(void)
 {
+    /* For callers on small stacks: answers without building a 270-byte
+     * mqttAttr_t (cfg_get_mqtt_attr). */
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
+        return true;
+    }
+    char head[4];
+    size_t len = sizeof(head);
+    esp_err_t err = nvs_get_str(h, "host", head, &len);
+    nvs_close(h);
+    if (err == ESP_OK) {
+        return head[0] == '\0';
+    }
+    return err == ESP_ERR_NVS_NOT_FOUND;
+}
+
+int cfg_mqtt_qos(void)
+{
+    /* Same clamping as cfg_get_mqtt_attr(). */
+    nvs_handle_t h;
+    int32_t v = 1;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
+        return 1;
+    }
+    if (nvs_get_i32(h, "qos", &v) != ESP_OK || v < 0 || v > 2) {
+        v = 1;
+    }
+    nvs_close(h);
+    return (int)v;
+}
+
+void cfg_mqtt_client_id(char *out, size_t len)
+{
+    /* Same resolution as cfg_get_mqtt_attr().clientId. */
+    nvs_handle_t h;
+    if (!out || len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = len;
+        nvs_get_str(h, "cid", out, &n);
+        nvs_close(h);
+    }
+    if (out[0] == '\0') {
+        snprintf(out, len, "ek410-%s",
+                 g_devInfo.deviceId[0] ? g_devInfo.deviceId : g_devInfo.mac);
+    }
+}
+
+void cfg_device_id(char *out, size_t len)
+{
+    if (out && len) {
+        strlcpy(out, g_devInfo.deviceId, len);
+    }
+}
+
+void cfg_dev_name(char *out, size_t len)
+{
+    /* Same fallbacks as cfg_get_dev_info(). */
+    nvs_handle_t h;
+    if (!out || len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = len;
+        esp_err_t err = nvs_get_str(h, "name", out, &n);
+        nvs_close(h);
+        if (err == ESP_OK && out[0] != '\0') {
+            return;
+        }
+    } else if (g_devInfo.devName[0] != '\0') {
+        strlcpy(out, g_devInfo.devName, len);
+        return;
+    }
+    snprintf(out, len, "EK410-%s",
+             g_devInfo.deviceId[0] ? g_devInfo.deviceId : g_devInfo.mac + 6);
+}
+
+const char *cfg_fw_version(void)
+{
+    return g_devInfo.fwVersion;
+}
+
+const char *cfg_panel_name(void)
+{
+    return g_devInfo.panel;
+}
+
+esp_err_t cfg_set_power_attr(const powerAttr_t *p)
+{
+    if (!p) {
+        return ESP_ERR_INVALID_ARG;
+    }
     nvs_handle_t h;
     int mode = p->mode;
     if (mode != POWER_MODE_CYCLE && mode != POWER_MODE_HIBERNATE) {
@@ -482,23 +595,53 @@ void cfg_set_power_attr(const powerAttr_t *p)
     if (mode == POWER_MODE_CYCLE && sleepMin < 1) {
         sleepMin = 60;
     }
+    if (sleepMin > POWER_SLEEP_MIN_MAX) {
+        sleepMin = POWER_SLEEP_MIN_MAX;
+    }
     int wakeSec = clamp_wake_sec(p->wakeSec);
     int imageQuality =
         (p->imageQuality == IMG_QUALITY_SPEED) ? IMG_QUALITY_SPEED : IMG_QUALITY_QUALITY;
-    ESP_ERROR_CHECK(nvs_open(NS, NVS_READWRITE, &h));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "pwrmode", (int32_t)mode));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "sleepmin", (int32_t)sleepMin));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "wakesec", (int32_t)wakeSec));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "batadc", (int32_t)p->batteryAdcGpio));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "batmv", (int32_t)p->batteryDivMv));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "ledgpio", (int32_t)p->ledGpio));
-    ESP_ERROR_CHECK(nvs_set_i32(h, "imgqual", (int32_t)imageQuality));
-    ESP_ERROR_CHECK(nvs_set_str(h, "wakeurl", p->wakeUrl));
-    ESP_ERROR_CHECK(nvs_commit(h));
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "power attr nvs_open: %s", esp_err_to_name(err));
+        return err;
+    }
+    do {
+        if ((err = nvs_set_i32(h, "pwrmode", (int32_t)mode)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "sleepmin", (int32_t)sleepMin)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "wakesec", (int32_t)wakeSec)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "batadc", (int32_t)p->batteryAdcGpio)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "batmv", (int32_t)p->batteryDivMv)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "ledgpio", (int32_t)p->ledGpio)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_i32(h, "imgqual", (int32_t)imageQuality)) != ESP_OK) {
+            break;
+        }
+        if ((err = nvs_set_str(h, "wakeurl", p->wakeUrl)) != ESP_OK) {
+            break;
+        }
+        err = nvs_commit(h);
+    } while (0);
     nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "power attr save failed: %s", esp_err_to_name(err));
+        return err;
+    }
     ESP_LOGI(TAG, "power attr saved (mode=%s, sleep=%dmin, wake=%ds, img=%s, wakeUrl=%s)",
              power_mode_str(mode), sleepMin, wakeSec, img_quality_str(imageQuality),
              p->wakeUrl[0] ? p->wakeUrl : "-");
+    return ESP_OK;
 }
 
 bool cfg_ble_prov_boot_get(void)
@@ -580,35 +723,61 @@ void cfg_ble_idle_sec_set(int sec)
     nvs_close(h);
 }
 
-void cfg_factory_reset(void)
+esp_err_t cfg_factory_reset(void)
 {
     /* Keep burned device identity so SoftAP / NeoMind deviceId stay stable. */
     char uid[17] = {0};
     char cid[64] = {0};
     nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
-        size_t len = sizeof(uid);
-        nvs_get_str(h, "uid", uid, &len);
-        len = sizeof(cid);
-        nvs_get_str(h, "cid", cid, &len);
-        nvs_erase_all(h);
-        if (uid[0] != '\0') {
-            nvs_set_str(h, "uid", uid);
-        }
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "factory reset nvs_open: %s", esp_err_to_name(err));
+        return err;
+    }
+    size_t len = sizeof(uid);
+    nvs_get_str(h, "uid", uid, &len);
+    len = sizeof(cid);
+    nvs_get_str(h, "cid", cid, &len);
+    err = nvs_erase_all(h);
+    if (err == ESP_OK && uid[0] != '\0') {
+        err = nvs_set_str(h, "uid", uid);
+    }
+    if (err == ESP_OK) {
         if (cid[0] != '\0') {
-            nvs_set_str(h, "cid", cid);
+            err = nvs_set_str(h, "cid", cid);
         } else if (uid[0] != '\0') {
             char rebuilt[64];
             snprintf(rebuilt, sizeof(rebuilt), "ek410-%s", uid);
-            nvs_set_str(h, "cid", rebuilt);
+            err = nvs_set_str(h, "cid", rebuilt);
         }
-        nvs_set_i32(h, "port", 1883);
-        nvs_set_i32(h, "qos", 1);
-        nvs_set_i32(h, "tls", MQTT_TRANSPORT_TCP);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_i32(h, "port", 1883);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_i32(h, "qos", 1);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_i32(h, "tls", MQTT_TRANSPORT_TCP);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "factory reset failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    /* NimBLE keeps its bonds in their own NVS namespace (IDF
+     * ble_store_nvs.c): a reset unit must not still trust a phone that was
+     * paired before the reset. */
+    if (nvs_open("nimble_bond", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_all(h);
         nvs_commit(h);
         nvs_close(h);
     }
     evtlog_clear();
     evtlog_event("BOOT", "factory reset (uid preserved)");
     ESP_LOGW(TAG, "factory reset done (uid preserved)");
+    return ESP_OK;
 }

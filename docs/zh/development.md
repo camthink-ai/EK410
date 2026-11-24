@@ -2,11 +2,20 @@
 
 英文版：[development.md](../development.md)
 
+仓库：[https://github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
+
 ## 环境
 
 - ESP-IDF **5.5.x**（组件要求 `>=5.3.0`）
 - 芯片目标 `esp32c61`
 - 建议使用 IDF 自带的 Python 3.11 虚拟环境
+
+## 克隆
+
+```bash
+git clone https://github.com/camthink-ai/EK410.git
+cd EK410
+```
 
 ## 编译烧录
 
@@ -49,13 +58,13 @@ python3 tools/gen_www.py
 
 ```bash
 python3 tools/bump_version.py --check
-python3 tools/bump_version.py 1.3.5
+python3 tools/bump_version.py X.Y.Z
 # 填写 CHANGELOG → commit →
-git tag -a v1.3.5 -m "EK410 v1.3.5"
+git tag -a vX.Y.Z -m "EK410 vX.Y.Z"
 ```
 
 - **MAJOR** 破坏协议；**MINOR** 兼容新功能；**PATCH** 修复
-- Tag 格式：`v1.3.0`
+- Tag 格式：`vX.Y.Z`（如 `v1.3.10`）
 - 勿轻易改 `deviceId` 生成逻辑（NeoMind 身份）
 
 ## 工具
