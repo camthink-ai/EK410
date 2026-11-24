@@ -1,5 +1,11 @@
 # EK410
 
+<p align="center">
+  <img src="assets/readme/EK410-Front-01-Alpine-Lake.jpg" alt="EK410 Spectra 6 — Alpine Lake" width="48%" />
+  &nbsp;
+  <img src="assets/readme/EK410-Front-05-Tiger.jpg" alt="EK410 Spectra 6 — Tiger" width="48%" />
+</p>
+
 [![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
 [![Version](https://img.shields.io/badge/version-1.3.10-blue)](VERSION)
@@ -17,12 +23,6 @@
 | **Firmware** | [`VERSION`](VERSION) → **1.3.10** |
 | **Platform** | [NeoMind](https://wiki.camthink.ai) · device type `ek410_Eink` |
 | **Source** | [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410) |
-
-<p align="center">
-  <img src="assets/readme/EK410-Front-01-Alpine-Lake.jpg" alt="EK410 Spectra 6 — Alpine Lake" width="48%" />
-  &nbsp;
-  <img src="assets/readme/EK410-Front-05-Tiger.jpg" alt="EK410 Spectra 6 — Tiger" width="48%" />
-</p>
 
 ---
 

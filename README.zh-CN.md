@@ -1,5 +1,11 @@
 # EK410
 
+<p align="center">
+  <img src="assets/readme/EK410-Front-01-Alpine-Lake.jpg" alt="EK410 Spectra 6 — 高山湖" width="48%" />
+  &nbsp;
+  <img src="assets/readme/EK410-Front-05-Tiger.jpg" alt="EK410 Spectra 6 — 老虎" width="48%" />
+</p>
+
 [![Platform](https://img.shields.io/badge/platform-ESP32--C61-blue)]()
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5-orange)]()
 [![Version](https://img.shields.io/badge/version-1.3.10-blue)](VERSION)
@@ -17,12 +23,6 @@
 | **固件** | [`VERSION`](VERSION) → **1.3.10** |
 | **平台** | [NeoMind](https://wiki.camthink.ai) · 设备类型 `ek410_Eink` |
 | **源码** | [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410) |
-
-<p align="center">
-  <img src="assets/readme/EK410-Front-01-Alpine-Lake.jpg" alt="EK410 Spectra 6 — 高山湖" width="48%" />
-  &nbsp;
-  <img src="assets/readme/EK410-Front-05-Tiger.jpg" alt="EK410 Spectra 6 — 老虎" width="48%" />
-</p>
 
 ---
 
