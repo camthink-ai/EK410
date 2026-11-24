@@ -438,6 +438,14 @@ int last_frame_capture_commit(void)
     hdr.ver = HDR_VER;
     hdr.frame_bytes = LAST_FRAME_BYTES;
     hdr.crc32 = crc_frame(s_cap, LAST_FRAME_BYTES);
+    /* Every commit erases the whole 1MB partition (no wear levelling — one
+     * erase cycle per sector per refresh): skip it for an identical frame. */
+    if (s_meta_valid && s_meta.present && s_meta.crc32 == hdr.crc32) {
+        ESP_LOGI(TAG, "last frame unchanged (crc=0x%08lx) — flash write skipped",
+                 (unsigned long)hdr.crc32);
+        last_frame_capture_abort();
+        return 0;
+    }
     hdr.seq = s_seq + 1;
     hdr.saved_us = esp_timer_get_time();
     strlcpy(hdr.source, s_cap_src, sizeof(hdr.source));

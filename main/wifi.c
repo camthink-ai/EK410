@@ -43,6 +43,11 @@
 #define STA_CONNECT_TIMEOUT_MS 20000
 #define SOFTAP_IDLE_MS         (2 * 60 * 1000)
 #define BLE_PROV_IDLE_MS       (2 * 60 * 1000) /* also PAGE / session.close / SoftAP */
+/* Hard lifetime of a provisioning window. The idle timer is re-armed while a
+ * station or GATT client stays linked, so without a cap a phone that never
+ * leaves the hotspot keeps the unit in APSTA (CYCLE cancelled) until the
+ * battery dies. */
+#define PROV_WINDOW_MAX_MS     (15 * 60 * 1000)
 /* SoftAP open stops MQTT then must bind httpd before mqtt_start (which pauses
  * httpd). Without this window phones join SoftAP into a dark 192.168.4.1. */
 #define SOFTAP_MQTT_DEFER_US   (2000000ULL) /* SoftAP web bind, then restore MQTT */
@@ -104,6 +109,8 @@ static bool s_bleProvUp;
 static bool s_bleEntering; /* teardown→NimBLE in progress — lock LED to cyan */
 static bool s_bleProvClosing;
 static int s_apClients;
+static int64_t s_apWindowStartUs;  /* SoftAP open time — PROV_WINDOW_MAX_MS cap */
+static int64_t s_bleWindowStartUs; /* BLE open time — PROV_WINDOW_MAX_MS cap */
 static wifi_sta_state_t s_staState;
 static int s_reconnectDelayMs = RECONNECT_MIN_MS;
 static bool s_userConnectInFlight; /* suppress auto-reconnect during try */
@@ -423,13 +430,19 @@ static void softap_arm_idle(void)
     esp_timer_start_once(s_apIdleTimer, (uint64_t)SOFTAP_IDLE_MS * 1000ULL);
 }
 
+/* True while a provisioning window is under its hard lifetime cap. */
+static bool prov_window_within_cap(int64_t start_us)
+{
+    return esp_timer_get_time() - start_us < (int64_t)PROV_WINDOW_MAX_MS * 1000;
+}
+
 static void ap_idle_timer_cb(void *arg)
 {
     (void)arg;
     if (!s_softapUp) {
         return;
     }
-    if (s_apClients > 0) {
+    if (s_apClients > 0 && prov_window_within_cap(s_apWindowStartUs)) {
         ESP_LOGI(TAG, "SoftAP idle tick — %d client(s) still joined, extending", s_apClients);
         softap_arm_idle();
         return;
@@ -462,7 +475,7 @@ static void ble_idle_timer_cb(void *arg)
     if (!s_bleProvUp) {
         return;
     }
-    if (ct_prov_ble_client_connected()) {
+    if (ct_prov_ble_client_connected() && prov_window_within_cap(s_bleWindowStartUs)) {
         ESP_LOGI(TAG, "BLE idle tick — GATT client linked, extending");
         ble_prov_arm_idle();
         return;
@@ -623,7 +636,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             }
             if (http_server_is_up()) {
                 /* Confirm OTA once LAN web is up (covers headless / late IP). */
-                ota_confirm_running();
+                ota_selfcheck(true);
             }
             if (s_softapUp) {
                 /* SoftAP web first — mqtt_start pauses httpd; defer restore. */
@@ -672,7 +685,7 @@ static void httpd_retry_timer_cb(void *arg)
         }
     }
     if (http_server_is_up()) {
-        ota_confirm_running();
+        ota_selfcheck(true);
         if (wifi_sta_is_connected()) {
             if (s_softapUp) {
                 softap_arm_mqtt_defer();
@@ -724,7 +737,7 @@ static void httpd_watchdog_timer_cb(void *arg)
     if (!http_server_is_up()) {
         httpd_arm_retry(20);
     } else {
-        ota_confirm_running();
+        ota_selfcheck(true);
         if (wifi_sta_is_connected() && !mqtt_is_started()) {
             if (s_softapUp) {
                 softap_arm_mqtt_defer();
@@ -1147,12 +1160,32 @@ static void softap_present_setup_guide_if_needed(void)
     app_epd_note_system_frame();
 }
 
+/* SoftAP open aborted: undo opening state / LED, give MQTT back if the open
+ * stopped it, and restore the CYCLE window the open cancelled. */
+static void softap_open_abort(bool restart_mqtt)
+{
+    s_softapOpening = false;
+    wifi_led_apply_idle_state();
+    if (restart_mqtt) {
+        mqtt_start();
+    }
+    sleep_kick();
+}
+
 void wifi_softap_open(void)
 {
     if (s_softapUp) {
         ESP_LOGI(TAG, "SoftAP already up — refresh idle timer");
         softap_arm_idle();
         led_set(LEDC_NET_R, LED_BLINK);
+        return;
+    }
+
+    if (s_bleEntering) {
+        /* BLE teardown/bring-up owns the radio right now: queue the request;
+         * the BLE start (or its failure) delivers the SoftAP. */
+        ESP_LOGI(TAG, "SoftAP requested during BLE enter — deferred");
+        cfg_softap_pending_set(true);
         return;
     }
 
@@ -1184,8 +1217,7 @@ void wifi_softap_open(void)
             ESP_LOGE(TAG, "SoftAP open aborted — mqtt_stop busy");
             evtlog_event("WIFI", "SoftAP open aborted mqtt busy");
             wifi_set_last_error("mqtt_busy");
-            s_softapOpening = false;
-            wifi_led_apply_idle_state();
+            softap_open_abort(false);
             led_pulse(LEDC_ERR_R, 1200);
             return;
         }
@@ -1195,11 +1227,7 @@ void wifi_softap_open(void)
                  (unsigned)largest_before);
     }
     if (wifi_driver_ensure() != ESP_OK) {
-        s_softapOpening = false;
-        wifi_led_apply_idle_state();
-        if (stopped_mqtt) {
-            mqtt_start();
-        }
+        softap_open_abort(stopped_mqtt);
         return;
     }
     ESP_LOGI(TAG, "SoftAP open — free heap %u int %u largest_int %u stopped_mqtt=%d",
@@ -1212,35 +1240,23 @@ void wifi_softap_open(void)
     esp_err_t err = esp_wifi_set_mode(mode);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "set_mode failed: %s", esp_err_to_name(err));
-        s_softapOpening = false;
-        wifi_led_apply_idle_state();
+        softap_open_abort(stopped_mqtt);
         led_pulse(LEDC_ERR_R, 1200);
-        if (stopped_mqtt) {
-            mqtt_start();
-        }
         return;
     }
     err = softap_apply_config();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ap set_config failed: %s", esp_err_to_name(err));
-        s_softapOpening = false;
-        wifi_led_apply_idle_state();
+        softap_open_abort(stopped_mqtt);
         led_pulse(LEDC_ERR_R, 1200);
-        if (stopped_mqtt) {
-            mqtt_start();
-        }
         return;
     }
     if (!s_wifiStarted) {
         err = esp_wifi_start();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "wifi_start failed: %s", esp_err_to_name(err));
-            s_softapOpening = false;
-            wifi_led_apply_idle_state();
+            softap_open_abort(stopped_mqtt);
             led_pulse(LEDC_ERR_R, 1200);
-            if (stopped_mqtt) {
-                mqtt_start();
-            }
             return;
         }
         s_wifiStarted = true;
@@ -1249,6 +1265,7 @@ void wifi_softap_open(void)
     s_softapUp = true;
     s_softapOpening = false;
     s_apClients = 0;
+    s_apWindowStartUs = esp_timer_get_time();
     wifi_clear_last_error();
     led_set(LEDC_NET_R, LED_BLINK);
     softap_arm_idle();
@@ -1294,8 +1311,6 @@ static void softap_close_internal(void)
     s_softapUp = false;
     s_apClients = 0;
 
-    bool sta_had_ip = wifi_sta_is_connected();
-
     if (s_staStarted) {
         esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
         if (err != ESP_OK) {
@@ -1307,22 +1322,8 @@ static void softap_close_internal(void)
             if (esp_netif_get_ip_info(s_staNetif, &ip) == ESP_OK && ip.ip.addr != 0) {
                 xEventGroupSetBits(s_wifiEvent, WIFI_STA_CONNECTED_BIT);
                 s_staState = WIFI_STA_CONNECTED;
-                sta_had_ip = true;
             }
         }
-        if (sta_had_ip || wifi_sta_is_connected()) {
-            powerAttr_t p;
-            cfg_get_power_attr(&p);
-            if (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0) {
-                /* May run wakeUrl if CYCLE was never armed (button-wake SoftAP). */
-                sleep_on_sta_online();
-                sleep_arm_from_config();
-            }
-        } else {
-            s_reconnectDelayMs = RECONNECT_MIN_MS;
-            reconnect_arm();
-        }
-        /* Preserve customer art unless we overwrote it with the setup guide. */
     } else {
         esp_wifi_stop();
         s_wifiStarted = false;
@@ -1353,6 +1354,16 @@ static void softap_close_internal(void)
         http_server_stop();
     }
     wifi_network_services_restore(wifi_sta_is_connected());
+    if (s_staStarted) {
+        /* APSTA→STA can drop the link after the checks above (the DISCONNECTED
+         * handler skips reconnect while closing): the backoff timer no-ops
+         * when STA is really up and recovers it otherwise. */
+        s_reconnectDelayMs = RECONNECT_MIN_MS;
+        reconnect_arm();
+    }
+    /* Hibernate saved under the hotspot, or the CYCLE window its open
+     * cancelled; with no IP yet this also bounds the join wait. */
+    sleep_on_prov_closed();
     evtlog_event("WIFI", "SoftAP closed sta=%d httpd=%d",
                  wifi_sta_is_connected() ? 1 : 0, http_server_is_up() ? 1 : 0);
     ESP_LOGI(TAG, "SoftAP closed (led=%s httpd=%d)",
@@ -1380,7 +1391,9 @@ static void ble_enter_restore(bool was_softap)
     if (!http_server_is_up()) {
         http_server_start();
     }
-    if (was_softap) {
+    if (was_softap || cfg_softap_pending_get()) {
+        /* SoftAP was up before the enter, or was requested while BLE came up. */
+        cfg_softap_pending_set(false);
         ESP_LOGW(TAG, "BLE enter aborted — restoring SoftAP");
         wifi_softap_open();
         if (wifi_softap_is_up()) {
@@ -1399,6 +1412,7 @@ static void ble_enter_restore(bool was_softap)
     }
     wifi_led_apply_idle_state();
     led_pulse(LEDC_ERR_R, 1200);
+    sleep_on_prov_closed(); /* BLE enter cancelled the CYCLE window up front */
 }
 
 void wifi_ble_prov_enter(void)
@@ -1406,6 +1420,12 @@ void wifi_ble_prov_enter(void)
     if (s_bleProvUp) {
         ble_prov_arm_idle();
         led_set(LEDC_BLE_R, LED_BLINK);
+        return;
+    }
+    if (s_bleEntering) {
+        /* Two overlapping enters would tear Wi-Fi down twice and init NimBLE
+         * twice (double openBleProv, wake task + PAGE hold). */
+        ESP_LOGW(TAG, "BLE enter already in progress — ignore");
         return;
     }
 
@@ -1459,6 +1479,7 @@ void wifi_ble_prov_enter(void)
 
     s_bleProvUp = true;
     s_bleEntering = false;
+    s_bleWindowStartUs = esp_timer_get_time();
     wifi_clear_last_error();
     ble_prov_arm_idle();
     led_set(LEDC_BLE_R, LED_BLINK);
@@ -1494,6 +1515,11 @@ void wifi_ble_prov_enter(void)
     if (ct_prov_ble_start_worker() != ESP_OK) {
         ESP_LOGW(TAG, "CT-Prov worker deferred fail — GATT cmds unavailable");
         wifi_set_last_error("ble_gatt_unavailable");
+    }
+    if (cfg_softap_pending_get()) {
+        /* SoftAP was requested while BLE was coming up: deliver it now. */
+        ESP_LOGI(TAG, "SoftAP pending after BLE start — switching to SoftAP");
+        wifi_ble_prov_close();
     }
 }
 
@@ -1566,15 +1592,12 @@ void wifi_ble_prov_close(void)
             wifi_sta_reconnect_saved(0);
         } else {
             wifi_network_services_restore(true);
-            powerAttr_t p;
-            cfg_get_power_attr(&p);
-            if (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0) {
-                sleep_on_sta_online();
-                sleep_arm_from_config();
-            }
         }
     }
     wifi_led_apply_idle_state();
+    /* Hibernate saved under the window, or the CYCLE window BLE enter
+     * cancelled; with no IP yet this bounds the join wait. */
+    sleep_on_prov_closed();
 }
 
 bool wifi_ble_prov_is_up(void)

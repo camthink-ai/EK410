@@ -50,6 +50,8 @@ static void url_tls_prepare(void)
     wifi_throughput_boost(true);
     /* Preview b64 (~160KB) + HTTPS body fight for the same 2MB SPIRAM. */
     last_frame_preview_drop();
+    /* Hold first: mqtt_stop itself arms a 3 s start-retry on STA. */
+    mqtt_hold();
     if (mqtt_stop_wait(4000) != 0) {
         ESP_LOGW(TAG, "url TLS prepare: mqtt still busy — proceed carefully");
     }
@@ -59,6 +61,8 @@ static void url_tls_prepare(void)
 static void url_tls_release(void)
 {
     wifi_throughput_boost(false);
+    /* Before any early return: a leaked hold would keep MQTT down for good. */
+    mqtt_release();
     /* Large HTTPS can leave httpd down and MQTT stopped. Restore LAN Web
      * first (non-SoftAP), then MQTT — SoftAP+STA must also restart MQTT
      * (bringup pauses httpd briefly); BLE exit restores itself. */
@@ -156,6 +160,10 @@ typedef struct {
     epd_proxy_job_t *proxy;       /* kind 9 */
     SemaphoreHandle_t proxy_done; /* kind 9 */
 } render_msg_t;
+
+/* Serialises the proxy-job hand-off between its runner (render task or the
+ * queue-drop path) and a waiter timeout, so exactly one side frees the job. */
+static portMUX_TYPE s_proxyMux = portMUX_INITIALIZER_UNLOCKED;
 
 /* Sticky: next queue_render_owned copies into msg->mqtt_ack_cmd (MQTT path). */
 static char s_mqtt_ack_next[24];
@@ -391,10 +399,19 @@ static void render_task(void *arg)
         case 9:
             if (msg->proxy) {
                 epd_proxy_download(msg->proxy);
-                if (msg->proxy->orphaned) {
+                /* Hand-off under the lock: a waiter that timed out before
+                 * this point set `orphaned` and left the job to us; one that
+                 * times out after it sees `done` and frees the job itself. */
+                bool orphaned;
+                taskENTER_CRITICAL(&s_proxyMux);
+                orphaned = msg->proxy->orphaned;
+                msg->proxy->done = true;
+                taskEXIT_CRITICAL(&s_proxyMux);
+                if (orphaned) {
                     free(msg->proxy->data);
                     if (msg->proxy_done) {
                         vSemaphoreDelete(msg->proxy_done);
+                        msg->proxy_done = NULL;
                     }
                     free(msg->proxy);
                     msg->proxy = NULL;
@@ -526,11 +543,26 @@ static void render_queue_drop_pending(const char *reason)
             mqtt_publish_cmd_ack(msg->mqtt_ack_cmd, "error", why);
         }
         if (msg->kind == 9 && msg->proxy) {
-            msg->proxy->orphaned = true;
-            if (msg->proxy_done) {
+            /* Dropped before the render task ever ran it: play the runner's
+             * hand-off here. The waiter reports job->err (a drop is not a
+             * 200) and frees the job — unless it already timed out. */
+            bool orphaned;
+            taskENTER_CRITICAL(&s_proxyMux);
+            strlcpy(msg->proxy->err, why, sizeof(msg->proxy->err));
+            msg->proxy->done = true;
+            orphaned = msg->proxy->orphaned;
+            taskEXIT_CRITICAL(&s_proxyMux);
+            if (orphaned) {
+                free(msg->proxy->data);
+                free(msg->proxy);
+                msg->proxy = NULL;
+                if (msg->proxy_done) {
+                    vSemaphoreDelete(msg->proxy_done);
+                    msg->proxy_done = NULL;
+                }
+            } else if (msg->proxy_done) {
                 xSemaphoreGive(msg->proxy_done);
             }
-            /* proxy buffer freed by waiter or orphan path — do not free data here */
         } else if (msg->proxy_done) {
             xSemaphoreGive(msg->proxy_done);
         }
@@ -763,9 +795,19 @@ int app_epd_url_async(const char *url)
     return rc;
 }
 
-int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
+int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms, char *err_out, size_t err_len,
+                        bool *job_released)
 {
+    if (err_out && err_len) {
+        err_out[0] = '\0';
+    }
+    if (job_released) {
+        *job_released = false;
+    }
     if (!job || !job->url[0]) {
+        if (err_out && err_len) {
+            strlcpy(err_out, "bad job", err_len);
+        }
         return -1;
     }
     job->data = NULL;
@@ -773,16 +815,18 @@ int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
     job->ctype[0] = '\0';
     job->err[0] = '\0';
     job->orphaned = false;
+    job->done = false;
 
     SemaphoreHandle_t done = xSemaphoreCreateBinary();
-    if (!done) {
-        snprintf(job->err, sizeof(job->err), "OOM");
-        return -1;
-    }
-    render_msg_t *msg = alloc_render_msg(9);
-    if (!msg) {
-        vSemaphoreDelete(done);
-        snprintf(job->err, sizeof(job->err), "OOM");
+    render_msg_t *msg = done ? alloc_render_msg(9) : NULL;
+    if (!done || !msg) {
+        if (done) {
+            vSemaphoreDelete(done);
+        }
+        free(msg);
+        if (err_out && err_len) {
+            strlcpy(err_out, "OOM", err_len);
+        }
         return -1;
     }
     msg->proxy = job;
@@ -790,15 +834,41 @@ int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms)
     /* Allow splash / prior URL job to finish — panel refresh is 20–40s. */
     if (queue_render_owned(msg, pdMS_TO_TICKS(60000)) != 0) {
         vSemaphoreDelete(done);
-        snprintf(job->err, sizeof(job->err), "render busy");
+        if (err_out && err_len) {
+            strlcpy(err_out, "render busy", err_len);
+        }
         return -1;
     }
     int wait = (timeout_ms > 0) ? timeout_ms : 90000;
     if (xSemaphoreTake(done, pdMS_TO_TICKS(wait)) != pdTRUE) {
         ESP_LOGE(TAG, "proxy fetch timeout");
-        snprintf(job->err, sizeof(job->err), "proxy timeout");
-        job->orphaned = true;
+        /* From here the caller must not touch *job. Decide ownership under
+         * the same lock the runner uses, or a completion racing this timeout
+         * leaves the job freed twice / never. */
+        bool completed = false;
+        taskENTER_CRITICAL(&s_proxyMux);
+        if (job->done) {
+            completed = true; /* runner is about to give `done`: consume and free */
+        } else {
+            job->orphaned = true; /* runner frees job + data when it finishes */
+        }
+        taskEXIT_CRITICAL(&s_proxyMux);
+        if (completed) {
+            xSemaphoreTake(done, portMAX_DELAY);
+            free(job->data);
+            free(job);
+            vSemaphoreDelete(done);
+        }
+        if (err_out && err_len) {
+            strlcpy(err_out, "proxy timeout", err_len);
+        }
+        if (job_released) {
+            *job_released = true;
+        }
         return -1;
+    }
+    if (err_out && err_len) {
+        strlcpy(err_out, job->err, err_len);
     }
     vSemaphoreDelete(done);
     return job->err[0] ? -1 : 0;
@@ -1335,17 +1405,6 @@ void epd_boot_screen(const char *title, const char *const *lines, int line_count
 
 /* ---- HTTP frame streaming ---- */
 
-static unsigned char logical_fb_pixel(int lx, int ly, void *ctx)
-{
-    const uint8_t *fb = (const uint8_t *)ctx;
-    if (lx < 0 || ly < 0 || lx >= IMG_PANEL_W || ly >= IMG_PANEL_H) {
-        return 0x1;
-    }
-    size_t off = (size_t)ly * (IMG_PANEL_W / 2) + (size_t)(lx / 2);
-    uint8_t b = fb[off];
-    return (lx & 1) ? (b & 0x0F) : (b >> 4);
-}
-
 typedef struct {
     const uint8_t *codes;
     int sw, sh;
@@ -1611,11 +1670,11 @@ int epd_url_frame(const char *url)
              * often fails after TLS download fragmentation on 2MB PSRAM. */
             uint8_t *codes = NULL;
             int cw = 0, ch = 0;
+            /* img_rgb_dither_codes consumes rgb: `codes` may be realloc(rgb)
+             * in place (SPEED). Never free rgb after this call — only codes. */
             if (img_rgb_dither_codes(rgb, rw, rh, &codes, &cw, &ch, use_proc) != 0) {
-                free(rgb);
                 url_fail("dither OOM/fail");
             } else {
-                free(rgb); /* dither owns the output codes; drop RGB early */
                 codes_cover_ctx_t cctx = {.codes = codes, .sw = cw, .sh = ch};
                 url_heap_log("pre_stream");
                 ESP_LOGI(TAG, "decode OK — stream cover %dx%d", cw, ch);

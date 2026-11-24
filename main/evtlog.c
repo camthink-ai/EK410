@@ -506,17 +506,22 @@ void evtlog_get_meta(evtlog_meta_t *out)
     out->seq = s_seq;
 }
 
-void evtlog_clear(void)
+int evtlog_clear(void)
 {
     if (!s_ready || !s_mu) {
-        return;
+        return -1;
     }
     if (xSemaphoreTake(s_mu, pdMS_TO_TICKS(5000)) != pdTRUE) {
-        return;
+        return -2;
     }
-    rewrite_payload("", 0, s_seq + 1);
+    int rc = rewrite_payload("", 0, s_seq + 1);
     xSemaphoreGive(s_mu);
-    ESP_LOGW(TAG, "event log cleared");
+    if (rc != 0) {
+        ESP_LOGE(TAG, "event log clear failed (erase/write)");
+    } else {
+        ESP_LOGW(TAG, "event log cleared");
+    }
+    return rc;
 }
 
 int evtlog_stream(evtlog_write_fn fn, void *ctx)

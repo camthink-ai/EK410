@@ -20,6 +20,7 @@
 #include "ct_prov.h"
 #include "ct_prov_ble.h"
 #include "config.h"
+#include "json_guard.h"
 #include "wifi.h"
 #include "mqtt.h"
 #include "version.h"
@@ -337,6 +338,13 @@ static int apply_mqtt_section(cJSON *mqtt, char *err, size_t errlen)
 
     mqttAttr_t m;
     cfg_get_mqtt_attr(&m);
+    /* Absent password keeps the stored secret only for the same account:
+     * never send it to a different broker or username (same as setMqttParam).
+     * Decided before m is rewritten — this runs on the 4 KB BLE worker stack,
+     * so no second mqttAttr_t copy here. */
+    const bool new_account = strcmp(m.host, host->valuestring) != 0 ||
+                             (cJSON_IsString(user) &&
+                              strcmp(m.username, user->valuestring) != 0);
     strlcpy(m.host, host->valuestring, sizeof(m.host));
     bool use_tls = cJSON_IsTrue(tls);
     m.transport = use_tls ? MQTT_TRANSPORT_TLS : MQTT_TRANSPORT_TCP;
@@ -353,6 +361,8 @@ static int apply_mqtt_section(cJSON *mqtt, char *err, size_t errlen)
     }
     if (cJSON_IsString(pass)) {
         strlcpy(m.password, pass->valuestring, sizeof(m.password));
+    } else if (new_account) {
+        m.password[0] = '\0';
     }
     {
         devInfo_t info;
@@ -395,6 +405,15 @@ static char *op_config_set(int id, cJSON *req_data)
     const char *apply = "immediate";
     bool ble_wifi_saved = false;
 
+    /* Reject unknown top-level sections BEFORE applying anything: a request
+     * that fails must not leave half of it persisted. */
+    for (cJSON *child = req_data->child; child; child = child->next) {
+        if (strcmp(child->string, "wifi") != 0 && strcmp(child->string, "mqtt") != 0) {
+            cJSON_Delete(stored);
+            return make_err(id, "config.set.result", "SECTION_NOT_SUPPORTED", child->string);
+        }
+    }
+
     cJSON *wifi = cJSON_GetObjectItem(req_data, "wifi");
     if (wifi) {
         int rc = apply_wifi_section(wifi, err, sizeof(err));
@@ -432,16 +451,6 @@ static char *op_config_set(int id, cJSON *req_data)
             return make_err(id, "config.set.result", code, err);
         }
         cJSON_AddItemToArray(stored, cJSON_CreateString("mqtt"));
-    }
-
-    /* Reject unknown top-level sections that are not empty. */
-    cJSON *child = req_data->child;
-    while (child) {
-        if (strcmp(child->string, "wifi") != 0 && strcmp(child->string, "mqtt") != 0) {
-            cJSON_Delete(stored);
-            return make_err(id, "config.set.result", "SECTION_NOT_SUPPORTED", child->string);
-        }
-        child = child->next;
     }
 
     if (cJSON_GetArraySize(stored) == 0) {
@@ -595,7 +604,7 @@ esp_err_t ct_prov_handle_json(const char *body, int len, char **out_json)
 
     softap_touch_safe();
 
-    cJSON *root = cJSON_ParseWithLength(body, (size_t)len);
+    cJSON *root = json_guard_parse_len(body, (size_t)len);
     if (!cJSON_IsObject(root)) {
         cJSON_Delete(root);
         xSemaphoreGive(s_busy);

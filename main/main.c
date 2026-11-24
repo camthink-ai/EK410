@@ -167,21 +167,25 @@ void app_main(void)
         }
     } else if (hasWifi) {
         ESP_LOGI(TAG, "Wi-Fi saved but not yet online — reconnect armed");
+        /* CYCLE: bound this boot even if the AP never answers (router down,
+         * wrong password) — GOT_IP later runs the normal wake path. */
+        sleep_arm_offline_fallback();
     } else {
         ESP_LOGI(TAG, "hold MAIN 2.5s=SoftAP, PAGE 2.5s=BLE (IO%d/IO%d); "
                  "from deep sleep: MAIN=SoftAP PAGE=BLE",
                  BTN_MAIN_GPIO, BTN_PAGE_GPIO);
+        sleep_arm_offline_fallback();
     }
 
     /* Deep-sleep MAIN → SoftAP, PAGE → BLE (consumes wake intent). */
     boot_apply_sleep_wake_provisioning();
 
-    /* Prefer httpd/panel; STA-online alone is enough (headless OK). GOT_IP /
-     * httpd watchdog also call ota_confirm_running() if deferred here. */
-    if (http_server_is_up() || app_epd_panel_ok() || online) {
-        ota_confirm_running();
-    } else {
-        ESP_LOGW(TAG, "deferring OTA confirm — no httpd/panel/STA yet");
+    /* Rollback gate: the pending-verify image is confirmed once the panel
+     * probe passed and the unit is reachable (web up or STA online). GOT_IP /
+     * httpd watchdog repeat the check if it is deferred here. */
+    ota_selfcheck(http_server_is_up());
+    if (!http_server_is_up() && !online) {
+        ESP_LOGW(TAG, "deferring OTA confirm — no httpd/STA yet");
     }
 
     {

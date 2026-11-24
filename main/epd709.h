@@ -94,10 +94,10 @@ __EPD709_EXTERN__ void checkBusyLow(void);
 /* 1 = BUSY reached expected level in time; 0 = timeout (panel may be dirty). */
 __EPD709_EXTERN__ int checkBusyHighOk(unsigned int timeout_ms);
 __EPD709_EXTERN__ void initEPD(void);
-__EPD709_EXTERN__ void writeEpd(unsigned char epdCommand, unsigned char *epdData, unsigned int epdDataLength);
+__EPD709_EXTERN__ void writeEpd(unsigned char epdCommand, const unsigned char *epdData, unsigned int epdDataLength);
 __EPD709_EXTERN__ void readEpd(unsigned char epdCommand, unsigned char *epdData, unsigned int epdDataLength);
 __EPD709_EXTERN__ void writeEpdCommand(unsigned char epdCommand);
-__EPD709_EXTERN__ void writeEpdData(unsigned char *epdData, unsigned int epdDataLength);
+__EPD709_EXTERN__ void writeEpdData(const unsigned char *epdData, unsigned int epdDataLength);
 /* Full PON→DRF→POF. Returns 1 on success, 0 if any BUSY wait timed out. */
 __EPD709_EXTERN__ int epdDisplay(void);
 __EPD709_EXTERN__ unsigned char checkDriverICStatus(void);

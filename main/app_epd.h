@@ -143,17 +143,22 @@ static inline const char *app_epd_queue_err(int rc)
 void app_epd_mark_frame_capture(const char *source);
 
 /* SoftAP preview: download image bytes on epd_render (TLS stack), no panel.
- * On success: job->data/len/ctype set; caller frees job->data. Returns 0 / -1. */
+ * On success (0): job->data/len/ctype are valid and the caller owns job +
+ * data (frees both). On failure the caller must not read *job: err_out
+ * carries the reason and *job_released tells whether the job was already
+ * freed by someone else (true) or is still the caller's to free (false). */
 typedef struct {
     char url[512];
     uint8_t *data;
     size_t len;
     char ctype[48];
     char err[48];
-    volatile bool orphaned; /* HTTP timed out — render task cleans up */
+    volatile bool orphaned; /* HTTP waiter timed out — the job's runner frees it */
+    volatile bool done;     /* runner finished (set under the hand-off lock) */
 } epd_proxy_job_t;
 
-int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms);
+int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms, char *err_out, size_t err_len,
+                        bool *job_released);
 
 /* Raw frame upload streaming (used by the HTTP upload endpoint). The DMA
  * scratch buffer is shared — recv into it, then hand each chunk over. */

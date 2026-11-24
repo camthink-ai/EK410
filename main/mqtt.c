@@ -29,6 +29,8 @@
 #include "cJSON.h"
 
 #include "mqtt.h"
+#include "json_guard.h"
+#include "ota.h"
 #include "config.h"
 #include "wifi.h"
 #include "http.h"
@@ -74,6 +76,49 @@ static char s_lwtMsg[192];
 static char s_lastFail[96];
 static volatile bool s_connectRefused;
 
+/* mqtt_stop() re-arms a 3 s start-retry on STA. URL image TLS and OTA stop
+ * the client precisely to free internal RAM for a second TLS session, so
+ * they hold the restart off until they release. */
+static uint8_t s_holdCount;
+
+void mqtt_hold(void)
+{
+    s_holdCount++;
+}
+
+void mqtt_release(void)
+{
+    if (s_holdCount) {
+        s_holdCount--;
+    }
+}
+
+static bool mqtt_restart_blocked(void)
+{
+    return s_holdCount > 0 || ota_busy();
+}
+
+/* A dead broker retries every 5 s and every error used to cost an evtlog line
+ * (a sector-0 erase per 8 events ≈ 2000/day). Log a changed failure at once,
+ * an unchanged one at most every 5 min. */
+static int32_t s_lastErrType = -1;
+static int32_t s_lastErrTls = -1;
+static int64_t s_lastErrLogUs;
+static bool s_errLoggedThisAttempt;
+
+static bool mqtt_err_should_log(int32_t type, int32_t tls)
+{
+    int64_t now = esp_timer_get_time();
+    if (type != s_lastErrType || tls != s_lastErrTls ||
+        now - s_lastErrLogUs > 300000000LL) {
+        s_lastErrType = type;
+        s_lastErrTls = tls;
+        s_lastErrLogUs = now;
+        return true;
+    }
+    return false;
+}
+
 static void mqtt_clear_fail(void)
 {
     s_lastFail[0] = '\0';
@@ -86,6 +131,13 @@ static void mqtt_set_fail(const char *msg)
         return;
     }
     strlcpy(s_lastFail, msg, sizeof(s_lastFail));
+}
+
+void mqtt_forget_error(void)
+{
+    /* Called when a new broker config is saved: the previous attempt's
+     * failure is no longer a verdict on anything. */
+    mqtt_clear_fail();
 }
 #define MQTT_START_MIN_HEAP 48000
 /* Task stacks must live in internal RAM on ESP32-C61 (PSRAM stacks break create). */
@@ -382,7 +434,7 @@ void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detai
 
 static void handle_command(const char *raw, int len)
 {
-    cJSON *root = cJSON_ParseWithLength(raw, len);
+    cJSON *root = json_guard_parse_len(raw, (size_t)len);
     if (!root) {
         ESP_LOGW(TAG, "bad JSON on downlink");
         mqtt_publish_cmd_ack("parse", "error", "invalid JSON");
@@ -493,11 +545,14 @@ static void handle_command(const char *raw, int len)
     } else if (!strcasecmp(cmd, "sleep_now") || !strcasecmp(cmd, "sleep")) {
         if (wifi_softap_is_up()) {
             mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
-        } else if (!sleep_now()) {
-            mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
         } else {
-            /* sleep_go waits on the panel first — MQTT still up for this ack. */
-            mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
+            sleep_set_ack_cmd(cmd); /* follow-up error ack if the entry aborts */
+            if (!sleep_now()) {
+                mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
+            } else {
+                /* sleep_go waits on the panel first — MQTT still up for this ack. */
+                mqtt_publish_cmd_ack(cmd, "ok", "sleeping");
+            }
         }
     } else if (!strcasecmp(cmd, "set_power")) {
         powerAttr_t pwr;
@@ -524,7 +579,11 @@ static void handle_command(const char *raw, int len)
         } else if (cJSON_IsNumber(iq)) {
             pwr.imageQuality = (iq->valueint == 0) ? IMG_QUALITY_SPEED : IMG_QUALITY_QUALITY;
         }
-        cfg_set_power_attr(&pwr);
+        if (cfg_set_power_attr(&pwr) != ESP_OK) {
+            mqtt_publish_cmd_ack(cmd, "error", "power save failed");
+            cJSON_Delete(root);
+            return;
+        }
         cfg_get_power_attr(&pwr);
         if (pwr.mode == POWER_MODE_CYCLE) {
             if (!wifi_softap_is_up() && wifi_sta_is_connected()) {
@@ -536,10 +595,13 @@ static void handle_command(const char *raw, int len)
         } else if (pwr.mode == POWER_MODE_HIBERNATE) {
             if (wifi_softap_is_up()) {
                 mqtt_publish_cmd_ack(cmd, "error", "softap_busy");
-            } else if (!sleep_now()) {
-                mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
             } else {
-                mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
+                sleep_set_ack_cmd(cmd);
+                if (!sleep_now()) {
+                    mqtt_publish_cmd_ack(cmd, "error", "sleep_failed");
+                } else {
+                    mqtt_publish_cmd_ack(cmd, "ok", "hibernating");
+                }
             }
         } else {
             sleep_cancel();
@@ -780,7 +842,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "disconnected");
-        evtlog_event("MQTT", "disconnected");
+        if (!s_errLoggedThisAttempt) {
+            evtlog_event("MQTT", "disconnected");
+        }
+        s_errLoggedThisAttempt = false;
         g_MQ.isConnected = false;
         rx_reset();
         break;
@@ -796,9 +861,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                      event->error_handle->error_type,
                      event->error_handle->esp_tls_last_esp_err,
                      event->error_handle->esp_tls_stack_err);
-            evtlog_event("MQTT", "error type=%d tls=0x%x",
-                         event->error_handle->error_type,
-                         event->error_handle->esp_tls_last_esp_err);
+            s_errLoggedThisAttempt = mqtt_err_should_log(
+                (int32_t)event->error_handle->error_type,
+                (int32_t)event->error_handle->esp_tls_last_esp_err);
+            if (s_errLoggedThisAttempt) {
+                evtlog_event("MQTT", "error type=%d tls=0x%x",
+                             event->error_handle->error_type,
+                             event->error_handle->esp_tls_last_esp_err);
+            }
             if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
                 s_connectRefused = true;
                 switch (event->error_handle->connect_return_code) {
@@ -826,7 +896,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             }
         } else {
             ESP_LOGE(TAG, "error (no detail)");
-            evtlog_event("MQTT", "error (no detail)");
+            s_errLoggedThisAttempt = mqtt_err_should_log(-1, 0);
+            if (s_errLoggedThisAttempt) {
+                evtlog_event("MQTT", "error (no detail)");
+            }
         }
         break;
     default:
@@ -1077,8 +1150,8 @@ static void mqtt_bringup_task(void *arg)
         }
         s_bringupPending = false;
 
-        if (wifi_ble_prov_busy()) {
-            /* Kick was consumed; BLE exit restores MQTT. No timer while busy. */
+        if (wifi_ble_prov_busy() || mqtt_restart_blocked()) {
+            /* Kick was consumed; BLE exit / URL TLS / OTA release restores MQTT. */
             continue;
         }
 
@@ -1168,6 +1241,10 @@ static void mqtt_bringup_task(void *arg)
             mqtt_clear_fail();
             esp_timer_stop(s_telemetryTimer);
             esp_timer_start_periodic(s_telemetryTimer, TELEMETRY_PERIOD_US);
+        } else if (peek.host[0] == '\0') {
+            /* Not a transient failure: retrying every 5 s would only spin
+             * (and log) until config.set / setMqttParam calls mqtt_start(). */
+            ESP_LOGI(TAG, "no broker host — MQTT idle until configured");
         } else {
             mqtt_arm_start_retry_us(5000000ULL);
         }
@@ -1189,7 +1266,7 @@ static void mqtt_arm_start_retry_us(uint64_t delay_us)
     if (!s_startRetryTimer || !s_mqttInfraOk) {
         return;
     }
-    if (wifi_ble_prov_busy()) {
+    if (wifi_ble_prov_busy() || mqtt_restart_blocked()) {
         return;
     }
     if (g_MQ.client) {
@@ -1214,10 +1291,15 @@ void mqtt_kick_start_retry(int delay_ms)
 
 void mqtt_restore_after_temp_stop(void)
 {
-    if (!wifi_sta_is_connected() || wifi_ble_prov_busy()) {
+    if (!wifi_sta_is_connected() || wifi_ble_prov_busy() || mqtt_restart_blocked()) {
         return;
     }
-    if (mqtt_is_started()) {
+    if (!s_mqttInfraOk || mqtt_is_started()) {
+        return;
+    }
+    /* No broker configured: there is nothing to bring back — do not sit
+     * through five 1.2 s attempts in the caller's (httpd) task. */
+    if (cfg_mqtt_host_empty()) {
         return;
     }
     for (int i = 0; i < 5; i++) {
@@ -1241,6 +1323,10 @@ void mqtt_start(void)
         if (s_startRetryTimer) {
             esp_timer_stop(s_startRetryTimer);
         }
+        return;
+    }
+    if (mqtt_restart_blocked()) {
+        /* URL TLS / OTA owns the heap until it releases and restores MQTT. */
         return;
     }
     if (!s_mqttInfraOk || !s_bringupSem) {

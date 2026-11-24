@@ -575,6 +575,9 @@ void ct_prov_ble_stop(void)
     }
     nimble_port_deinit();
     s_started = false;
+    /* The host task is gone: release any half-received request buffer, or the
+     * next ct_frag_assembler_init() zeroes the pointer and leaks it. */
+    ct_frag_assembler_deinit(&s_rx);
     ESP_LOGI(TAG, "NimBLE fully stopped");
 }
 

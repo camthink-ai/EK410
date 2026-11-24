@@ -73,10 +73,12 @@ typedef struct {
     int imageQuality;           /* img_quality_t — default QUALITY */
 } powerAttr_t;
 
-/* Desk/MQTT use: 120s was too short — commands arrive after device slept. */
-#define POWER_WAKE_SEC_DEFAULT 600
+#define POWER_WAKE_SEC_DEFAULT 120
 #define POWER_WAKE_SEC_MIN     30
 #define POWER_WAKE_SEC_MAX     600
+/* Cycle period bound (one year): esp_sleep's timer takes ~48 bits of us, and
+ * a value past that must never reach ESP_ERROR_CHECK in the sleep path. */
+#define POWER_SLEEP_MIN_MAX    525600
 
 /* Mode helpers (string <-> enum for HTTP/MQTT). */
 const char *power_mode_str(int mode);
@@ -101,6 +103,8 @@ void cfg_get_wifi_attr(wifiAttr_t *wifi);
 void cfg_set_wifi_attr(const wifiAttr_t *wifi);
 
 void cfg_get_mqtt_attr(mqttAttr_t *mqtt);
+/** True when no broker host is stored (cheap: no mqttAttr_t on the stack). */
+bool cfg_mqtt_host_empty(void);
 /** Persist MQTT broker attrs. Returns ESP_OK or NVS error (RAM unchanged on fail). */
 esp_err_t cfg_set_mqtt_attr(const mqttAttr_t *mqtt);
 
@@ -113,12 +117,18 @@ const char *cfg_mqtt_ca_pem(void);
 esp_err_t cfg_set_mqtt_ca_pem(const char *pem);
 
 void cfg_get_dev_info(devInfo_t *info);
-void cfg_set_dev_name(const char *name);
+/** Persist devName (1..32 bytes). Returns ESP_ERR_INVALID_ARG when it does
+ * not fit devInfo_t.devName, or an NVS error. */
+esp_err_t cfg_set_dev_name(const char *name);
 
 void cfg_get_power_attr(powerAttr_t *p);
-void cfg_set_power_attr(const powerAttr_t *p);
+/** Persist power policy. sleepMin is clamped to 1..POWER_SLEEP_MIN_MAX
+ * (cycle; 0 in other modes). Returns ESP_OK or an NVS error. */
+esp_err_t cfg_set_power_attr(const powerAttr_t *p);
 
-void cfg_factory_reset(void);
+/** Wipe `epcfg` + the NimBLE bond store (device id preserved) and the event
+ * log. Returns ESP_OK or an NVS error (nothing is rebooted on failure). */
+esp_err_t cfg_factory_reset(void);
 
 /**
  * Legacy NVS flag from the dual-SKU era (reboot into BLE-only image).

@@ -20,7 +20,9 @@
 static const char *TAG = "epd";
 
 #define BUSY_TIMEOUT_MS         5000
-#define BUSY_REFRESH_TIMEOUT_MS 40000 /* 7.09" E6 full refresh can take ~30s */
+#define BUSY_REFRESH_TIMEOUT_MS 60000 /* 7.09" E6 full refresh ~30s; extra
+                                       * margin for low temperatures — timing
+                                       * out here powers the panel off mid-DRF */
 
 const unsigned char spiCsPin[2] = {
     SPI_CS0, SPI_CS1
@@ -116,7 +118,7 @@ void epdHardwareReset(void)
     delayms(20);
 }
 
-void writeEpd(unsigned char epdCommand, unsigned char *epdData, unsigned int epdDataLength)
+void writeEpd(unsigned char epdCommand, const unsigned char *epdData, unsigned int epdDataLength)
 {
     spiTransmit(epdCommand, epdData, epdDataLength);
 }
@@ -131,7 +133,7 @@ void writeEpdCommand(unsigned char epdCommand)
     spiTransmitCommand(epdCommand);
 }
 
-void writeEpdData(unsigned char *epdData, unsigned int epdDataLength)
+void writeEpdData(const unsigned char *epdData, unsigned int epdDataLength)
 {
     spiTransmitData(epdData, epdDataLength);
 }
