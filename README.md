@@ -116,7 +116,7 @@ idf.py -p PORT flash monitor
 ### Convenience scripts
 
 ```bash
-bash tools/build_release.sh        # fullclean + build → dist/ek410.bin
+bash tools/build_release.sh        # releases: fresh config from sdkconfig.defaults → dist/ek410.bin
 bash tools/flash_release.sh PORT    # flash bootloader + table + image (both OTA slots)
 ```
 

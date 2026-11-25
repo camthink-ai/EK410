@@ -27,7 +27,7 @@
 | GET | `/api/v1/system/eventLog` | text/plain 下载 |
 | POST | `/api/v1/system/clearEventLog` | 清空日志（失败返回 `event log clear failed`） |
 | GET | `/api/v1/system/getPowerParam` | `mode`、`sleepMin`、`wakeSec`、`wakeUrl`、`imageQuality` |
-| POST | `/api/v1/system/setPowerParam` | 字段同上；**请求体里出现哪些字段就只改哪些**。`mode` `always` \| `cycle` \| `hibernate`，`sleepMin` 1..525600（cycle），`wakeSec` 30–600（默认 120），`imageQuality` `quality` \| `speed`。返回 `sleepArmed`；休眠 / 周期暂时不能开始时带 `sleepDeferred: "softap"` 或 `"no_sta"`（热点关闭 / 联网后自动开始）。请求体既无 `mode` 也无 `sleepMin` 时不改变休眠排程 |
+| POST | `/api/v1/system/setPowerParam` | 字段同上；**请求体里出现哪些字段就只改哪些**。`mode` `always` \| `cycle` \| `hibernate`，`sleepMin` 1..525600（cycle），`wakeSec` 30–600（默认 120），`imageQuality` `quality` \| `speed`——URL 图片的抖动方式：屏上每个像素一个墨点（约 6 秒）\| 800×600、2×2 的点。返回 `sleepArmed`；休眠 / 周期暂时不能开始时带 `sleepDeferred: "softap"` 或 `"no_sta"`（热点关闭 / 联网后自动开始）。请求体既无 `mode` 也无 `sleepMin` 时不改变休眠排程 |
 | POST | `/api/v1/system/sleepNow` | 立即深睡；SoftAP 开启时拒绝 |
 
 ## 网络
@@ -51,7 +51,7 @@
 | POST | `/api/v1/display/renderText` | `{text,color,bg,scale}` |
 | POST | `/api/v1/display/renderCanvas` | `{bg,items[]}` 文本 / 矩形 / 图片 / 二维码（≤ 48 项，≤ 2 个二维码） |
 | POST | `/api/v1/display/uploadFrame` | 原始 **960000** 字节原生帧（布局见下） |
-| POST | `/api/v1/display/displayUrl` | `{url}` 设备自拉、解码并刷新（JPEG / PNG / raw；http 与 https）。跟随最多 5 次跳转（https 地址只跳到 https）。响应体缓存在 PSRAM：名义上限 1280 KB。若单块不够（例如网页轮询留下的 TCP 控制块把堆切开），则分最多 3 段读入，JPEG/PNG 按回调顺序从分段缓冲解码；960000 字节原生帧同样走分段。仍装不下的文件在读正文前拒绝，屏幕保留上一画面（`file >1280KB limit`、`need …KB, got …KB in pieces`）。只支持基线 JPEG，渐进式 JPEG 报 `JPEG decode fail` |
+| POST | `/api/v1/display/displayUrl` | `{url}` 设备自拉、解码并刷新（JPEG / PNG / raw；http 与 https）。跟随最多 5 次跳转（https 地址只跳到 https）。超过 700 KB 的 JPEG / PNG 在读正文之前拒绝（`image >700KB limit`）；文件越大解码得越小：1600×1200 的 JPEG 在约 400 KB 以内解到 400×300，再大就只有 200×150（正文还占着 PSRAM，RGB 缓冲只能用剩下的部分）。随后平滑放大并按整屏分辨率抖动——`imageQuality: quality` 时屏上每个像素一个墨点，`speed` 时 800×600（2×2 的点）；灰色内容只取黑白。更大的图或要求满画质时请发原生帧。其余响应体缓存在 PSRAM：名义上限 1280 KB。若单块不够（例如网页轮询留下的 TCP 控制块把堆切开），则分最多 3 段读入，JPEG/PNG 按回调顺序从分段缓冲解码；960000 字节原生帧同样走分段。仍装不下的文件在读正文前拒绝，屏幕保留上一画面（`file >1280KB limit`、`need …KB, got …KB in pieces`）。只支持基线 JPEG，渐进式 JPEG 报 `JPEG decode fail` |
 | POST | `/api/v1/display/proxyImage` | `{url}` → 图片字节，供**网页预览** |
 | GET | `/api/v1/display/getLastFrameMeta` | `{present,seq,source,savedUs,bytes,crc32}` |
 | GET | `/api/v1/display/lastFrame` | 原始 **960000** 字节 native 4bpp（与 `uploadFrame` 同布局） |
