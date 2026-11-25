@@ -2,6 +2,8 @@
 
 Companion: [硬件说明（中文）](zh/hardware.md) · Source: [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
 
+Full product hardware guide (specs, keys, LED, panel): [CamThink Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/hardware-guide/ek410-specifications) · [中文](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/hardware-guide/ek410-specifications)
+
 | Item | Value |
 |------|--------|
 | Product | **EK410** · CamThink 7.09″ E-Ink Display |

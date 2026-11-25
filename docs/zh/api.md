@@ -12,6 +12,8 @@
 
 英文版：[api.md](../api.md)
 
+产品侧 API 说明与示例：[CamThink Wiki · HTTP API](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/software-guide/ek410-http-api) · [English](https://wiki.camthink.ai/docs/epaper-ek410-series/software-guide/ek410-http-api)
+
 ## 系统
 
 | 方法 | 路径 | 说明 |

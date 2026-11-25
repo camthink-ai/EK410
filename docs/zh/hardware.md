@@ -2,6 +2,8 @@
 
 英文版：[hardware.md](../hardware.md) · 源码：[github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
 
+完整产品硬件指南（规格、按键、指示灯、面板）：[CamThink Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/hardware-guide/ek410-specifications) · [English](https://wiki.camthink.ai/docs/epaper-ek410-series/hardware-guide/ek410-specifications)
+
 | 项 | 值 |
 |----|-----|
 | 产品 | **EK410** · CamThink 7.09″ 电子墨水屏 |

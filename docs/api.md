@@ -12,6 +12,8 @@ Limits: JSON bodies ≤ 16 KB and ≤ 8 nesting levels (deeper input is rejected
 
 Companion: [API（中文）](zh/api.md)
 
+Product-facing API notes and examples: [CamThink Wiki · HTTP API](https://wiki.camthink.ai/docs/epaper-ek410-series/software-guide/ek410-http-api) · [中文](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/software-guide/ek410-http-api)
+
 ## System
 
 | Method | Path | Notes |

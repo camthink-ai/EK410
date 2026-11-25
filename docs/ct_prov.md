@@ -2,6 +2,8 @@
 
 Firmware source: [github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410).
 
+End-user SoftAP / BLE steps: [CamThink Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/user-guide/ek410-softap-provisioning) · [中文](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/user-guide/ek410-softap-provisioning).
+
 EK410 implements the CamThink **CT-Prov/1** SoftAP HTTP binding used by
 [NeoLinker](https://github.com/camthink-ai/NeoLinker). SoftAP httpd and NimBLE
 share **one firmware image** and are **mutually exclusive** (never both up).

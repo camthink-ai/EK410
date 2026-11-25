@@ -2,6 +2,8 @@
 
 英文版：[development.md](../development.md)
 
+产品 Wiki 上的编译 / 烧录说明：[CamThink Wiki · 开发环境](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/software-guide/ek410-development-environment) · [English](https://wiki.camthink.ai/docs/epaper-ek410-series/software-guide/ek410-development-environment)
+
 仓库：[https://github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
 
 ## 环境

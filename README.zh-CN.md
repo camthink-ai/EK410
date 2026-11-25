@@ -13,7 +13,7 @@
 
 **CamThink** 7.09″ Spectra 6 电子墨水屏固件。
 
-[English](README.md) · [变更记录](CHANGELOG.md) · [文档](docs/) · [许可](LICENSE) · [GitHub](https://github.com/camthink-ai/EK410)
+[English](README.md) · [变更记录](CHANGELOG.md) · [文档](docs/) · [CamThink Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/ek410-overview) · [许可](LICENSE) · [GitHub](https://github.com/camthink-ai/EK410)
 
 | | |
 |---|---|
@@ -159,20 +159,28 @@ git tag -a v1.3.10 -m "EK410 v1.3.10"
 
 ## 文档索引
 
-| 内容 | 中文 | English |
-|------|------|---------|
-| 硬件 | [docs/zh/hardware.md](docs/zh/hardware.md) | [docs/hardware.md](docs/hardware.md) |
-| HTTP API | [docs/zh/api.md](docs/zh/api.md) | [docs/api.md](docs/api.md) |
-| CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | — | [docs/ct_prov.md](docs/ct_prov.md) |
-| 开发 | [docs/zh/development.md](docs/zh/development.md) | [docs/development.md](docs/development.md) |
-| 安全说明 | [docs/zh/security.md](docs/zh/security.md) | [docs/security.md](docs/security.md) |
-| 工具 | [tools/README.md](tools/README.md) | — |
+仓库 `docs/` 侧重固件侧说明（引脚、HTTP API、CT-Prov、编译）。完整产品文档（快速入门、Web 控制台、显示三模式、电源模式、MQTT）见正式发布的 **[CamThink Wiki · E-Paper EK410 系列](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/ek410-overview)**（[English](https://wiki.camthink.ai/docs/epaper-ek410-series/ek410-overview)）。
+
+| 内容 | 仓库（中文） | 仓库（EN） | CamThink Wiki |
+|------|--------------|------------|---------------|
+| 产品概述 | — | — | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/ek410-overview) |
+| 快速入门 | — | — | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/ek410-quick-start) |
+| SoftAP / BLE / Wi‑Fi / MQTT 界面 | — | — | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/user-guide/ek410-softap-provisioning) |
+| 内容显示（图片 / 编辑器 / Markdown） | — | — | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/user-guide/ek410-display-content) |
+| 电源管理 | — | — | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/user-guide/ek410-power-management) |
+| 硬件 | [docs/zh/hardware.md](docs/zh/hardware.md) | [docs/hardware.md](docs/hardware.md) | [Wiki 规格](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/hardware-guide/ek410-specifications) |
+| HTTP API | [docs/zh/api.md](docs/zh/api.md) | [docs/api.md](docs/api.md) | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/software-guide/ek410-http-api) |
+| MQTT 协议 | — | — | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/software-guide/ek410-mqtt-protocol) |
+| CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | — | [docs/ct_prov.md](docs/ct_prov.md) | [Wiki 配网](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/user-guide/ek410-softap-provisioning) |
+| 开发 | [docs/zh/development.md](docs/zh/development.md) | [docs/development.md](docs/development.md) | [Wiki](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/software-guide/ek410-development-environment) |
+| 安全说明 | [docs/zh/security.md](docs/zh/security.md) | [docs/security.md](docs/security.md) | — |
+| 工具 | [tools/README.md](tools/README.md) | — | — |
 
 ---
 
 ## NeoMind
 
-配好 Wi‑Fi + MQTT 后，设备出现在 NeoMind → 设备（待审批）。设备类型：**NeoMind-DeviceTypes** / `ek410_Eink`。
+配好 Wi‑Fi + MQTT 后，设备出现在 NeoMind → 设备（待审批）。设备类型：**NeoMind-DeviceTypes** / `ek410_Eink`。平台文档：[wiki.camthink.ai](https://wiki.camthink.ai)。
 
 ---
 

@@ -13,7 +13,7 @@
 
 **CamThink** 7.09″ Spectra 6 e-ink display firmware.
 
-[中文文档](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [Docs](docs/) · [License](LICENSE) · [GitHub](https://github.com/camthink-ai/EK410)
+[中文文档](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [Docs](docs/) · [CamThink Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/ek410-overview) · [License](LICENSE) · [GitHub](https://github.com/camthink-ai/EK410)
 
 | | |
 |---|---|
@@ -159,20 +159,28 @@ git tag -a v1.3.10 -m "EK410 v1.3.10"
 
 ## Documentation
 
-| Topic | EN | 中文 |
-|-------|----|------|
-| Hardware | [docs/hardware.md](docs/hardware.md) | [docs/zh/hardware.md](docs/zh/hardware.md) |
-| HTTP API | [docs/api.md](docs/api.md) | [docs/zh/api.md](docs/zh/api.md) |
-| CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | [docs/ct_prov.md](docs/ct_prov.md) | — |
-| Development | [docs/development.md](docs/development.md) | [docs/zh/development.md](docs/zh/development.md) |
-| Security | [docs/security.md](docs/security.md) | [docs/zh/security.md](docs/zh/security.md) |
-| Tools | [tools/README.md](tools/README.md) | — |
+Repo `docs/` covers firmware-facing details (pins, HTTP API, CT-Prov, build). For the full product guide (Quick Guide, Web console walkthrough, Display modes, power modes, MQTT), use the published **[CamThink Wiki · E-Paper EK410 Series](https://wiki.camthink.ai/docs/epaper-ek410-series/ek410-overview)** ([中文](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/ek410-overview)).
+
+| Topic | Repo (EN) | Repo (中文) | CamThink Wiki |
+|-------|-----------|-------------|---------------|
+| Product overview | — | — | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/ek410-overview) |
+| Quick start | — | — | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/ek410-quick-start) |
+| SoftAP / BLE / Wi‑Fi / MQTT UI | — | — | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/user-guide/ek410-softap-provisioning) |
+| Display (Image / Editor / Markdown) | — | — | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/user-guide/ek410-display-content) |
+| Power modes | — | — | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/user-guide/ek410-power-management) |
+| Hardware | [docs/hardware.md](docs/hardware.md) | [docs/zh/hardware.md](docs/zh/hardware.md) | [Wiki specs](https://wiki.camthink.ai/docs/epaper-ek410-series/hardware-guide/ek410-specifications) |
+| HTTP API | [docs/api.md](docs/api.md) | [docs/zh/api.md](docs/zh/api.md) | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/software-guide/ek410-http-api) |
+| MQTT protocol | — | — | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/software-guide/ek410-mqtt-protocol) |
+| CT-Prov / [NeoLinker](https://github.com/camthink-ai/NeoLinker) | [docs/ct_prov.md](docs/ct_prov.md) | — | [Wiki SoftAP / BLE](https://wiki.camthink.ai/docs/epaper-ek410-series/user-guide/ek410-softap-provisioning) |
+| Development | [docs/development.md](docs/development.md) | [docs/zh/development.md](docs/zh/development.md) | [Wiki](https://wiki.camthink.ai/docs/epaper-ek410-series/software-guide/ek410-development-environment) |
+| Security | [docs/security.md](docs/security.md) | [docs/zh/security.md](docs/zh/security.md) | — |
+| Tools | [tools/README.md](tools/README.md) | — | — |
 
 ---
 
 ## NeoMind
 
-Configure Wi‑Fi + MQTT → device appears under NeoMind → Devices (Pending). Device type: **NeoMind-DeviceTypes** / `ek410_Eink`.
+Configure Wi‑Fi + MQTT → device appears under NeoMind → Devices (Pending). Device type: **NeoMind-DeviceTypes** / `ek410_Eink`. Platform docs: [wiki.camthink.ai](https://wiki.camthink.ai).
 
 ---
 

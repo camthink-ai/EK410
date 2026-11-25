@@ -2,6 +2,8 @@
 
 Companion: [开发说明（中文）](zh/development.md)
 
+Build / flash walkthrough on the product wiki: [CamThink Wiki · Development environment](https://wiki.camthink.ai/docs/epaper-ek410-series/software-guide/ek410-development-environment) · [中文](https://wiki.camthink.ai/zh-Hans/docs/epaper-ek410-series/software-guide/ek410-development-environment)
+
 Repository: [https://github.com/camthink-ai/EK410](https://github.com/camthink-ai/EK410)
 
 ## Requirements
