@@ -5,6 +5,8 @@
 
 These guard what was wrong in 1.3.9 and is cheap to re-break:
   json_guard   JSON nesting-depth guard (compiles main/json_guard.c on the host)
+  img_dither   native-frame dither (compiles main/img_dither.c on the host):
+               layout identical to frame_convert, grey stays grey, tone kept
   frame_conv   tools/frame_convert.py writes the panel's native frame layout
   qa           QA gate semantics (all-skipped is not ok, image version binding)
   web          embedded page in sync + deterministic + i18n consistent
@@ -24,16 +26,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS = os.path.join(ROOT, "tools", "tests")
 
 
-def run_c_test(work):
+def run_c_test(work, name, sources, libs=()):
+    """sources: file names under main/, or paths under tools/."""
     cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
     if not cc:
         return "skip", "no C compiler (cc/gcc) on PATH"
-    exe = os.path.join(work, "json_guard_test" + (".exe" if os.name == "nt" else ""))
-    cmd = [cc, "-std=c11", "-Wall", "-Wextra", "-O1",
-           "-I", os.path.join(TESTS, "stub"), "-I", os.path.join(ROOT, "main"),
-           os.path.join(ROOT, "main", "json_guard.c"),
-           os.path.join(TESTS, "stub", "stub_cjson.c"),
-           os.path.join(TESTS, "test_json_guard.c"), "-o", exe]
+    exe = os.path.join(work, name + (".exe" if os.name == "nt" else ""))
+    main_dir = os.path.join(ROOT, "main")
+    files = [os.path.join(ROOT, s) if s.startswith("tools/") else os.path.join(main_dir, s)
+             for s in sources]
+    cmd = [cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
+           "-I", os.path.join(TESTS, "stub"), "-I", main_dir] + files + ["-o", exe] + list(libs)
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         return "fail", "compile failed: " + (p.stderr.strip().splitlines() or ["?"])[0][:160]
@@ -60,8 +63,13 @@ def main():
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     results = []
     with tempfile.TemporaryDirectory() as work:
-        results.append(("json_guard", *run_c_test(work)))
-        for name in ("test_frame_convert.py", "test_qa_lib.py", "test_web.py", "test_fonts.py", "test_repo.py"):
+        results.append(("json_guard", *run_c_test(
+            work, "json_guard",
+            ["json_guard.c", "tools/tests/stub/stub_cjson.c", "tools/tests/test_json_guard.c"])))
+        results.append(("img_dither", *run_c_test(
+            work, "img_dither", ["img_dither.c", "tools/tests/test_img_dither.c"], ["-lm"])))
+        for name in ("test_frame_convert.py", "test_img_dither_layout.py", "test_qa_lib.py", "test_web.py",
+                     "test_fonts.py", "test_repo.py"):
             results.append((name[5:-3], *run_py_test(name, env)))
 
     width = max(len(n) for n, _, _ in results)

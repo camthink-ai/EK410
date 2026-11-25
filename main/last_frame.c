@@ -421,18 +421,17 @@ void last_frame_capture_abort(void)
     s_capturing = false;
 }
 
-int last_frame_capture_commit(void)
+uint8_t *last_frame_buffer(void)
 {
-    if (!s_part || !s_cap || !s_capturing) {
-        return -1;
+    if (!s_part || ensure_cap_buf() != 0) {
+        return NULL;
     }
-    if (s_cap_off != LAST_FRAME_BYTES) {
-        ESP_LOGW(TAG, "capture incomplete %u/%u — skip save",
-                 (unsigned)s_cap_off, (unsigned)LAST_FRAME_BYTES);
-        last_frame_capture_abort();
-        return -1;
-    }
+    return s_cap;
+}
 
+/* s_cap holds a complete frame, s_cap_src its source: flash, then preview. */
+static int commit_frame(void)
+{
     last_frame_hdr_t hdr = {0};
     memcpy(hdr.magic, HDR_MAGIC, 4);
     hdr.ver = HDR_VER;
@@ -489,6 +488,29 @@ int last_frame_capture_commit(void)
     preview_rebuild_from_native(s_cap);
     last_frame_capture_abort();
     return 0;
+}
+
+int last_frame_commit_native(const char *source)
+{
+    if (!s_part || !s_cap) {
+        return -1;
+    }
+    strlcpy(s_cap_src, (source && source[0]) ? source : "panel", sizeof(s_cap_src));
+    return commit_frame();
+}
+
+int last_frame_capture_commit(void)
+{
+    if (!s_part || !s_cap || !s_capturing) {
+        return -1;
+    }
+    if (s_cap_off != LAST_FRAME_BYTES) {
+        ESP_LOGW(TAG, "capture incomplete %u/%u — skip save",
+                 (unsigned)s_cap_off, (unsigned)LAST_FRAME_BYTES);
+        last_frame_capture_abort();
+        return -1;
+    }
+    return commit_frame();
 }
 
 int last_frame_get_meta(last_frame_meta_t *out)

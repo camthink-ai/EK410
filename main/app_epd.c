@@ -131,6 +131,11 @@ int app_epd_boot_paint_sync(void)
 #define IMG_URL_DECODE_DEADLINE_MS 180000
 #define IMG_URL_HTTP_TIMEOUT_MS    60000
 #define IMG_URL_FORCE_SPEED_BYTES  (700 * 1024)
+/* A JPEG or PNG is decoded next to its own body: the decoder pool (48 KB)
+ * and the RGB buffer come out of what is left of PSRAM. With an 857 KB body
+ * free PSRAM fell to ~2 KB for the seconds of the decode — and such a file
+ * only decodes to 250×188 anyway. Raw frames are streamed, not decoded. */
+#define IMG_URL_IMAGE_MAX_BYTES    (700 * 1024)
 
 #define CHUNK_SIZE 8192
 
@@ -281,6 +286,22 @@ static bool stream_render_unlocked(unsigned char (*pixel_fn)(int x, int y, void 
             if ((ny & 31) == 0) {
                 vTaskDelay(1);
             }
+        }
+        stream_end(csx);
+    }
+    return epd_commit_display() != 0;
+}
+
+/* Stream a finished native frame (CS0 half, CS1 half) to the panel. No
+ * capture on the way: the buffer is the capture buffer. */
+static bool stream_native_frame(const uint8_t *frame)
+{
+    for (int csx = 0; csx < 2; csx++) {
+        const uint8_t *half = frame + (size_t)csx * EPD_HALF_BYTES;
+        stream_begin(csx);
+        for (int ny = 0; ny < EPD_CS_LINES; ny++) {
+            memcpy(s_chunk, half + (size_t)ny * EPD_CS_LINE_BYTES, EPD_CS_LINE_BYTES);
+            writeEpdData(s_chunk, EPD_CS_LINE_BYTES);
         }
         stream_end(csx);
     }
@@ -1290,8 +1311,10 @@ int app_epd_init(void)
     spiCtlSelectEpd(1); /* ensure mux still on EPD after init traffic */
     s_panelDirty = true; /* power cycle — first paint is a full DRF of content */
     s_panelOk = (checkDriverICStatus() == DONE);
-    if (!s_panelOk) {
-        vTaskDelay(pdMS_TO_TICKS(50));
+    for (int wait_ms = 50; !s_panelOk && wait_ms <= 300; wait_ms += 50) {
+        /* The master IC can need a few hundred ms after initEPD(). Two tries
+         * 50 ms apart left panelOk false for a whole boot (3 boots: once). */
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
         s_panelOk = (checkDriverICStatus() == DONE);
     }
     if (!s_panelOk) {
@@ -1777,6 +1800,15 @@ int epd_url_frame(const char *url)
             url_fail(buf);
             goto out_close;
         }
+        /* Only a raw frame is exactly raw_need bytes: everything else this
+         * large is an image, and is rejected before a byte is transferred. */
+        if ((size_t)clen > IMG_URL_IMAGE_MAX_BYTES && (size_t)clen != raw_need) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "image >%uKB limit",
+                     (unsigned)(IMG_URL_IMAGE_MAX_BYTES / 1024));
+            url_fail(buf);
+            goto out_close;
+        }
         if ((size_t)clen == raw_need) {
             cap = raw_need;
         } else {
@@ -1894,6 +1926,15 @@ int epd_url_frame(const char *url)
     url_heap_log("tls_freed");
 
     img_fmt_t fmt = img_sniff_format(body ? body : seg[0].p, total);
+    if ((fmt == IMG_FMT_JPEG || fmt == IMG_FMT_PNG) && total > IMG_URL_IMAGE_MAX_BYTES) {
+        /* No Content-Length, or an image that happens to be the raw frame
+         * size: the limit also applies once the bytes are in. */
+        char buf[40];
+        snprintf(buf, sizeof(buf), "image >%uKB limit",
+                 (unsigned)(IMG_URL_IMAGE_MAX_BYTES / 1024));
+        url_fail(buf);
+        goto out;
+    }
     if (fmt == IMG_FMT_RAW4BPP || (total == raw_need && fmt != IMG_FMT_JPEG && fmt != IMG_FMT_PNG)) {
         if (!s_acceptJobs) {
             url_fail("sleep pending");
@@ -1903,6 +1944,13 @@ int epd_url_frame(const char *url)
         epd_lock();
         last_frame_capture_begin("url");
         ret = stream_raw_native(body ? &one : seg, total);
+        /* The panel and the capture buffer hold the frame now. Release the
+         * body before the commit: the commit rebuilds the telemetry preview
+         * (121 KB), and next to a 960 KB body there was no room for it —
+         * every URL raw frame left telemetry without a preview. */
+        free(body);
+        body = NULL;
+        body_segs_free(seg);
         if (ret == 0) {
             last_frame_capture_commit();
             ESP_LOGI(TAG, "raw 4bpp frame OK");
@@ -1963,37 +2011,68 @@ int epd_url_frame(const char *url)
                 goto out;
             }
             url_stage(use_proc == IMG_PROC_QUALITY, "Dithering...");
-            /* Prefer codes→stream cover: avoids a contiguous 960KB FB alloc that
-             * often fails after TLS download fragmentation on 2MB PSRAM. */
-            uint8_t *codes = NULL;
-            int cw = 0, ch = 0;
-            /* img_rgb_dither_codes consumes rgb: `codes` may be realloc(rgb)
-             * in place (SPEED). Never free rgb after this call — only codes. */
-            if (img_rgb_dither_codes(rgb, rw, rh, &codes, &cw, &ch, use_proc) != 0) {
-                url_fail("dither OOM/fail");
-            } else {
-                codes_cover_ctx_t cctx = {.codes = codes, .sw = cw, .sh = ch};
+            /* Preferred: smooth upscale + a dither at (nearly) panel resolution,
+             * written straight into the capture buffer and streamed as it lies.
+             * The cover sampling of the fallback below cost ~20 s a picture
+             * and made every dither dot a 4×4 block on the panel. */
+            epd_lock();
+            uint8_t *fb = last_frame_buffer();
+            bool shown = false;
+            if (!fb) {
+                ESP_LOGW(TAG, "no capture buffer — cover path");
+            } else if (img_render_native(rgb, rw, rh, use_proc, fb) == 0) {
+                rgb = NULL; /* consumed */
                 url_heap_log("pre_stream");
-                ESP_LOGI(TAG, "decode OK — stream cover %dx%d", cw, ch);
+                ESP_LOGI(TAG, "decode OK — native frame");
                 if (!s_acceptJobs) {
-                    free(codes);
                     url_fail("sleep pending");
-                    goto out;
-                }
-                epd_lock();
-                last_frame_capture_begin("url");
-                if (stream_render_unlocked(codes_cover_pixel, &cctx)) {
-                    last_frame_capture_commit();
-                    ret = 0;
-                    url_heap_log("done");
-                    ESP_LOGI(TAG, "decoded image frame OK (%s)",
-                             fmt == IMG_FMT_JPEG ? "JPEG" : "PNG");
+                } else if (stream_native_frame(fb)) {
+                    last_frame_commit_native("url");
+                    shown = true;
                 } else {
-                    last_frame_capture_abort();
                     url_fail("display incomplete");
                 }
-                epd_unlock();
-                free(codes);
+            }
+            epd_unlock();
+            if (shown) {
+                ret = 0;
+                url_heap_log("done");
+                ESP_LOGI(TAG, "decoded image frame OK (%s)", fmt == IMG_FMT_JPEG ? "JPEG" : "PNG");
+            } else if (rgb) {
+                /* Fallback (no capture buffer / no working memory): FS at the
+                 * decoded resolution, then nearest cover into the panel. */
+                uint8_t *codes = NULL;
+                int cw = 0, ch = 0;
+                /* img_rgb_dither_codes consumes rgb: `codes` may be realloc(rgb)
+                 * in place (SPEED). Never free rgb after this call — only codes. */
+                int drc = img_rgb_dither_codes(rgb, rw, rh, &codes, &cw, &ch, use_proc);
+                rgb = NULL;
+                if (drc != 0) {
+                    url_fail("dither OOM/fail");
+                } else {
+                    codes_cover_ctx_t cctx = {.codes = codes, .sw = cw, .sh = ch};
+                    url_heap_log("pre_stream");
+                    ESP_LOGI(TAG, "decode OK — stream cover %dx%d", cw, ch);
+                    if (!s_acceptJobs) {
+                        free(codes);
+                        url_fail("sleep pending");
+                        goto out;
+                    }
+                    epd_lock();
+                    last_frame_capture_begin("url");
+                    if (stream_render_unlocked(codes_cover_pixel, &cctx)) {
+                        last_frame_capture_commit();
+                        ret = 0;
+                        url_heap_log("done");
+                        ESP_LOGI(TAG, "decoded image frame OK (%s)",
+                                 fmt == IMG_FMT_JPEG ? "JPEG" : "PNG");
+                    } else {
+                        last_frame_capture_abort();
+                        url_fail("display incomplete");
+                    }
+                    epd_unlock();
+                    free(codes);
+                }
             }
         }
     } else if (fmt == IMG_FMT_WEBP) {
