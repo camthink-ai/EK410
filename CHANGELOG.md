@@ -10,24 +10,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-## [1.3.10] — 2026-11-24
+## [1.3.10] — 2026-11-25
 
 Release-readiness audit of 1.3.9, plus what the first on-device run exposed.
 Validated on **one** ESP32-C61HR2 bench unit (STA + web server + MQTT over
-TCP): clean build from `sdkconfig.defaults`, host tests, an 18-step display /
-stack soak, a follow-up 13-step URL soak (large baseline JPEG and raw frames
-after a display, HTTP redirects, progressive / oversize / truncated rejects —
-zero reboots, MQTT back after every step), `tools/fix_verification.py`
-**10/10** (including `--url`, `--raw-url`, local-upload OTA round trip, and
-`--power`), and a real-HTTPS URL OTA **failure** path (TLS to a missing GitHub
-release asset → `otaState=failed`, MQTT restored). Image: `dist/ek410.bin`
-sha256 prefix `5fc910f9736a`.
+TCP) with `dist/ek410.bin` built by `tools/build_release.sh` from this source
+and this `sdkconfig.defaults` (sha256 prefix `44b0e0576535`; zero compiler
+warnings, host tests 8/8): `tools/fix_verification.py` **10/10** (JSON depth,
+`devName` limit, MQTT password hidden, internal-heap headroom, failed URL OTA
+reported with MQTT back and `http://` refused, URL display soak, raw frames
+between images, local-upload OTA round trip, `sleepMin` clamp); and six
+screens — a long paragraph, a canvas with two QR codes and four pictures
+pushed by URL — displayed on the previous image and on this one and read back
+from the device (`GET /api/v1/display/lastFrame`): the text and canvas frames
+are byte-identical (1,920,000 pixels, 0 differ), the grey logo went from
+11.3 % to 1.8 % coloured pixels, and POST-to-panel-done fell from 83.7 s to
+52.6 s for the paragraph and from 83–88 s to 61–66 s for the pictures. On this
+image three URL raw frames in a row were each followed by a rebuilt telemetry
+preview (54 of 54 were missing before), and `speed` mode was exercised with
+the setting put back afterwards. The previous image `2c5ba1cc5801` — this
+source without the dither, text, preview and probe changes — ran a 13-step
+boundary soak (10 displayed, 3 rejected as intended, zero reboots) and the
+first 13.2 h of the 72 h soak: 383 rounds, no unexpected result, no reboot;
+its serial log is what surfaced the missing preview. Earlier still,
+`f541da6db01e` ran a 27-step display soak (20 displayed, 7 rejected as
+intended, zero reboots) and a real-HTTPS URL OTA **failure** path
+(`otaState=failed`, `ESP_ERR_INVALID_VERSION`, MQTT restored, no reboot), and
+`5fc910f9736a` had been built in a stale `build/` and still carried the
+2304-byte event-task stack (640 bytes of headroom instead of 1408). All are
+superseded. The 72 h soak (`tools/soak_long.py`) was restarted on this image
+at 13:00 on the day of the release: when v1.3.10 was tagged it had run half
+an hour (15 rounds, no unexpected result), and its result was not in.
 
 **Known on hardware, not fixed in this release** (details in
 `docs/c61_memory_allocation_report.md` §11.5):
 
+- **The larger a JPEG or PNG, the softer it comes out.** The decoder takes
+  its output buffer from what is left of the largest free PSRAM block beside
+  the body (48 KB reserved for the decoder pool). With the web console polling
+  — free PSRAM in two blocks, ~800 KB + ~230 KB — a 1600×1200 JPEG is decoded
+  to 400×300 (¼) only up to about 400 KB and to 200×150 (⅛) from there to the
+  limit (measured: 66 KB → 400×300, 624 KB → 200×150 while 432 KB were free,
+  in blocks of 230 KB and 197 KB); a 2400×1800 JPEG is always 300×225. The
+  picture is upsampled smoothly now, so this costs detail, no longer grain.
+  Placing the body so that the largest block keeps room for the RGB buffer,
+  or decoding to RGB565, would move the ¼ point to ~640 KB or up to the limit.
+- **Saving the last frame takes about 5 s after every display** (erase and
+  rewrite of the 1 MB `lastfrm` partition, then the preview). The panel shows
+  the picture before that; the job is only reported done afterwards. Older
+  than this release.
 - **Progressive JPEG is not decodable** (`JPEG decode fail`): the ROM decoder
   only handles baseline JPEG, and many web images are progressive.
+- **Internal RAM dips to 8 bytes free at some point of every boot**
+  (`getDiag.heap.minFreeInt` reads 8 fifty seconds after a fresh boot; Wi-Fi
+  init starts from 64 KB, MQTT starts from 19.4 KB, the steady state is 22 KB).
+  Boot has never failed on it, and the step that takes it there is not
+  located yet. A side effect: `minFreeInt` cannot show a low during a soak,
+  only the per-round `freeInt` / `largestInt` can.
 - PSRAM can still fragment after a successful display (largest free block
   often ~0.5–0.8 MB). URL bodies are now read in up to three pieces and
   JPEG/PNG decode from those pieces, so the fragmentation no longer rejects
@@ -35,8 +74,11 @@ sha256 prefix `5fc910f9736a`.
 
 **Not validated on hardware:** MQTTS, SoftAP and BLE provisioning, CYCLE
 sleep and the wake URL on battery, MQTT downlink commands, a *successful*
-URL OTA (failure path with real HTTPS was checked), more than one unit, and
-the 72 h soak. Run `tools/qa_gate.py` candidate + 72 h soak before shipping.
+URL OTA (the failure path was checked with real HTTPS; the device accepts
+`https://` only, so it needs an image on a host it trusts), more than one
+unit, and the 72 h soak (restarted on this image; 13 h on the previous one
+`2c5ba1cc5801` — 383 rounds, no unexpected result, no reboot — surfaced the
+missing preview). Run `tools/qa_gate.py` candidate + soak before shipping.
 
 ### Fixed
 
@@ -46,6 +88,11 @@ the 72 h soak. Run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 - **Large URL images failed with `download OOM`** (an 857 KB JPEG after a few displays): the whole-body buffer was allocated only after the headers, by which time the incoming data had split the free PSRAM block. It is now reserved before the transfer and cut back to `Content-Length` as soon as the headers are in. The splitting that appeared *after* a display is the next bullet.
 - **A raw frame or large JPEG/PNG fetched by URL was rejected after a successful display** (`need 937KB, max block 832KB` / `need …KB, max block …KB`; found on hardware). Web UI polls leave a 208-byte TCP control block that splits free PSRAM for two minutes. URL bodies are now read into up to three blocks after the headers (no leftover 64 KB hold-back on the first piece — TLS already owns its buffers). JPEG/PNG decoders already read through callbacks, so they consume the pieces in order; a raw frame streams the same way.
 - **Render-job messages and small objects split the free PSRAM** (found on hardware). The ~19 KB job message was taken from the heap on every job, and lwIP, MQTT and cJSON put their few-hundred-byte objects in PSRAM too; allocated right above MQTT's buffers they stayed there as splitters. Job messages now come from three slots reserved at init, and a 20 KB hole below them takes the small objects. The largest free block before a JPEG/PNG download is ~1.0 MB whenever no poll is in `TIME_WAIT` (it used to be 826 KB from the first display on); an image larger than the block at that moment is rejected as `need …KB, max block …KB`.
+- **Decoding a large JPEG/PNG left almost no PSRAM** (found on hardware, once files that size could be fetched): an 857 KB JPEG kept its 857 KB body in PSRAM next to the decoder pool (48 KB) and the RGB buffer, and free PSRAM fell to about 2 KB for the seconds of the decode. A JPEG or PNG over 700 KB is now refused before the body is read (`image >700KB limit`; the previous frame stays). Raw frames are streamed, not decoded, and keep the 1280 KB cap.
+- **URL pictures came out as coarse speckle** (seen on hardware). The picture was dithered at its decoded resolution — 400×300 for a 1600×1200 JPEG, less for a small one — and the ink dots were then blown up by nearest sampling: every dot a 4×4 block on the panel, 6×6 for a wide logo. And with six inks and no grey, per-channel error diffusion put red, yellow and blue into grey text: 11 % of a grey logo's pixels came out coloured. `main/img_dither.c` now upsamples the picture smoothly and dithers at panel resolution — one ink dot per panel pixel with `imageQuality: quality`, 800×600 with `speed` — straight into the native frame, and a near-neutral pixel only takes black or white (1.8 % coloured pixels in that logo). The nearest-ink metric, six float distances per pixel, is a table now; the dither takes 5.7 s a picture instead of ~29 s (dither plus cover sampling). The ink colours also go through the same tone curve as the picture: a pure-colour area used to leave a few levels of error on every pixel, which the diffusion carried along until the values saturated and pushed a stream of error into the neighbouring colour.
+- **A screen of long text spent about 37 s evaluating pixels** — more than the panel's own refresh. Every panel pixel re-decoded the UTF-8 string to find its character cell and tested the box of every canvas item, read from PSRAM. Cells are listed once per render and each column gets a table of the items covering it: a long paragraph went from 83.7 s to 53.1 s, and the frame it produces is byte-identical.
+- **Telemetry went out without a preview after every URL raw frame** (found by the 72 h soak: 54 of 54). The frame was committed to flash while its 960 KB body was still allocated, so the 121 KB preview could not be made. The body is released first.
+- **The boot-time panel probe reported `panelOk=false` for a whole boot** about one boot in three: it tried twice, 50 ms apart, and the master driver IC can need longer. It now retries for up to about a second.
 - **`displayUrl` and `proxyImage` did not follow redirects** (`HTTP status 302`), and CDN, signed and short links all redirect: `esp_http_client` only follows them inside `esp_http_client_perform()`. The open / read sequence now follows up to 5 hops with IDF's own `esp_http_client_set_redirection()` — relative or absolute targets, http → https; an https page still cannot downgrade to http.
 - **Sleep or a frame upload could start while an OTA was writing flash.** Both are refused while an OTA is running.
 - **URL image display corrupted the PSRAM heap on every JPEG/PNG** (HTTP `displayUrl`, MQTT `display_url`, CYCLE `wakeUrl`): `epd_url_frame()` freed the dithered ink buffer before streaming it and freed it again. Regression since 1.3.4.
@@ -80,14 +127,17 @@ the 72 h soak. Run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 - `setPowerParam` with neither `mode` nor `sleepMin` leaves the sleep schedule untouched.
 - Rollback gate: a pending-verify image is confirmed only once the panel probe passed and the unit is reachable (web up or STA online).
 - Release build is explicitly `-Og` (see `sdkconfig.defaults`); the Wi-Fi buffer options were removed from `sdkconfig.defaults` — the runtime table in `wifi.c` is authoritative.
+- `tools/build_release.sh` stops when the clean fails, deletes a leftover `build/sdkconfig` and prints the effective configuration. `sdkconfig.defaults` only sets options that are not in an existing sdkconfig: a release built in a stale `build/` silently kept the old values (the first 1.3.10 image, `5fc910f9736a`, was built that way and still had the 2304-byte event-task stack). Build releases with the script, never with a bare `idf.py build`.
+- `main/img_dither.c` is compiled at `-O2`; every other file stays at `-Og`. The dither took 8.8 s a picture at `-Og` and 5.7 s at `-O2`. It is self-contained numeric code with its own host test, so nothing is lost in debugging.
 - Font bitmaps come from **Noto Sans CJK SC** (16×16 CJK) and **Noto Sans Mono CJK SC** (8×16 ASCII), both SIL OFL 1.1, instead of macOS system fonts; `qrcodegen.min.js` carries its MIT notice again.
 
 ### Added
 
 - `docs/security.md` / `docs/zh/security.md`: what the unauthenticated LAN/SoftAP API exposes, and the decisions to take before mass production.
 - `GET /api/v1/system/getDiag`: `heap` (`free`, `minFree`, `freeInt`, `minFreeInt`, `largestInt`, `freeSpiram`, `largestSpiram`) and `stackMin` (smallest free stack ever seen, in bytes, per long-lived task) — the numbers to watch when validating a build on hardware. On demand, not in `getDevInfo`: the web UI polls that every few seconds, and the ~20 extra nodes per reply cost 5 KB of internal RAM in the first 1.3.10 candidate (it dropped to 8 bytes free during a poll).
-- Host regression tests: `python3 tools/run_host_tests.py` (`tools/tests/`: JSON depth guard, native frame layout, QA gate semantics, embedded page in sync / deterministic / i18n consistent, font tables, repo hygiene). `tools/build_release.sh` runs them before building.
-- `tools/fix_verification.py`: checks every fix of this release on a real device over HTTP — JSON depth, `devName` limit, MQTT password hidden, failed URL OTA reported **with MQTT back afterwards**, MQTT back after every URL display, internal-heap headroom, local-upload OTA round trip, `sleepMin` clamp — and fails on 1.3.9 firmware. Part of `qa_gate.py --tier candidate` (`--verify-url`, `--verify-rounds`).
+- Host regression tests: `python3 tools/run_host_tests.py` (`tools/tests/`: JSON depth guard, the panel-frame dither — 39 checks on tone, grey and layout, plus a byte-for-byte match with `frame_convert.pack_native` on both grids — native frame layout, QA gate semantics, embedded page in sync / deterministic / i18n consistent, font tables, repo hygiene). `tools/build_release.sh` runs them before building.
+- `tools/fix_verification.py`: checks every fix of this release on a real device over HTTP — JSON depth, `devName` limit, MQTT password hidden, failed URL OTA reported **with MQTT back afterwards**, MQTT back after every URL display, internal-heap headroom, local-upload OTA round trip, `sleepMin` clamp — and fails on 1.3.9 firmware. Part of `qa_gate.py --tier candidate` (`--verify-url`, `--verify-rounds`). `--ota-url` adds a URL OTA round trip with a real `https://` image URL.
+- `tools/soak_long.py`: unattended business-rhythm soak of one unit (72 h by default) — serves a generated image set from the host (JPEG, three kinds of PNG, a raw frame, redirects, a file exactly on the 700 KB limit), cycles `displayUrl` with MQTT telemetry in between, mixes in `uploadFrame`, files the firmware must refuse, the web console and optionally a public HTTPS image; reads `getDiag` after every round, checks MQTT is back, keeps the serial log, appends `rounds.jsonl` and rewrites `summary.json` each round. Never touches the device's configuration.
 - QA gate: `firmware_binding` case (device `fwVersion` must equal the image's version), an all-skipped run is not `ok`, `--mqtt-password` pass-through.
 - `tools/frame_convert.py` now writes the real native layout (CS0/CS1 halves, 90° rotated) — its old output was scrambled on the panel.
 
@@ -99,6 +149,11 @@ the 72 h soak. Run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 - **大图 URL 刷图报 `download OOM`**（连刷几张后，857 KB 的 JPEG）：整块图片缓冲过去是在收到响应头之后才分配，那时传过来的数据已经把空闲块切碎。现在在传输开始前先预留、一读到 `Content-Length` 就收缩到实际大小；放不下的文件报 `need 857KB, max block …KB`。
 - **URL 取原生帧或大 JPEG/PNG 在成功刷过一张图之后被拒**（`need 937KB, max block 832KB` 等，真机发现）。网页轮询留下的 TCP 控制块会把空闲 PSRAM 切开；现在响应头之后按空闲块分最多 3 段读入（第一段不再预留 64 KB——TLS 缓冲此时已分配），JPEG/PNG 经回调顺序读分段缓冲，原生帧同样流式刷屏。
 - **渲染任务消息和小对象把空闲 PSRAM 切开**（真机发现）。约 19 KB 的任务消息每次都从堆上分配，lwIP、MQTT、cJSON 的几百字节对象也都在 PSRAM 里；它们一旦落在 MQTT 缓冲区上方，就成了分割空闲区的隔板。现在消息改用启动时预留的 3 个槽位，其下方留一个 20 KB 的空洞收留小对象。
+- **大 JPEG/PNG 解码期间 PSRAM 几乎耗尽**（让这么大的图能取回之后才暴露）：857 KB 的 JPEG 解码时，本体 857 KB、解码器工作池 48 KB、RGB 缓冲同时驻留 PSRAM，那几秒内空闲一度只剩约 2 KB。现在超过 700 KB 的 JPEG / PNG 在读正文之前就拒绝（`image >700KB limit`，屏幕保留上一画面）；原生帧是流式刷屏、不解码，仍按 1280 KB 上限。
+- **URL 刷图颗粒粗、灰字带彩点**（真机可见）。过去图片在解码分辨率上抖动——1600×1200 的 JPEG 是 400×300，小图更低——再把墨点最近邻放大，屏上每个抖动点是一块 4×4 像素，宽标志图是 6×6。再加上只有六种墨色、没有灰，按通道做的误差扩散会把红、黄、蓝混进灰色文字：一张灰色标志图里 11% 的像素是彩色的。新增 `main/img_dither.c`：先平滑放大，再按整屏分辨率抖动（`imageQuality: quality` 时屏上每个像素一个墨点，`speed` 时 800×600），直接写进原生帧；接近灰色的像素只取黑白（同一张标志图降到 1.8%）。最近墨色从每像素六次浮点距离计算改为查表，一张图的抖动从约 29 秒（抖动 + 放大采样）降到 5.7 秒。墨色的参考值也走和图片相同的阶调曲线：过去纯色区域每个像素都会留下几级“误差”被一路往后带，数值饱和后把一股误差推进相邻的颜色。
+- **长文本一屏在逐像素求值上花约 37 秒**——比面板自己的刷新还久。每个像素都要重新解码一遍 UTF-8 找到字位，再把画布里每个图元的包围盒（在外部内存里）测一遍。现在每次渲染只列一次字位，每一列建一张“哪些图元覆盖该行”的表：一段长文从 83.7 秒降到 53.1 秒，输出的帧逐字节不变。
+- **每次 URL 原生帧刷图之后，遥测都不带预览图**（72 小时长测发现，54 次全部如此）。提交上一帧时 960 KB 的正文还占着内存，121 KB 的预览生成不出来。现在先释放正文。
+- **开机时的面板探测约每三次有一次让 `panelOk=false` 持续整个开机周期**：只试两次、间隔 50 毫秒，而主片驱动 IC 可能需要更久。现在最长重试约 1 秒。
 - **`displayUrl` / `proxyImage` 不跟随跳转**（`HTTP status 302`）：CDN、签名地址、短链接都会跳转，而 `esp_http_client` 只在 `esp_http_client_perform()` 里处理。现在跟随最多 5 跳（复用 IDF 的 `esp_http_client_set_redirection()`，支持相对与绝对地址、http → https；https 页面仍不能降级到 http）。
 - **升级写 Flash 期间可能进入休眠或被原图上传打断**：升级进行中两者都会被拒绝。
 - URL 升级改为在刷屏任务上下载（整机唯一栈足够深的任务），不再新建 12 KB 专用任务；失败后自行恢复 MQTT 与休眠排程。
@@ -117,10 +172,10 @@ the 72 h soak. Run `tools/qa_gate.py` candidate + 72 h soak before shipping.
 - 新增安全说明文档；QA gate 绑定设备实际固件版本、全跳过不算通过；`frame_convert.py` 改为真实的原生帧布局。
 - 未配置 MQTT broker 时不再每 5 秒空转重试；保存新配置后清除上一次的错误，测试连接不会误报旧错误。
 - 新增按需读取的诊断接口 `GET /api/v1/system/getDiag`：`heap`（堆余量）与 `stackMin`（各任务最小剩余栈）。不放进 `getDevInfo`——网页每隔几秒轮询它，1.3.10 首版把诊断塞进去后每次轮询多耗 5 KB 内部 RAM。
-- 新增主机回归测试 `python3 tools/run_host_tests.py`（发布脚本会自动跑），以及上机核对工具 `tools/fix_verification.py`（已接入 `qa_gate.py --tier candidate`，在 1.3.9 固件上会逐项报失败；同时核对每次 URL 刷图和升级失败后 MQTT 恢复、内部 RAM 余量）。
-- 上机验证范围：**一台** ESP32-C61HR2 台架机（STA + 网页服务 + TCP MQTT）——干净编译、主机测试、18 步 + 13 步 URL 刷屏 soak（大图 / 原生帧夹在刷图之后、跳转、畸形图按预期失败；零重启，每步后 MQTT 恢复）、`tools/fix_verification.py` **10/10**（含 `--url` / `--raw-url` / 本地上传 OTA 往返 / `--power`）、真实 HTTPS URL 升级**失败**路径（TLS 后失败，`otaState=failed`，MQTT 恢复）。镜像 sha256 前缀 `5fc910f9736a`。
-- **真机上发现、本版未修**（详见 `docs/c61_memory_allocation_report.md` 第 11.5 节）：**渐进式 JPEG 无法解码**（报 `JPEG decode fail`）；刷图后 PSRAM 最大连续块仍可能变小，但 URL 正文已改为最多 3 段读入并由 JPEG/PNG 回调消费，业务上不再因此拒图。
-- **尚未上机验证**：MQTTS、SoftAP 与 BLE 配网、CYCLE 休眠与电池下的唤醒图、MQTT 下行命令、URL 升级的**成功**路径、多台设备、72 小时长测。
+- 新增主机回归测试 `python3 tools/run_host_tests.py`（发布脚本会自动跑；含整屏抖动的 39 项检查，以及与 `frame_convert.pack_native` 的逐字节对比）。`main/img_dither.c` 单独按 `-O2` 编译，其余文件仍是 `-Og`：这个内核在 `-Og` 下一张图要 8.8 秒，`-O2` 下 5.7 秒，它是自成一体的数值代码并有主机测试，以及上机核对工具 `tools/fix_verification.py`（已接入 `qa_gate.py --tier candidate`，在 1.3.9 固件上会逐项报失败；同时核对每次 URL 刷图和升级失败后 MQTT 恢复、内部 RAM 余量）。；新增 72 小时业务节奏长测 `tools/soak_long.py`（本机起图片服务、可接串口、逐轮落盘，不改设备配置）。
+- 上机验证范围：**一台** ESP32-C61HR2 台架机（STA + 网页服务 + TCP MQTT），镜像是用 `tools/build_release.sh` 从本源码和本 `sdkconfig.defaults` 构建的 `dist/ek410.bin`（sha256 前缀 `44b0e0576535`；编译零告警，主机测试 8/8）：`tools/fix_verification.py` **10/10**（深层 JSON、`devName` 长度、MQTT 密码不回传、内部 RAM 余量、URL 升级失败可见且 MQTT 恢复、`http://` 被拒、URL 刷图、原生帧夹在图片之间、本地上传 OTA 往返、`sleepMin` 上限）；另把六个画面——一段长文、带两个二维码的画布、四张 URL 图片——先在上一个镜像上、再在本镜像上刷出，并从设备读回它保存的帧（`GET /api/v1/display/lastFrame`）对比：长文与画布的帧逐字节相同（192 万像素 0 差异），灰色标志图的彩色像素从 11.3% 降到 1.8%，从发请求到刷完的时间长文由 83.7 秒降到 52.6 秒、图片由 83–88 秒降到 61–66 秒。在本镜像上连续三次 URL 原生帧之后遥测预览都重新生成（此前 54 次全部缺失）；“速度优先”模式也测过，设置已恢复。上一个镜像 `2c5ba1cc5801`（同一份源码，不含抖动、文本、预览、面板探测的改动）跑过 13 步边界 soak（10 步显示、3 步按预期拒绝、零重启）和 72 小时长测的前 13.2 小时：383 轮，无意外结果、无重启——它的串口日志暴露了预览缺失。更早的 `f541da6db01e` 跑过 27 步刷屏 soak（20 步显示、7 步按预期拒绝、零重启）和真实 HTTPS URL 升级**失败**路径（`otaState=failed`，`ESP_ERR_INVALID_VERSION`，MQTT 恢复，未重启）；`5fc910f9736a` 是在残留的 `build/` 目录里构建的，系统事件任务栈仍是 2304（余量 640 而不是 1408）。以上均已被取代。72 小时长测（`tools/soak_long.py`）在发布当天 13:00 于本镜像上重新开始：打 `v1.3.10` 标签时它跑了半小时（15 轮，无意外结果），结果尚未出来。
+- **真机上发现、本版未修**（详见 `docs/c61_memory_allocation_report.md` 第 11.5 节）：**JPEG / PNG 越大，画面越软**（解码输出只能用最大空闲 PSRAM 块剩下的部分；网页轮询时空闲分成约 800 KB + 230 KB 两块）：1600×1200 的 JPEG 只在文件约 400 KB 以内才解到 400×300（¼），再大到上限都是 200×150（⅛）——实测 66 KB → 400×300、624 KB → 200×150（当时还空闲 432 KB，但分成 230 KB 与 197 KB 两块）；2400×1800 的 JPEG 始终是 300×225；PNG 是逐级变粗（420 KB 的 1600×1200 PNG → 320×240）；现在会经平滑放大，所以损失的是细节，不再是颗粒。让正文避开最大块，或改用 RGB565 解码输出，可把 ¼ 的分界点提到约 640 KB 乃至上限；**每次刷屏之后保存上一帧约需 5 秒**（擦除并重写 1 MB 的 `lastfrm` 分区，再生成预览）：此时面板已经显示新画面，只是任务要到这之后才报告完成，属原有逻辑；**渐进式 JPEG 无法解码**（报 `JPEG decode fail`）；**内部 RAM 在每次启动的某个时刻只剩 8 字节**（全新开机 50 秒时 `getDiag.heap.minFreeInt` 已是 8；Wi-Fi 初始化时还有 64 KB，MQTT 启动时 19.4 KB，稳态 22 KB——启动从未因此失败，但哪一步把水位压到这里还没定位；这也意味着长测里的 `minFreeInt` 反映不了运行期的低点，只能看每轮的 `freeInt` / `largestInt`）；刷图后 PSRAM 最大连续块仍可能变小，但 URL 正文已改为最多 3 段读入并由 JPEG/PNG 回调消费，业务上不再因此拒图。
+- **尚未上机验证**：MQTTS、SoftAP 与 BLE 配网、CYCLE 休眠与电池下的唤醒图、MQTT 下行命令、URL 升级的**成功**路径（失败路径已用真实 HTTPS 验证；设备只接受 `https://` 地址，成功路径需要一台设备信任的公网主机上的正式镜像）、多台设备；72 小时长测已在本镜像上重新开始（上一个镜像 `2c5ba1cc5801` 跑了 13 小时：383 轮，无意外结果、无重启，正是它暴露了预览缺失）。
 
 ## [1.3.9] — 2026-11-23
 

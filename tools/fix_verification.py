@@ -4,6 +4,7 @@
     python3 tools/fix_verification.py --host 192.168.1.50
     python3 tools/fix_verification.py --host 192.168.1.50 --url http://192.168.1.10/t.png
     python3 tools/fix_verification.py --host 192.168.1.50 --firmware dist/ek410.bin
+    python3 tools/fix_verification.py --host 192.168.1.50 --ota-url https://HOST/ek410.bin
     python3 tools/fix_verification.py --host 192.168.1.50 --power        # bench unit only
 
 Only the device's HTTP API is used (LAN or SoftAP), nothing else. Every check
@@ -16,6 +17,7 @@ maps to one entry of CHANGELOG 1.3.10 and FAILS on 1.3.9 firmware:
   ota_failure_visible   a failing URL OTA reports otaState=failed + otaError
   url_display_soak      --url: N URL displays; no reboot, PSRAM must recover
   ota_roundtrip         --firmware: local upload, reboot into the other slot
+  ota_url_roundtrip     --ota-url: the device fetches the image, reboots, confirms
   sleep_min_clamp       --power: sleepMin is clamped (saves power config twice)
 
 Exit 0 only when every executed check passed; a check that lacks its option or
@@ -245,6 +247,13 @@ def check_ota_failure(dev: Device, rep: Report):
     if before is None or "otaState" not in before:
         rep.add("ota_failure_visible", "FAIL", "getDevInfo has no otaState (firmware older than 1.3.10?)")
         return
+    # URL OTA is https-only: refused before a single byte is fetched.
+    status, resp = dev.json("POST", "/api/v1/system/setDevUpgrade",
+                            {"url": "http://127.0.0.1:9/ek410.bin"}, timeout=20)
+    if status == 200 and (resp or {}).get("code") == 0:
+        rep.add("ota_failure_visible", "FAIL",
+                "setDevUpgrade accepted an http:// URL (the image would be fetched in clear text)")
+        return
     was_up = bool(before.get("mqttConnected"))
     status, resp = dev.json("POST", "/api/v1/system/setDevUpgrade",
                             {"url": "https://127.0.0.1:9/ek410-missing.bin"}, timeout=20)
@@ -280,7 +289,9 @@ def check_ota_failure(dev: Device, rep: Report):
         else:
             rep.add("ota_failure_visible", "FAIL", f"failure reported ({err}) but MQTT did not come back in 60 s")
             return
-    rep.add("ota_failure_visible", "PASS", f"otaState=failed, otaError={err!r} after {waited:.0f}s, device kept running")
+    rep.add("ota_failure_visible", "PASS",
+            f"otaState=failed, otaError={err!r} after {waited:.0f}s, device kept running; "
+            "http:// refused")
 
 
 def _psram_free_max(dev: Device):
@@ -459,6 +470,68 @@ def check_ota_roundtrip(dev: Device, rep: Report, image: Path):
             f"{before.get('otaPartition')} -> {after.get('otaPartition')}, fw={after.get('fwVersion')}, confirmed")
 
 
+def check_ota_url_roundtrip(dev: Device, rep: Report, url: str, expect: str):
+    """setDevUpgrade with an https URL that really is a firmware image:
+    downloaded on the render task, then the reboot into the other slot and its
+    confirmation (the failure path of the same code is ota_failure_visible).
+    The device takes https:// only and checks the server against the CA
+    bundle, so the image has to be on a host it trusts."""
+    before = dev.wait_info(BOOT_WAIT)
+    if before is None:
+        rep.add("ota_url_roundtrip", "FAIL", "device unreachable")
+        return
+    if before.get("softapUp"):
+        rep.add("ota_url_roundtrip", "SKIPPED", "close the SoftAP first (download over the hotspot is slow)")
+        return
+    was_up = bool(before.get("mqttConnected"))
+    t0 = time.time()
+    status, resp = dev.json("POST", "/api/v1/system/setDevUpgrade", {"url": url}, timeout=20)
+    if status != 200 or (resp or {}).get("code") != 0:
+        rep.add("ota_url_roundtrip", "FAIL", f"setDevUpgrade rejected: status={status} {resp}")
+        return
+    while time.time() - t0 < 300:      # until the device reboots
+        info = dev.wait_info(8)
+        if info is None or not dev.uptime_ok(info):
+            break
+        if info.get("otaState") == "failed":
+            rep.add("ota_url_roundtrip", "FAIL",
+                    f"device refused the image: otaError={info.get('otaError')!r}")
+            return
+        time.sleep(1)
+    dev.last_uptime = None  # a reboot is the expected outcome here
+    end, after = time.time() + 300, None
+    while time.time() < end:
+        after = dev.wait_info(10)
+        if after and after.get("otaPartition") != before.get("otaPartition"):
+            break
+        after = None
+        time.sleep(3)
+    if after is None:
+        rep.add("ota_url_roundtrip", "FAIL", "device did not come back in the other slot within 300 s")
+        return
+    end = time.time() + 60
+    while after.get("otaPendingVerify") and time.time() < end:
+        time.sleep(3)
+        after = dev.wait_info(10)
+    problems = []
+    if expect and after.get("fwVersion") != expect:
+        problems.append(f"runs fwVersion={after.get('fwVersion')!r}, expected {expect!r}")
+    if after.get("otaPendingVerify"):
+        problems.append("image stayed pending-verify (rollback gate never confirmed it)")
+    if was_up:
+        t1 = time.time()
+        while not after.get("mqttConnected") and time.time() - t1 < 75:
+            time.sleep(2)
+            after = dev.wait_info(10)
+        if not (after and after.get("mqttConnected")):
+            problems.append(f"MQTT did not come back ({(after or {}).get('mqttReason')})")
+    rep.track(after)
+    rep.add("ota_url_roundtrip", "FAIL" if problems else "PASS",
+            "; ".join(problems) if problems else
+            f"{before.get('otaPartition')} -> {after.get('otaPartition')} in {time.time() - t0:.0f}s, "
+            f"fw={after.get('fwVersion')}, confirmed, MQTT back")
+
+
 def check_sleep_min(dev: Device, rep: Report):
     status, p = dev.json("GET", "/api/v1/system/getPowerParam")
     if status != 200 or not isinstance(p, dict):
@@ -501,6 +574,9 @@ def main() -> int:
                     help="URL of a raw 960000-byte native frame the device can fetch — adds the raw-frame check")
     ap.add_argument("--firmware", type=Path, default=None,
                     help="app image for a local-upload OTA round trip (e.g. dist/ek410.bin)")
+    ap.add_argument("--ota-url", default="",
+                    help="URL OTA round trip: an https:// URL of a real app image — the device "
+                         "fetches it itself, reboots into the other slot and confirms it")
     ap.add_argument("--power", action="store_true",
                     help="also exercise the sleepMin clamp (saves the power config twice)")
     ap.add_argument("--json-out", type=Path, default=None)
@@ -556,6 +632,16 @@ def main() -> int:
                 rep.add("ota_roundtrip", "SKIPPED", "no --firmware")
         else:
             off("ota_roundtrip", "")
+        if wanted("ota_url_roundtrip"):
+            if not a.ota_url:
+                rep.add("ota_url_roundtrip", "SKIPPED", "no --ota-url")
+            elif not a.ota_url.startswith("https://"):
+                rep.add("ota_url_roundtrip", "SKIPPED",
+                        "URL OTA is https-only on the device — give an https:// URL of a real image")
+            else:
+                check_ota_url_roundtrip(dev, rep, a.ota_url, a.expect_version)
+        else:
+            off("ota_url_roundtrip", "")
         if wanted("sleep_min_clamp"):
             if a.power:
                 check_sleep_min(dev, rep)

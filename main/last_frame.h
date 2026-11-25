@@ -43,6 +43,17 @@ int last_frame_capture_commit(void);
 
 void last_frame_capture_abort(void);
 
+/**
+ * The capture buffer itself — 960000 bytes, kept for the process lifetime —
+ * for a renderer that builds a native frame in it (img_dither_native()). NULL
+ * when last-frame is disabled or the buffer was never allocated. Hold the
+ * panel lock, then hand the finished frame to last_frame_commit_native().
+ */
+uint8_t *last_frame_buffer(void);
+
+/** Save what is in the capture buffer as the last frame: flash + telemetry preview. */
+int last_frame_commit_native(const char *source);
+
 bool last_frame_capture_active(void);
 
 /** Load meta from flash (cheap). */

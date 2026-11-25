@@ -21,7 +21,7 @@
 
 设备不再通过 HTTP 回传 MQTT 密码（`getMqttParam` 只给 `hasPassword`）。改 broker / 下行发布相关用例需要显式传 `--mqtt-password`，否则这些用例记为跳过而不是失败。
 
-主机回归测试（无需设备）：`python3 tools/run_host_tests.py`，覆盖 JSON 嵌套深度防护、原生帧布局、QA 门禁语义、内嵌网页与源码同步、字库表；`build_release.sh` 构建前会自动执行。
+主机回归测试（无需设备）：`python3 tools/run_host_tests.py`，覆盖 JSON 嵌套深度防护、整屏抖动内核（`main/img_dither.c` 在主机上编译：阶调、灰色不出彩色、与 `frame_convert.py` 逐字节一致的帧布局）、原生帧布局、QA 门禁语义、内嵌网页与源码同步、字库表；`build_release.sh` 构建前会自动执行。
 
 ## 修复核对（candidate 档）
 
@@ -31,6 +31,18 @@
 python3 tools/qa_gate.py --tier candidate --port PORT --host IP --mqtt-password '…' --verify-url http://PC:8000/t.png --verify-raw-url http://PC:8000/frame.bin
 python3 tools/fix_verification.py --host IP --url http://PC:8000/t.png --rounds 20 --raw-url http://PC:8000/frame.bin --firmware dist/ek410.bin
 ```
+
+## 业务节奏长测（72 小时）
+
+`tools/soak_long.py` 是 candidate 档的无人值守补充：一台设备、平时的业务流量、连续跑若干小时。脚本在本机起图片服务（自动生成测试图：JPEG、色块 / 六色调色板 / 灰度三类 PNG、原生帧、跳转、正好 700 KB 的边界文件），循环调用 `displayUrl`，期间 MQTT 遥测照常运行；每隔若干轮改为一次 `uploadFrame`、发一个固件必须拒绝的文件、加载一遍网页控制台，带 `--https-url` 时再显示一张公网 HTTPS 图片（整轮测试里唯一的 TLS 路径）。每轮之后读 `getDiag`（堆、各任务最小剩余栈）、确认 MQTT 已恢复，并向 `rounds.jsonl` 追加一行；`summary.json` 每轮重写。带 `--port` 时同时保存串口日志——「按预期拒绝」和其它失败只能靠它区分。脚本不改动设备的任何配置。
+
+```bash
+python3 tools/soak_long.py --host IP --out ~/ek410-soak --port PORT --hours 72 --image dist/ek410.bin \
+    --https-url https://HOST/photo.jpg --https-every 40
+python3 tools/soak_long.py --host IP --rounds 2 --no-caffeinate     # 工具自检
+```
+
+只有同时满足以下条件才算 `ok`（退出码 0）：没有意外重启、每次刷屏都是预期结果、没有被拒绝的请求、每次刷屏后 MQTT 恢复、设备始终可达、串口没有故障标记。运行期间主机不能休眠（macOS 下脚本会自动转到 `caffeinate -i -s` 下运行；合盖仍会让笔记本休眠——睡过去的轮次只记录、不判定），也不要有别的程序打开串口或给设备烧录。`touch <out>/STOP` 可提前结束。
 
 ---
 

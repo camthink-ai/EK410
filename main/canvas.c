@@ -293,6 +293,122 @@ static int cell_w_for_cp(uint32_t cp)
     return HZ16_W;
 }
 
+/* One bit of a character cell: ASCII 8x16, CJK 16x16, a box when the panel
+   font has no glyph for it. */
+static bool cell_glyph_bit(uint32_t cp, int gx, int gy)
+{
+    char fb = (cp < 0x80) ? (char)cp : ascii_fallback_cp(cp);
+    if (fb) {
+        if (gy >= FONT_H || gx >= FONT_W) {
+            return false;
+        }
+        return ascii_glyph_bit(fb, gy, gx) != 0;
+    }
+    /* Panel font is BMP GB2312 only — emoji / rare CJK / non-BMP → box. */
+    uint8_t bits[32];
+    bool have = (cp <= 0xFFFF) && hz16_lookup((uint16_t)cp, bits);
+    if (!have) {
+        /* Visible 16x16 outline so missing glyphs are obvious, not a speck. */
+        return (gx == 0 || gy == 0 || gx == HZ16_W - 1 || gy == HZ16_H - 1);
+    }
+    if (gx < 0 || gx >= HZ16_W || gy < 0 || gy >= HZ16_H) {
+        return false;
+    }
+    uint16_t row = ((uint16_t)bits[gy * 2] << 8) | bits[gy * 2 + 1];
+    return (row & (0x8000 >> gx)) != 0;
+}
+
+/* Where every cell of a text item starts, built once per render. A panel
+   pixel used to re-decode the UTF-8 string to find its cell: a screen of
+   long text spent ~37 s in there — more than the panel's own refresh. */
+typedef struct {
+    int x0;          /* cell start, font pixels from the item's left edge   */
+    uint8_t w;       /* cell width in font pixels (0: a control character)  */
+    uint32_t cp;
+} text_cell_t;
+
+typedef struct {
+    int nlines;
+    int first[CANVAS_TEXT_MAX + 1]; /* cells of line i: first[i] .. first[i+1] */
+    int ncells;
+    text_cell_t cell[CANVAS_TEXT_MAX];
+} text_cache_t;
+
+/* Render task only, one canvas at a time; NULL = use text_pixel(). */
+static text_cache_t *s_tcache[CANVAS_MAX_ITEMS];
+
+static text_cache_t *text_cache_build(const canvas_item_t *it)
+{
+    text_cache_t *tc = calloc(1, sizeof(*tc));
+    if (!tc) {
+        return NULL;
+    }
+    int cursor = 0, line = 0, idx = 0;
+    while (it->text[idx] && tc->ncells < CANVAS_TEXT_MAX) {
+        if (it->text[idx] == '\n') {
+            line++;
+            tc->first[line] = tc->ncells;
+            cursor = 0;
+            idx++;
+            continue;
+        }
+        int adv = 1;
+        uint32_t cp = 0;
+        utf8_decode(it->text + idx, &adv, &cp);
+        text_cell_t *c = &tc->cell[tc->ncells++];
+        c->x0 = cursor;
+        c->w = (uint8_t)cell_w_for_cp(cp);
+        c->cp = cp;
+        cursor += c->w;
+        idx += adv;
+    }
+    tc->first[line + 1] = tc->ncells;
+    tc->nlines = line + 1;
+    return tc;
+}
+
+/* Same answer as text_pixel(), from the cache. A column of a text item
+ * stays in one cell of one line for a whole character height, so the cell
+ * search is remembered from one pixel to the next. */
+static int s_memo_item = -1, s_memo_line = -1, s_memo_q = -1, s_memo_cell = -1;
+
+static bool text_pixel_cached(const canvas_item_t *it, const text_cache_t *tc, int x, int y,
+                              int item_index)
+{
+    if (x < it->x || y < it->y || x >= it->x + it->w || y >= it->y + it->h) {
+        return false;
+    }
+    const int lineH = HZ16_H * it->scale + it->scale;
+    const int line = (y - it->y) / lineH;
+    const int py = (y - it->y) % lineH;
+    if (py >= HZ16_H * it->scale || line >= tc->nlines) {
+        return false;
+    }
+    const int q = (x - it->x) / it->scale; /* font pixels from the item's left edge */
+    if (item_index != s_memo_item || line != s_memo_line || q != s_memo_q) {
+        int lo = tc->first[line], hi = tc->first[line + 1];
+        while (lo < hi) { /* first cell of the line that starts after q */
+            const int mid = (lo + hi) / 2;
+            if (tc->cell[mid].x0 <= q) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        /* −1: before the first cell, past the last one, or a zero-width cell */
+        s_memo_cell = (lo == tc->first[line] || q >= tc->cell[lo - 1].x0 + tc->cell[lo - 1].w)
+                          ? -1 : lo - 1;
+        s_memo_item = item_index;
+        s_memo_line = line;
+        s_memo_q = q;
+    }
+    if (s_memo_cell < 0) {
+        return false;
+    }
+    const text_cell_t *c = &tc->cell[s_memo_cell];
+    return cell_glyph_bit(c->cp, q - c->x0, py / it->scale);
+}
+
 /* multiline UTF-8 text; bbox precomputed at parse time */
 static bool text_pixel(const canvas_item_t *it, int x, int y)
 {
@@ -333,26 +449,7 @@ static bool text_pixel(const canvas_item_t *it, int x, int y)
         int cw = cell_w_for_cp(cp);
         int cellPx = cw * it->scale;
         if (px >= cursor && px < cursor + cellPx) {
-            int gx = (px - cursor) / it->scale;
-            char fb = (cp < 0x80) ? (char)cp : ascii_fallback_cp(cp);
-            if (fb) {
-                if (gy >= FONT_H || gx >= FONT_W) {
-                    return false;
-                }
-                return ascii_glyph_bit(fb, gy, gx) != 0;
-            }
-            /* Panel font is BMP GB2312 only — emoji / rare CJK / non-BMP → box. */
-            uint8_t bits[32];
-            bool have = (cp <= 0xFFFF) && hz16_lookup((uint16_t)cp, bits);
-            if (!have) {
-                /* Visible 16x16 outline so missing glyphs are obvious, not a speck. */
-                return (gx == 0 || gy == 0 || gx == HZ16_W - 1 || gy == HZ16_H - 1);
-            }
-            if (gx < 0 || gx >= HZ16_W || gy < 0 || gy >= HZ16_H) {
-                return false;
-            }
-            uint16_t row = ((uint16_t)bits[gy * 2] << 8) | bits[gy * 2 + 1];
-            return (row & (0x8000 >> gx)) != 0;
+            return cell_glyph_bit(cp, (px - cursor) / it->scale, gy);
         }
         cursor += cellPx;
         idx += adv;
@@ -390,26 +487,109 @@ static bool qr_pixel(const canvas_t *cv, const canvas_item_t *it, int x, int y)
     return qrcodegen_getModule(cv->qr[it->qrSlot], px, py);
 }
 
+/* The panel takes one logical column at a time (a native row is x = const).
+ * For the column being streamed, s_ycover lists the items that cover each
+ * logical row — in list order, the last one on top — so a pixel tests the one
+ * or two items that can cover it. It used to test every item's box, read from
+ * PSRAM, for every pixel: a screen of text keeps ~30 full-width items and
+ * spent 16 s in there, a third of the refresh. A row covered by more than
+ * COLUMN_COVER_MAX items falls back to the column's full list. Render task
+ * only; s_ycover is allocated per render and NULL means "not available". */
+#define COLUMN_COVER_MAX 4
+static int s_col_x = -1;
+static int s_col_n;
+static uint8_t s_col_item[CANVAS_MAX_ITEMS];
+static uint8_t *s_ycover;     /* [EPD_PANEL_H][COLUMN_COVER_MAX], 0xFF = empty */
+static uint8_t *s_yoverflow;  /* that row has more items than fit */
+
+/* Box the item can draw in; QR items carry no w/h of their own. */
+static void item_extents(const canvas_item_t *it, int *w, int *h)
+{
+    *w = it->w;
+    *h = it->h;
+    if (it->type == CI_QR) {
+        *w = (it->qrSize + 8) * it->scale; /* quiet zone included */
+        *h = *w;
+    }
+}
+
+static void column_prepare(const canvas_t *cv, int x)
+{
+    s_col_x = x;
+    s_col_n = 0;
+    s_memo_item = -1;
+    if (s_ycover) {
+        memset(s_ycover, 0xFF, (size_t)EPD_PANEL_H * COLUMN_COVER_MAX);
+        memset(s_yoverflow, 0, EPD_PANEL_H);
+    }
+    for (int i = 0; i < cv->count && i < CANVAS_MAX_ITEMS; i++) {
+        const canvas_item_t *it = &cv->items[i];
+        int w, h;
+        item_extents(it, &w, &h);
+        const int dx = x - it->x;
+        if (w <= 0 || h <= 0 || dx < 0 || dx >= w) {
+            continue;
+        }
+        s_col_item[s_col_n++] = (uint8_t)i;
+        if (s_ycover) {
+            const int64_t top = it->y, bottom = (int64_t)it->y + h;
+            const int y0 = top < 0 ? 0 : (top > EPD_PANEL_H ? EPD_PANEL_H : (int)top);
+            const int y1 = bottom < 0 ? 0 : (bottom > EPD_PANEL_H ? EPD_PANEL_H : (int)bottom);
+            for (int y = y0; y < y1; y++) {
+                uint8_t *slot = s_ycover + (size_t)y * COLUMN_COVER_MAX;
+                int k = 0;
+                while (k < COLUMN_COVER_MAX && slot[k] != 0xFF) {
+                    k++;
+                }
+                if (k < COLUMN_COVER_MAX) {
+                    slot[k] = (uint8_t)i;
+                } else {
+                    s_yoverflow[y] = 1;
+                }
+            }
+        }
+    }
+}
+
+static bool item_hit(const canvas_t *cv, int i, int x, int y)
+{
+    const canvas_item_t *it = &cv->items[i];
+    switch (it->type) {
+    case CI_TEXT:
+        return s_tcache[i] ? text_pixel_cached(it, s_tcache[i], x, y, i) : text_pixel(it, x, y);
+    case CI_RECT:
+        return rect_pixel(it, x, y);
+    case CI_QR:
+        return qr_pixel(cv, it, x, y);
+    }
+    return false;
+}
+
+/* Later items draw over earlier ones: testing from the top down and stopping
+ * at the first hit gives the same pixel as testing all of them in order. */
 static unsigned char canvas_pixel(int x, int y, void *ctx)
 {
     const canvas_t *cv = (const canvas_t *)ctx;
-    unsigned char c = cv->bg;
-    for (int i = 0; i < cv->count; i++) {
-        const canvas_item_t *it = &cv->items[i];
-        bool hit = false;
-        switch (it->type) {
-        case CI_TEXT:
-            hit = text_pixel(it, x, y);
-            break;
-        case CI_RECT:
-            hit = rect_pixel(it, x, y);
-            break;
-        case CI_QR:
-            hit = qr_pixel(cv, it, x, y);
-            break;
+    if (x != s_col_x) {
+        column_prepare(cv, x);
+    }
+    if (y < 0 || y >= EPD_PANEL_H) {
+        return cv->bg;
+    }
+    if (s_ycover && !s_yoverflow[y]) {
+        const uint8_t *slot = s_ycover + (size_t)y * COLUMN_COVER_MAX;
+        for (int k = COLUMN_COVER_MAX - 1; k >= 0; k--) {
+            if (slot[k] != 0xFF && item_hit(cv, slot[k], x, y)) {
+                return cv->items[slot[k]].color;
+            }
         }
-        if (hit) {
-            c = it->color;
+        return cv->bg;
+    }
+    unsigned char c = cv->bg;
+    for (int k = s_col_n - 1; k >= 0; k--) {
+        if (item_hit(cv, s_col_item[k], x, y)) {
+            c = cv->items[s_col_item[k]].color;
+            break;
         }
     }
     return c;
@@ -417,7 +597,24 @@ static unsigned char canvas_pixel(int x, int y, void *ctx)
 
 void canvas_render(const canvas_t *cv)
 {
+    memset(s_tcache, 0, sizeof(s_tcache));
+    s_col_x = -1;
+    /* 6 KB; PSRAM (it is larger than the internal-RAM cut-off), read along y */
+    s_ycover = calloc((size_t)EPD_PANEL_H * (COLUMN_COVER_MAX + 1), 1);
+    s_yoverflow = s_ycover ? s_ycover + (size_t)EPD_PANEL_H * COLUMN_COVER_MAX : NULL;
+    for (int i = 0; i < cv->count && i < CANVAS_MAX_ITEMS; i++) {
+        if (cv->items[i].type == CI_TEXT) {
+            s_tcache[i] = text_cache_build(&cv->items[i]);
+        }
+    }
     epd_stream_render(canvas_pixel, (void *)cv);
+    free(s_ycover);
+    s_ycover = NULL;
+    s_yoverflow = NULL;
+    for (int i = 0; i < CANVAS_MAX_ITEMS; i++) {
+        free(s_tcache[i]);
+        s_tcache[i] = NULL;
+    }
 }
 
 static int setup_add_text(canvas_t *cv, int x, int y, int scale, const char *text)

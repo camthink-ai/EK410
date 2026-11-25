@@ -72,6 +72,16 @@ int img_rgb_dither_alloc_fb(uint8_t *rgb, int w, int h, uint8_t **fb_out,
 int img_rgb_dither_codes(uint8_t *rgb, int w, int h, uint8_t **codes_out, int *cw_out,
                          int *ch_out, img_proc_mode_t mode);
 
+/**
+ * URL path, preferred: smooth cover-fit and a dither at (nearly) panel
+ * resolution — QUALITY one ink dot per panel pixel, SPEED 800×600 — written
+ * straight into `frame`, the native 960000-byte layout the panel streams.
+ * No panel framebuffer, no cover sampling afterwards. Needs ≈ 90 KB of
+ * working memory. Frees `rgb` and returns 0; on failure returns -1 and
+ * leaves `rgb` to the caller (fall back to img_rgb_dither_codes).
+ */
+int img_render_native(uint8_t *rgb, int w, int h, img_proc_mode_t mode, uint8_t *frame);
+
 /** Cover-fit sample: logical (lx,ly) on 1600×1200 → ink from codes[sw×sh]. */
 uint8_t img_codes_cover_pixel(const uint8_t *codes, int sw, int sh, int lx, int ly);
 

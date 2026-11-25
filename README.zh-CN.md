@@ -116,7 +116,7 @@ idf.py -p PORT flash monitor
 ### 便捷脚本
 
 ```bash
-bash tools/build_release.sh        # fullclean + build → dist/ek410.bin
+bash tools/build_release.sh        # 发布用：从 sdkconfig.defaults 重新生成配置 → dist/ek410.bin
 bash tools/flash_release.sh PORT    # 烧 bootloader + 分区表 + 镜像（双槽同镜像）
 ```
 

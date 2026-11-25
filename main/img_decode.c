@@ -2,10 +2,11 @@
  * @file img_decode.c
  * @brief JPEG (ROM TJpgDec) + PNG (libpng) → Spectra 4bpp logical framebuffer.
  *
- * SoftAP uses full-panel FS in the browser (~seconds there). On C61 that path
- * took ~100s and starved the idle TWDT — so URL decode dithers at a budgeted
- * resolution (softCap 210, same E6/prep) then cover-samples into the panel.
- * SPEED ≈360KB RGB; QUALITY ≈720KB (+ optional nearest upscale before FS).
+ * URL path: decode to RGB, then img_render_native() — smooth cover-fit and a
+ * dither at (nearly) panel resolution straight into the native frame
+ * (main/img_dither.c). The older road below it is the fallback: FS at the
+ * decoded resolution, then nearest cover sampling into the panel, which
+ * turned every dither dot into a 4×4 block.
  * Best quality still: SoftAP Image upload or platform-side raw 4bpp 960000.
  */
 #include <math.h>
@@ -21,6 +22,7 @@
 #include "png.h"
 
 #include "img_decode.h"
+#include "img_dither.h"
 
 static const char *TAG = "img_dec";
 
@@ -498,6 +500,32 @@ int img_rgb_dither_codes(uint8_t *rgb, int w, int h, uint8_t **codes_out, int *c
     }
     *cw_out = sw;
     *ch_out = sh;
+    return 0;
+}
+
+int img_render_native(uint8_t *rgb, int w, int h, img_proc_mode_t mode, uint8_t *frame)
+{
+    if (!rgb || !frame || w < 1 || h < 1) {
+        return -1;
+    }
+    const int full = (mode == IMG_PROC_QUALITY);
+    ESP_LOGI(TAG, "render %dx%d at %dx%d (%s)", w, h,
+             full ? IMG_PANEL_W : IMG_PANEL_W / 2, full ? IMG_PANEL_H : IMG_PANEL_H / 2,
+             full ? "quality" : "speed");
+    const int64_t t0 = esp_timer_get_time();
+    /* The tables and error rows go to PSRAM in one block and are released
+     * with it: a raw frame is fetched with ~90 KB of PSRAM to spare. */
+    if (img_dither_native(rgb, w, h, full ? IMG_PANEL_W : IMG_PANEL_W / 2,
+                          full ? IMG_PANEL_H : IMG_PANEL_H / 2, frame,
+                          spiram_alloc, kick_wdt) != 0) {
+        ESP_LOGW(TAG, "render native: no working memory (spiram free %u largest %u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        return -1;
+    }
+    ESP_LOGI(TAG, "render native done in %lld ms",
+             (long long)((esp_timer_get_time() - t0) / 1000));
+    free(rgb);
     return 0;
 }
 
