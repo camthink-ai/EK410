@@ -21,9 +21,15 @@ python3 "$ROOT/tools/run_host_tests.py"
 python3 "$ROOT/tools/gen_www.py"
 
 echo "==> Single image ek410 (SoftAP XOR BLE CT-Prov)"
-idf.py fullclean || true
+# A failed clean must stop the release: a stale build/ keeps its old sdkconfig,
+# and sdkconfig.defaults only sets the options that are not in it yet.
+idf.py fullclean
+# The generated config lives in build/ — start from sdkconfig.defaults every time.
+rm -f build/sdkconfig build/sdkconfig.old
 idf.py set-target esp32c61
 idf.py build
+echo "==> Effective configuration (build/sdkconfig)"
+grep -E '^CONFIG_(COMPILER_OPTIMIZATION_DEBUG|ESP_SYSTEM_EVENT_TASK_STACK_SIZE|BOOTLOADER_APP_ROLLBACK_ENABLE|SPIRAM_MALLOC_ALWAYSINTERNAL)=' build/sdkconfig || true
 cp -f build/ek410.bin "$DIST/ek410.bin"
 cp -f build/bootloader/bootloader.bin "$DIST/bootloader.bin"
 cp -f build/partition_table/partition-table.bin "$DIST/partition-table.bin"
