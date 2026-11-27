@@ -7,7 +7,8 @@
  *   -> NVS has Wi-Fi ? STA connect (SoftAP off) : SoftAP off
  *   -> SoftAP via MAIN hold 2.5s (blue); BLE CT-Prov via PAGE hold 2.5s (cyan);
  *      SoftAP XOR BLE in one image (never both up)
- *   -> Deep sleep wake: MAIN → SoftAP, PAGE → BLE, timer → cycle
+ *   -> MAIN+PAGE release ~2.5s → power-off (MAIN wake only); hold 6s → factory
+ *   -> Deep sleep wake (MAIN/PAGE/timer) → reconnect only, no auto SoftAP/BLE
  *   -> http_server_start; mqtt on got-ip; sleep cycle arms after online
  *
  * Hardware RESET / power-on: exit SoftAP/BLE provisioning, restore last frame.
@@ -51,37 +52,14 @@ static bool boot_button_held(void)
     return gpio_get_level(BTN_BOOT_GPIO) == 0;
 }
 
-static void wake_softap_task(void *arg)
+static void boot_clear_sleep_wake_intent(void)
 {
-    (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(200));
-    ESP_LOGW(TAG, "deep-sleep MAIN wake → SoftAP");
-    led_set(LEDC_NET_R, LED_BLINK);
-    wifi_softap_open();
-    vTaskDelete(NULL);
-}
-
-static void wake_ble_task(void *arg)
-{
-    (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(200));
-    ESP_LOGW(TAG, "deep-sleep PAGE wake → BLE");
-    led_set(LEDC_BLE_R, LED_BLINK);
-    wifi_ble_prov_open();
-    vTaskDelete(NULL);
-}
-
-static void boot_apply_sleep_wake_provisioning(void)
-{
+    /* Button wake used to open SoftAP/BLE; now it only reconnects. Consume
+     * the intent so later boot paths do not treat it as pending provisioning. */
     sleep_wake_src_t w = sleep_consume_wake_src();
-    if (w == SLEEP_WAKE_MAIN) {
-        if (xTaskCreate(wake_softap_task, "wake_ap", 8192, NULL, 5, NULL) != pdPASS) {
-            wifi_softap_open();
-        }
-    } else if (w == SLEEP_WAKE_PAGE) {
-        if (xTaskCreate(wake_ble_task, "wake_ble", 8192, NULL, 5, NULL) != pdPASS) {
-            wifi_ble_prov_open();
-        }
+    if (w == SLEEP_WAKE_MAIN || w == SLEEP_WAKE_PAGE || w == SLEEP_WAKE_TIMER) {
+        ESP_LOGI(TAG, "deep-sleep wake src=%d — reconnect only (no auto SoftAP/BLE)",
+                 (int)w);
     }
 }
 
@@ -131,9 +109,14 @@ void app_main(void)
     evtlog_init();
     evtlog_event("BOOT", "reset=%d wake=%d", (int)esp_reset_reason(),
                  (int)sleep_get_wake_src());
-    /* Keep LED off during long panel paint (~40s). Blue blink only means
-     * SoftAP / STA joining — do not hold NET blue for the whole boot paint. */
-    led_set(0, 0, 0, LED_OFF);
+    /* Boot paint is 20–40s. Cold power-on: keep LED off so blue/orange is
+     * not mistaken for SoftAP/STA. Deep-sleep wake (MAIN/PAGE/timer): show
+     * orange blink immediately so a MAIN click after power-off feels alive. */
+    if (sleep_get_wake_src() != SLEEP_WAKE_NONE) {
+        led_set(LEDC_JOIN_R, LED_BLINK);
+    } else {
+        led_set(0, 0, 0, LED_OFF);
+    }
 
     if (boot_button_held()) {
         ESP_LOGW(TAG, "BOOT held, factory reset");
@@ -200,13 +183,13 @@ void app_main(void)
         sleep_arm_offline_fallback();
     } else {
         ESP_LOGI(TAG, "hold MAIN 2.5s=SoftAP, PAGE 2.5s=BLE (IO%d/IO%d); "
-                 "from deep sleep: MAIN=SoftAP PAGE=BLE",
+                 "MAIN+PAGE release 2.5s=power-off, 6s=factory; "
+                 "deep-sleep wake reconnects only",
                  BTN_MAIN_GPIO, BTN_PAGE_GPIO);
         sleep_arm_offline_fallback();
     }
 
-    /* Deep-sleep MAIN → SoftAP, PAGE → BLE (consumes wake intent). */
-    boot_apply_sleep_wake_provisioning();
+    boot_clear_sleep_wake_intent();
 
     /* Rollback gate: the pending-verify image is confirmed once the panel
      * probe passed and the unit is reachable (web up or STA online). GOT_IP /

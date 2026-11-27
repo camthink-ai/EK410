@@ -7,10 +7,8 @@
  *                        (timer + MAIN/PAGE can wake early)
  * POWER_MODE_HIBERNATE:  sleep_now / save → until MAIN/PAGE
  *
- * Wake → provisioning (edge case from sleep):
- *   MAIN  → SoftAP after boot
- *   PAGE  → BLE CT-Prov after boot
- *   TIMER → normal cycle (wake URL + online window)
+ * Deep-sleep wake never auto-opens SoftAP/BLE (1.3.11+): MAIN/PAGE/timer
+ * only reconnect. Power-off (sleep_power_off) arms MAIN GPIO wake only.
  * SoftAP/BLE open always cancels an armed window. CYCLE must still bound the
  * awake time of every boot, so three paths put the window back:
  *   - a button tap re-arms on release (button.c)
@@ -48,6 +46,7 @@ static sleep_wake_src_t s_wakeSrc;
 static bool s_hibernatePending; /* hibernate saved while deferred (SoftAP / no STA) */
 static char s_ackCmd[16];       /* MQTT cmd to ack if this entry aborts ("" = timer) */
 static bool s_inSleepNow;       /* BLE close inside sleep_now() must not re-arm */
+static bool s_wakeMainOnly;     /* power-off: MAIN GPIO wake only */
 
 static bool prov_window_busy(void)
 {
@@ -99,15 +98,15 @@ void sleep_capture_wake_cause(void)
     const bool main = (st & (1ULL << BTN_MAIN_GPIO)) != 0;
     const bool page = (st & (1ULL << BTN_PAGE_GPIO)) != 0;
     if (main && page) {
-        /* Both low: SoftAP wins (MAIN). Factory still requires awake hold. */
+        /* Both low: treat as MAIN (power-off only arms MAIN anyway). */
         s_wakeSrc = SLEEP_WAKE_MAIN;
-        ESP_LOGW(TAG, "wake cause: MAIN+PAGE → SoftAP");
+        ESP_LOGI(TAG, "wake cause: MAIN+PAGE → reconnect");
     } else if (page) {
         s_wakeSrc = SLEEP_WAKE_PAGE;
-        ESP_LOGI(TAG, "wake cause: PAGE → BLE");
+        ESP_LOGI(TAG, "wake cause: PAGE → reconnect");
     } else if (main) {
         s_wakeSrc = SLEEP_WAKE_MAIN;
-        ESP_LOGI(TAG, "wake cause: MAIN → SoftAP");
+        ESP_LOGI(TAG, "wake cause: MAIN → reconnect");
     } else {
         ESP_LOGW(TAG, "wake cause: GPIO but neither MAIN/PAGE (status=0x%llx)",
                  (unsigned long long)st);
@@ -128,12 +127,22 @@ sleep_wake_src_t sleep_consume_wake_src(void)
 
 static void sleep_enable_button_wakeup(void)
 {
-    /* Active-low MAIN/PAGE on GPIO2/3 — both in C61 deep-sleep wake range (0–6). */
-    const uint64_t mask = (1ULL << BTN_MAIN_GPIO) | (1ULL << BTN_PAGE_GPIO);
+    /* Active-low MAIN/PAGE on GPIO2/3 — both in C61 deep-sleep wake range (0–6).
+     * Power-off arms MAIN only so PAGE cannot wake a hung panel. */
+    uint64_t mask = (1ULL << BTN_MAIN_GPIO);
+    if (!s_wakeMainOnly) {
+        mask |= (1ULL << BTN_PAGE_GPIO);
+    }
     esp_err_t err = esp_deep_sleep_enable_gpio_wakeup(mask, ESP_GPIO_WAKEUP_GPIO_LOW);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "button gpio wakeup enable failed: %s", esp_err_to_name(err));
     }
+}
+
+static void sleep_entry_clear(void)
+{
+    s_entering = false;
+    s_wakeMainOnly = false;
 }
 
 static void sleep_go_task(void *arg)
@@ -143,7 +152,7 @@ static void sleep_go_task(void *arg)
         ESP_LOGW(TAG, "provisioning window up — abort deep sleep");
         evtlog_event("SLP", "abort — provisioning up");
         ack_aborted("prov_busy");
-        s_entering = false;
+        sleep_entry_clear();
         sleep_kick(); /* provisioning up → stays cancelled; its close re-arms */
         vTaskDelete(NULL);
         return;
@@ -155,7 +164,7 @@ static void sleep_go_task(void *arg)
         ESP_LOGW(TAG, "OTA in progress — defer deep sleep");
         evtlog_event("SLP", "defer — ota busy");
         ack_aborted("ota_busy");
-        s_entering = false;
+        sleep_entry_clear();
         sleep_arm_from_config();
         vTaskDelete(NULL);
         return;
@@ -164,10 +173,10 @@ static void sleep_go_task(void *arg)
     powerAttr_t p;
     cfg_get_power_attr(&p);
 
-    bool timed = (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0);
+    bool timed = (p.mode == POWER_MODE_CYCLE && p.sleepMin > 0 && !s_wakeMainOnly);
     ESP_LOGW(TAG, "entering deep sleep (%s%s)",
-             power_mode_str(p.mode),
-             timed ? "" : ", until MAIN/PAGE");
+             s_wakeMainOnly ? "power-off" : power_mode_str(p.mode),
+             timed ? "" : (s_wakeMainOnly ? ", until MAIN" : ", until MAIN/PAGE"));
 
     /* Full E6 refresh is 20–40s. Cutting EPAD mid-DRF freezes a striped /
      * gapped frame on glass. Pause new jobs + HOLD panel lock through power-off. */
@@ -175,7 +184,7 @@ static void sleep_go_task(void *arg)
         ESP_LOGW(TAG, "panel still busy — defer deep sleep");
         evtlog_event("SLP", "defer — panel busy");
         ack_aborted("panel_busy");
-        s_entering = false;
+        sleep_entry_clear();
         sleep_arm_from_config();
         vTaskDelete(NULL);
         return;
@@ -188,17 +197,23 @@ static void sleep_go_task(void *arg)
         evtlog_event("SLP", "defer — provisioning up");
         ack_aborted("prov_busy");
         app_epd_sleep_abort();
-        s_entering = false;
+        sleep_entry_clear();
         sleep_kick();
         vTaskDelete(NULL);
         return;
     }
 
-    evtlog_event("SLP", "deep sleep mode=%s timed=%d",
-                 power_mode_str(p.mode), timed ? 1 : 0);
+    evtlog_event("SLP", "deep sleep mode=%s timed=%d main_only=%d",
+                 s_wakeMainOnly ? "power_off" : power_mode_str(p.mode),
+                 timed ? 1 : 0, s_wakeMainOnly ? 1 : 0);
 
+    bool preview_was_due = false;
     if (mqtt_is_connected() || mqtt_is_started()) {
         if (mqtt_is_connected()) {
+            /* A due preview is ~160 KB and was stalling this task (and every
+             * timer) on the way into sleep. Boot re-arms it from last_frame;
+             * if this entry aborts, put the flag back. */
+            preview_was_due = mqtt_preview_due_take();
             mqtt_publish_telemetry();
         }
         /* Longer budget: large preview publish can hold the client mutex. */
@@ -233,14 +248,19 @@ static void sleep_go_task(void *arg)
             ESP_LOGE(TAG, "timer wake setup failed: %s — deep sleep cancelled",
                      esp_err_to_name(err));
             evtlog_event("SLP", "timer wake failed");
+            if (preview_was_due) {
+                mqtt_note_frame_changed();
+            }
             app_epd_sleep_abort();
-            s_entering = false;
+            sleep_entry_clear();
             sleep_cancel();
             vTaskDelete(NULL);
             return;
         }
         ESP_LOGI(TAG, "timer wake in %d min + MAIN/PAGE GPIO%d/%d",
                  p.sleepMin, BTN_MAIN_GPIO, BTN_PAGE_GPIO);
+    } else if (s_wakeMainOnly) {
+        ESP_LOGI(TAG, "MAIN GPIO%d wake only (power-off)", BTN_MAIN_GPIO);
     } else {
         ESP_LOGI(TAG, "MAIN/PAGE GPIO%d/%d wake only",
                  BTN_MAIN_GPIO, BTN_PAGE_GPIO);
@@ -248,7 +268,7 @@ static void sleep_go_task(void *arg)
     esp_deep_sleep_start();
     /* Unreachable — if deep sleep fails, release the gate. */
     app_epd_sleep_abort();
-    s_entering = false;
+    sleep_entry_clear();
     vTaskDelete(NULL);
 }
 
@@ -323,15 +343,6 @@ void sleep_on_sta_online(void)
         return;
     }
 
-    /* Button wake into SoftAP/BLE: stay in provisioning; do not arm yet and
-     * do NOT set s_cycleStarted — the window's close re-enters here for the
-     * wake URL and the first arm. */
-    sleep_wake_src_t w = sleep_get_wake_src();
-    if (w == SLEEP_WAKE_MAIN || w == SLEEP_WAKE_PAGE) {
-        ESP_LOGI(TAG, "woke by button for provisioning — skip cycle arm");
-        return;
-    }
-
     powerAttr_t p;
     cfg_get_power_attr(&p);
 
@@ -372,10 +383,6 @@ void sleep_arm_offline_fallback(void)
 {
     if (s_entering || prov_window_busy() || sleep_is_armed()) {
         return;
-    }
-    sleep_wake_src_t w = sleep_get_wake_src();
-    if (w == SLEEP_WAKE_MAIN || w == SLEEP_WAKE_PAGE) {
-        return; /* provisioning opens next; its close handles the cycle */
     }
     powerAttr_t p;
     cfg_get_power_attr(&p);
@@ -448,40 +455,57 @@ void sleep_kick(void)
     }
 }
 
-bool sleep_now(void)
+static bool sleep_enter(bool main_only)
 {
     /* SoftAP-first: never tear down the provisioning hotspot for sleep. */
     if (wifi_softap_is_up()) {
-        ESP_LOGW(TAG, "sleep_now ignored — SoftAP provisioning is up");
+        ESP_LOGW(TAG, "%s ignored — SoftAP provisioning is up",
+                 main_only ? "power_off" : "sleep_now");
         evtlog_event("SLP", "ignored — softap up");
         s_ackCmd[0] = '\0';
         return false;
     }
     if (ota_busy()) {
-        ESP_LOGW(TAG, "sleep_now ignored — OTA in progress");
+        ESP_LOGW(TAG, "%s ignored — OTA in progress",
+                 main_only ? "power_off" : "sleep_now");
         evtlog_event("SLP", "ignored — ota busy");
         s_ackCmd[0] = '\0';
         return false;
     }
     if (wifi_ble_prov_is_up()) {
-        ESP_LOGW(TAG, "sleep_now: closing BLE first");
+        ESP_LOGW(TAG, "%s: closing BLE first",
+                 main_only ? "power_off" : "sleep_now");
         s_inSleepNow = true;
         wifi_ble_prov_close();
         s_inSleepNow = false;
     }
     sleep_cancel();
     if (s_entering) {
-        ESP_LOGW(TAG, "sleep_now ignored — already entering");
+        ESP_LOGW(TAG, "%s ignored — already entering",
+                 main_only ? "power_off" : "sleep_now");
         return false;
     }
+    s_wakeMainOnly = main_only;
     s_entering = true;
     if (xTaskCreate(sleep_go_task, "sleep_go", 4096, NULL, 5, NULL) != pdPASS) {
         s_entering = false;
+        s_wakeMainOnly = false;
         s_ackCmd[0] = '\0';
-        ESP_LOGE(TAG, "sleep_now: task spawn failed");
+        ESP_LOGE(TAG, "%s: task spawn failed",
+                 main_only ? "power_off" : "sleep_now");
         return false;
     }
     return true;
+}
+
+bool sleep_now(void)
+{
+    return sleep_enter(false);
+}
+
+bool sleep_power_off(void)
+{
+    return sleep_enter(true);
 }
 
 bool sleep_is_armed(void)

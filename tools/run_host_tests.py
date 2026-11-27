@@ -7,11 +7,15 @@ These guard what was wrong in 1.3.9 and is cheap to re-break:
   json_guard   JSON nesting-depth guard (compiles main/json_guard.c on the host)
   img_dither   native-frame dither (compiles main/img_dither.c on the host):
                layout identical to frame_convert, grey stays grey, tone kept
+  img_dither_exif  the dither with the EXIF orientation: all eight give the
+               upright frame, byte for byte, on both grids
   frame_conv   tools/frame_convert.py writes the panel's native frame layout
   qa           QA gate semantics (all-skipped is not ok, image version binding)
   web          embedded page in sync + deterministic + i18n consistent
   fonts        committed font tables well formed
   repo         version files agree, tools compile
+  soak_dryrun  tools/soak_long.py against a simulated unit and broker: every
+               kind of round runs, and each injected fault is found
 A test whose prerequisite is missing (C compiler, Pillow, node) reports
 "skip" — that is never counted as a pass. tools/build_release.sh runs this.
 """
@@ -66,10 +70,16 @@ def main():
         results.append(("json_guard", *run_c_test(
             work, "json_guard",
             ["json_guard.c", "tools/tests/stub/stub_cjson.c", "tools/tests/test_json_guard.c"])))
+        results.append(("button_gesture", *run_c_test(
+            work, "button_gesture",
+            ["button_gesture.c", "tools/tests/test_button_gesture.c"])))
         results.append(("img_dither", *run_c_test(
             work, "img_dither", ["img_dither.c", "tools/tests/test_img_dither.c"], ["-lm"])))
+        results.append(("img_dither_exif", *run_c_test(
+            work, "img_dither_exif", ["img_dither.c", "tools/tests/test_img_dither_orient.c"],
+            ["-lm"])))
         for name in ("test_frame_convert.py", "test_img_dither_layout.py", "test_qa_lib.py", "test_web.py",
-                     "test_fonts.py", "test_repo.py"):
+                     "test_fonts.py", "test_repo.py", "test_soak_dryrun.py"):
             results.append((name[5:-3], *run_py_test(name, env)))
 
     width = max(len(n) for n, _, _ in results)

@@ -89,6 +89,14 @@ int last_frame_preview_snapshot(last_frame_preview_snap_t *out);
 void last_frame_preview_drop(void);
 
 /**
+ * Build the preview again from the saved frame when a fetch dropped it and
+ * nothing was committed (failed display, unchanged frame, proxyImage). No-op
+ * while a preview exists. Reads the frame buffer: hold the panel lock
+ * (app_epd_preview_restore() does).
+ */
+void last_frame_preview_restore(void);
+
+/**
  * Read the native frame into caller buffer (must be LAST_FRAME_BYTES).
  * Returns 0 on success, -1 if missing/corrupt.
  */

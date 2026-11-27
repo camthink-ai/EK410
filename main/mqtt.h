@@ -60,8 +60,16 @@ bool mqtt_is_started(void); /* client object exists (may still be connecting) */
  * no_sta | no_host | connecting | deferred_heap | disconnected.
  */
 void mqtt_status_detail(char *buf, size_t len);
-/** Publish telemetry uplink. Returns false if not connected / mutex / broker fail. */
+/** Publish telemetry uplink. Returns false if not connected / mutex / broker fail.
+ * Periodic heartbeats are lean (~1 KB). A ~160 KB frame preview is attached at
+ * most once after mqtt_note_frame_changed() (or SoftAP is skipped entirely). */
 bool mqtt_publish_telemetry(void);
+/** Mark that the panel frame changed — the next telemetry may carry preview. */
+void mqtt_note_frame_changed(void);
+/** Clear the one-shot preview flag and return whether it was set.
+ *  Deep sleep must publish a lean heartbeat — a 160 KB attach stalls the
+ *  sleep task. Call mqtt_note_frame_changed() again if sleep is aborted. */
+bool mqtt_preview_due_take(void);
 
 /* Async command result (e.g. display_url finished after "queued" ack). */
 void mqtt_publish_cmd_ack(const char *cmd, const char *status, const char *detail);

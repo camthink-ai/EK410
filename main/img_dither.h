@@ -32,4 +32,9 @@
 int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
                       uint8_t *frame, void *(*alloc)(size_t n), void (*kick)(void));
 
+/* The same with the EXIF orientation of the picture (1–8) applied where the
+ * source is sampled: 1 leaves the frame byte-identical to img_dither_native. */
+int img_dither_native_o(const uint8_t *rgb, int w, int h, int orient, int grid_w, int grid_h,
+                        uint8_t *frame, void *(*alloc)(size_t n), void (*kick)(void));
+
 #endif /* IMG_DITHER_H_ */

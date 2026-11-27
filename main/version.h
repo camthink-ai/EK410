@@ -10,10 +10,10 @@
 
 #define EK410_VERSION_MAJOR 1
 #define EK410_VERSION_MINOR 3
-#define EK410_VERSION_PATCH 10
+#define EK410_VERSION_PATCH 11
 
 /** Semantic version string shown in SoftAP / MQTT / getDevInfo. */
-#define EK410_VERSION_STRING "1.3.10"
+#define EK410_VERSION_STRING "1.3.11"
 
 /** Legacy alias used by older call sites. */
 #define FW_VERSION EK410_VERSION_STRING

@@ -71,7 +71,7 @@ static uint8_t s_meta_len;
 static ct_frag_assembler_t s_rx;
 static QueueHandle_t s_job_q;
 static SemaphoreHandle_t s_ind_done;
-static TaskHandle_t s_worker;
+static volatile TaskHandle_t s_worker;   /* NULLed by the worker as it ends */
 
 void ble_store_config_init(void);
 
@@ -184,7 +184,17 @@ static void worker_task(void *arg)
     (void)arg;
     for (;;) {
         ct_ble_job_t job;
-        if (xQueueReceive(s_job_q, &job, portMAX_DELAY) != pdTRUE) {
+        /* Waits at most half a second at a time, and ends once provisioning
+         * is over — after the job it may be running. Until 1.3.11 it blocked
+         * here for the rest of the boot: NimBLE was torn down on exit and
+         * this task stayed, its 4 KB of internal RAM in the middle of what
+         * should have been the largest free block. Every unit that had been
+         * in BLE provisioning once then ran with 8704 bytes there instead of
+         * 12288 — 512 above what MQTT needs. */
+        if (xQueueReceive(s_job_q, &job, pdMS_TO_TICKS(500)) != pdTRUE) {
+            if (!s_want_up && uxQueueMessagesWaiting(s_job_q) == 0) {
+                break;
+            }
             continue;
         }
         wifi_ble_prov_touch();
@@ -249,7 +259,14 @@ static void worker_task(void *arg)
                 break;
             }
         }
+        /* A job that arrived while provisioning was ending is still answered
+         * (or dropped: the peer is gone); then the queue is empty. */
+        if (!s_want_up && uxQueueMessagesWaiting(s_job_q) == 0) {
+            break;
+        }
     }
+    s_worker = NULL;    /* before the delete: the idle task frees the stack */
+    vTaskDelete(NULL);
 }
 
 static int gatt_access(uint16_t conn_handle, uint16_t attr_handle,
@@ -539,13 +556,14 @@ esp_err_t ct_prov_ble_start_worker(void)
         return ESP_OK;
     }
     /* 4K is enough for CT-Prov JSON; keep lean for post-NimBLE heap. */
-    if (xTaskCreate(worker_task, "ct_ble", 4096, NULL, 5, &s_worker) != pdPASS) {
+    TaskHandle_t created = NULL;
+    if (xTaskCreate(worker_task, "ct_ble", 4096, NULL, 5, &created) != pdPASS) {
         ESP_LOGE(TAG, "ct_ble worker create failed (int=%u largest=%u)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        s_worker = NULL;
         return ESP_ERR_NO_MEM;
     }
+    s_worker = created;
     ESP_LOGI(TAG, "ct_ble worker up — free %u int %u largest_int %u",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -566,6 +584,15 @@ void ct_prov_ble_stop(void)
     }
     ble_gap_adv_stop();
     s_synced = false;
+
+    /* Let the worker finish (or drop) its current indicate before the host
+     * is torn down. It exits once s_want_up is false and the queue is empty. */
+    for (int i = 0; i < 60 && s_worker; i++) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (s_worker) {
+        ESP_LOGW(TAG, "ct_ble worker still busy after 3 s — tearing NimBLE down anyway");
+    }
 
     /* Full host/controller teardown — required so SoftAP/httpd can reclaim RAM.
      * Silent "adv stop only" left BLE stuck and SoftAP starved. */

@@ -26,13 +26,20 @@ Full product hardware guide (specs, keys, LED, panel): [CamThink Wiki](https://w
 
 ## Buttons
 
-- **MAIN** hold ~2.5 s → SoftAP; a short press has no action of its own (it only cancels / re-arms the CYCLE window) — see `button.c`
+- **MAIN** hold ~2.5 s → SoftAP. A short press leaves SoftAP or BLE provisioning when either is up (1.3.11); otherwise it has no action of its own (it only cancels / re-arms the CYCLE window) — see `button.c`
 - **PAGE** rocker (same GPIO) — hold ~2.5 s → BLE CT-Prov on / off
-- **MAIN + PAGE** held together ~6 s → factory reset (both keys for the whole time)
+- **MAIN + PAGE** hold ~2.5 s then release → power off (deep sleep, MAIN wake only). Hold past ~6 s → factory reset (overrides power-off; both keys for the continuous 6 s)
 - **Chip BOOT** GPIO9 — boot-mode strap. Sampled once ~50 ms after boot: low → service factory reset. Held across a reset it enters the ROM download mode instead
 - Hardware **RESET** — EN/RST, not a firmware GPIO
+- Deep-sleep wake (MAIN / PAGE / timer) reconnects only — does **not** auto-open SoftAP or BLE
+
+## SoftAP web console
+
+- Display modes share a **横 / 竖** orientation toggle (default landscape 1600×1200; portrait 1200×1600). Preference is stored in the browser `localStorage` only
+- Portrait push uses `uploadFrame` (firmware `renderCanvas` stays landscape)
 
 ## Power / LED
 
 - Battery sense: ADC GPIO4, enable via AW9523B
 - Status RGB: AW9523B (`led.c`); red pulse = fault / OTA fail paths (never sticky)
+- Deep-sleep wake: orange blink during boot panel paint, then normal join / green policy

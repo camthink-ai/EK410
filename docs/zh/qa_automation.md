@@ -34,15 +34,15 @@ python3 tools/fix_verification.py --host IP --url http://PC:8000/t.png --rounds 
 
 ## 业务节奏长测（72 小时）
 
-`tools/soak_long.py` 是 candidate 档的无人值守补充：一台设备、平时的业务流量、连续跑若干小时。脚本在本机起图片服务（自动生成测试图：JPEG、色块 / 六色调色板 / 灰度三类 PNG、原生帧、跳转、正好 700 KB 的边界文件），循环调用 `displayUrl`，期间 MQTT 遥测照常运行；每隔若干轮改为一次 `uploadFrame`、发一个固件必须拒绝的文件、加载一遍网页控制台，带 `--https-url` 时再显示一张公网 HTTPS 图片（整轮测试里唯一的 TLS 路径）。每轮之后读 `getDiag`（堆、各任务最小剩余栈）、确认 MQTT 已恢复，并向 `rounds.jsonl` 追加一行；`summary.json` 每轮重写。带 `--port` 时同时保存串口日志——「按预期拒绝」和其它失败只能靠它区分。脚本不改动设备的任何配置。
+`tools/soak_long.py` 是 candidate 档的无人值守补充：一台设备、平时的业务流量、连续跑若干小时，并且从设备的两侧看它——HTTP 这侧，以及带 `--broker-secret` 时它所上报的 broker 那侧。脚本在本机起图片服务（自动生成测试图：横幅 / 竖幅 / 长条 / 620 KB 照片四种 JPEG、灰度 JPEG、真彩 / 六色调色板 / 灰度 / 带透明通道四类 PNG、正好 700 KB 的边界文件、原生帧、跳转、分块传输、无长度传输），并模拟服务器的几种毛病（HTTP 404、传一半断开、卡住不动、自签名证书的 HTTPS 服务），每一种都必须以固件日志里的原因失败。图片之间穿插看板画布、长文本屏、`uploadFrame` 原生帧、固件必须拒绝的文件、网页控制台，带 `--https-url` 时一张公网 HTTPS 图片，以及每隔 `--ota-every-hours` 把同一份固件再上传一次（设备必须回到另一个 OTA 槽）。刷图片的那几轮会在刷屏期间发起控制台用户的其它请求（状态轮询和网页、`proxyImage`、第二个 `displayUrl`，以及必须被立刻拒绝的 `uploadFrame`），每轮之后读回设备保存的帧（`GET /api/v1/display/lastFrame`）：上传帧和原生帧必须与发出的逐字节一致，画布和文本必须与第一次相同，每次刷屏都必须存下了自己的帧。每轮之后读 `getDiag`（堆、各任务最小剩余栈）、确认 MQTT 已恢复。带 `--broker-secret`（见 `tools/broker_secret.py`）时，在设备的 broker 上再开一个客户端：确认每轮之后到达的遥测内容属实（帧行的 CRC、预览图尺寸），每隔 `--mqtt-every` 轮把命令改从 broker 下发（先回 `queued`，刷完回 `ok` 或带原因的 `error`），每隔 `--ping-every` 轮核对 ping 有应答。运行期间如果有人在设备上打开了蓝牙配网或热点（按键、App），该轮不判定；判定的是：之后设备重新成为客户端。
 
 ```bash
 python3 tools/soak_long.py --host IP --out ~/ek410-soak --port PORT --hours 72 --image dist/ek410.bin \
-    --https-url https://HOST/photo.jpg --https-every 40
+    --https-url https://HOST/photo.jpg --https-every 37 --ota-every-hours 24 --broker-secret ~/.ek410-broker.json
 python3 tools/soak_long.py --host IP --rounds 2 --no-caffeinate     # 工具自检
 ```
 
-只有同时满足以下条件才算 `ok`（退出码 0）：没有意外重启、每次刷屏都是预期结果、没有被拒绝的请求、每次刷屏后 MQTT 恢复、设备始终可达、串口没有故障标记。运行期间主机不能休眠（macOS 下脚本会自动转到 `caffeinate -i -s` 下运行；合盖仍会让笔记本休眠——睡过去的轮次只记录、不判定），也不要有别的程序打开串口或给设备烧录。`touch <out>/STOP` 可提前结束。
+只有同时满足以下条件才算 `ok`（退出码 0）：没有意外重启、每次刷屏都是预期结果、没有被拒绝的请求、每次刷屏后 MQTT 恢复且不会整段间隔都离线、设备始终可达、并发请求下没有异常、读回的帧与发出的一致且不空白、每次计划内升级都完成、串口没有故障和缺陷标记；带 `--broker-secret` 时还要求：broker 收到了每条命令的结果、每轮之后有属实的遥测、ping 有应答、任何配网之后设备重新成为客户端。运行期间主机不能休眠（macOS 下脚本会自动转到 `caffeinate -i -s` 下运行；合盖仍会让笔记本休眠——睡过去的轮次只记录、不判定），也不要有别的程序打开串口或给设备烧录。`touch <out>/STOP` 可提前结束。`tools/tests/test_soak_dryrun.py`（在 `run_host_tests.py` 里）用模拟的设备和 broker 把整个工具跑一遍，并确认它能注入的每一种故障都会被判出来。
 
 ---
 

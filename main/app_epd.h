@@ -99,6 +99,10 @@ bool app_epd_display_busy(void);
 /** Result of the last panel commit / URL display (true = OK). */
 bool app_epd_last_display_ok(void);
 
+/** Build the telemetry preview again when a fetch dropped it and nothing was
+ * committed. Waits at most 2 s for the panel; skips when a render holds it. */
+void app_epd_preview_restore(void);
+
 /* Queue the title+lines boot/setup screen. */
 int app_epd_boot_screen_async(const char *title, const char *const *lines, int count);
 
@@ -169,6 +173,9 @@ int app_epd_proxy_fetch(epd_proxy_job_t *job, int timeout_ms, char *err_out, siz
  * scratch buffer is shared — recv into it, then hand each chunk over. */
 unsigned char *app_epd_dma_buf(void);
 int app_epd_dma_buf_size(void);
+/* epd_upload_start_wait(0) is what an HTTP uploadFrame uses: it must not sit
+ * on the panel with its body unread (the unit loses Wi-Fi — see http.c). */
+int epd_upload_start_wait(int wait_ms);
 int epd_upload_start(void);
 int epd_upload_write(const unsigned char *dmaChunk, int len); /* halves auto-switch */
 int epd_upload_finish(void); /* sync refresh + unlock */

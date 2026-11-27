@@ -9,7 +9,10 @@
  * Uplink JSON is flat: type=telemetry|status|cmd_ack; downlink uses cmd=.
  * LWT also goes to the uplink topic (type=status, retain).
  *
- * Keepalive 30s + app heartbeat every 30s.
+ * Keepalive 30s + lean heartbeat every 30s (~1 KB). Full frame preview
+ * (~160 KB base64) is attached at most once after a panel frame change —
+ * every-beat preview stalled MQTT/Wi-Fi/httpd on slow links (see serial
+ * Writing didn't complete / bcn_timeout).
  */
 #include <string.h>
 #include <stdio.h>
@@ -75,6 +78,10 @@ static char s_lwtMsg[192];
 /* Last broker/TLS failure for testMqtt — avoid generic "timeout" when CONNACK refused. */
 static char s_lastFail[96];
 static volatile bool s_connectRefused;
+/* After a successful panel save: next telemetry may include frame_preview_b64. */
+static volatile bool s_previewDue;
+/* Telemetry publish runs on its own task — never block esp_timer. */
+static volatile bool s_telemBusy;
 
 /* mqtt_stop() re-arms a 3 s start-retry on STA. URL image TLS and OTA stop
  * the client precisely to free internal RAM for a second TLS session, so
@@ -276,6 +283,18 @@ static void publish_status(const char *state, int retain)
     }
 }
 
+void mqtt_note_frame_changed(void)
+{
+    s_previewDue = true;
+}
+
+bool mqtt_preview_due_take(void)
+{
+    bool due = s_previewDue;
+    s_previewDue = false;
+    return due;
+}
+
 bool mqtt_publish_telemetry(void)
 {
     if (!g_MQ.client || !g_MQ.isConnected) {
@@ -332,8 +351,10 @@ bool mqtt_publish_telemetry(void)
         cJSON_AddStringToObject(root, "frame_source",
                                 frame.source[0] ? frame.source : "");
         cJSON_AddNumberToObject(root, "frame_bytes", (double)LAST_FRAME_BYTES);
-        /* SoftAP+MQTT: skip ~160KB preview so SoftAP UI and broker stay up. */
-        if (!wifi_softap_is_up()) {
+        /* SoftAP: never attach preview. STA: only when a new frame is due —
+         * every 30 s × 160 KB was resetting the broker link on this unit. */
+        const bool want_preview = s_previewDue && !wifi_softap_is_up();
+        if (want_preview) {
             last_frame_preview_snap_t snap = { 0 };
             (void)last_frame_preview_snapshot(&snap);
             prev = snap.b64;
@@ -352,9 +373,11 @@ bool mqtt_publish_telemetry(void)
     cJSON_AddBoolToObject(root, "online", wifi_sta_is_connected());
     cJSON_AddBoolToObject(root, "httpServerUp", http_server_is_up());
     cJSON_AddNumberToObject(root, "ts", (double)now_s());
-    ESP_LOGI(TAG, "telemetry build frame_present=%d preview_b64=%u",
+    const bool preview_attached = (prev != NULL);
+    ESP_LOGI(TAG, "telemetry build frame_present=%d preview_b64=%u due=%d",
              frame.present ? 1 : 0,
-             (unsigned)(prev ? strlen(prev) : 0));
+             (unsigned)(prev ? strlen(prev) : 0),
+             s_previewDue ? 1 : 0);
     char *head = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!head) {
@@ -406,6 +429,9 @@ bool mqtt_publish_telemetry(void)
     }
     xSemaphoreGive(g_MQ.mutex);
     free(json);
+    if (ok && preview_attached) {
+        s_previewDue = false;
+    }
     return ok;
 }
 
@@ -844,9 +870,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         mqtt_clear_fail();
         evtlog_event("MQTT", "connected sub=%s qos=%d", g_MQ.topicDown, qos);
         publish_status("online", 1);
-        /* Do NOT publish full telemetry (≈160KB preview) here — it races
-         * PAGE/BLE enter, fragments internal RAM, and causes NimBLE/Wi-Fi
-         * NO_MEM + red LED. Periodic timer sends telemetry shortly after. */
+        /* Do NOT publish full telemetry here — it races PAGE/BLE enter.
+         * Preview is armed only by mqtt_note_frame_changed() after a panel
+         * save; reconnecting must not queue another 160 KB uplink. */
         break;
     }
     case MQTT_EVENT_DISCONNECTED:
@@ -916,10 +942,30 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
+static void telemetry_worker(void *arg)
+{
+    (void)arg;
+    (void)mqtt_publish_telemetry();
+    s_telemBusy = false;
+    vTaskDelete(NULL);
+}
+
 static void telemetry_timer_cb(void *arg)
 {
     (void)arg;
-    mqtt_publish_telemetry();
+    /* Never publish from esp_timer — a stalled 160 KB write froze every
+     * other timer (battery sample, one-shots) and wedged httpd. */
+    if (s_telemBusy) {
+        return;
+    }
+    if (!g_MQ.client || !g_MQ.isConnected) {
+        return;
+    }
+    s_telemBusy = true;
+    if (xTaskCreate(telemetry_worker, "mqtt_tel", 4096, NULL, 5, NULL) != pdPASS) {
+        s_telemBusy = false;
+        ESP_LOGW(TAG, "telemetry worker spawn failed — skip beat");
+    }
 }
 
 static void mqtt_start_retry_cb(void *arg);

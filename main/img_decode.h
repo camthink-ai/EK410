@@ -82,6 +82,21 @@ int img_rgb_dither_codes(uint8_t *rgb, int w, int h, uint8_t **codes_out, int *c
  */
 int img_render_native(uint8_t *rgb, int w, int h, img_proc_mode_t mode, uint8_t *frame);
 
+/** The same, with the EXIF orientation of the picture (1–8) applied where the
+ * dither samples it. The fallback below (img_rgb_dither_codes) does not turn
+ * the picture. */
+int img_render_native_o(uint8_t *rgb, int w, int h, int orient, img_proc_mode_t mode,
+                        uint8_t *frame);
+
+/** Why the last img_decode_to_rgb* failed, when it is a format this chip
+ * cannot decode ("grayscale JPEG not supported",
+ * "progressive JPEG not supported"); "" otherwise. */
+const char *img_decode_last_error(void);
+
+/** EXIF orientation (1–8) of the picture the last img_decode_to_rgb* decoded
+ * as stored; 1 when it has no such tag. */
+int img_decode_last_orientation(void);
+
 /** Cover-fit sample: logical (lx,ly) on 1600×1200 → ink from codes[sw×sh]. */
 uint8_t img_codes_cover_pixel(const uint8_t *codes, int sw, int sh, int lx, int ly);
 

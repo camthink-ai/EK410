@@ -8,7 +8,7 @@ EK410 implements the CamThink **CT-Prov/1** SoftAP HTTP binding used by
 [NeoLinker](https://github.com/camthink-ai/NeoLinker). SoftAP httpd and NimBLE
 share **one firmware image** and are **mutually exclusive** (never both up).
 
-## SoftAP discovery (MAIN hold 2.5s — blue blink)
+## SoftAP discovery (MAIN hold 2.5s — blue blink; MAIN click to leave)
 
 | Item | Value |
 |------|--------|
@@ -20,11 +20,12 @@ share **one firmware image** and are **mutually exclusive** (never both up).
 ## BLE (PAGE hold 2.5s — cyan)
 
 PAGE hold / `openBleProv` stops SoftAP/httpd/mqtt, then starts NimBLE CT-Prov
-in-process (cyan LED). SoftAP open / PAGE again / idle / `session.close` stops
-NimBLE and restores httpd (and SoftAP if MAIN requested it).
+in-process (cyan LED). MAIN click / SoftAP open / PAGE again / idle /
+`session.close` stops NimBLE and restores httpd (and SoftAP if MAIN requested it).
 
 | Exit path | Behavior |
 |-----------|----------|
+| MAIN click (1.3.11) | leaves whichever provisioning mode is up: NimBLE deinit → restore httpd; SoftAP → closed |
 | PAGE hold again | NimBLE deinit → restore httpd |
 | Idle (default ~2 min; CI uses `idleSec`) | same |
 | `session.close` | ack, then same |

@@ -1,8 +1,10 @@
 /**
  * @file sleep.h
- * @brief Power policy: always-on / timed cycle / hibernate.
+ * @brief Power policy: always-on / timed cycle / hibernate / front-panel power-off.
  *
- * Deep sleep can wake on MAIN (SoftAP), PAGE (BLE), or timer (cycle).
+ * Deep sleep wakes on MAIN and/or PAGE GPIO, or the cycle timer.
+ * Button wake no longer auto-opens SoftAP/BLE — only reconnects.
+ * Power-off (MAIN+PAGE release) enables MAIN wake only.
  */
 #ifndef __SLEEP_H__
 #define __SLEEP_H__
@@ -16,8 +18,8 @@ extern "C" {
 typedef enum {
     SLEEP_WAKE_NONE = 0,   /* power-on / HW RESET / SW restart */
     SLEEP_WAKE_TIMER,      /* cycle timer */
-    SLEEP_WAKE_MAIN,       /* MAIN GPIO — open SoftAP after boot */
-    SLEEP_WAKE_PAGE,       /* PAGE GPIO — open BLE after boot */
+    SLEEP_WAKE_MAIN,       /* MAIN GPIO — normal reconnect boot */
+    SLEEP_WAKE_PAGE,       /* PAGE GPIO — normal reconnect boot (cycle/hibernate) */
 } sleep_wake_src_t;
 
 /* Call once early in app_main (after config_open). */
@@ -51,6 +53,9 @@ void sleep_kick(void);
 /* Enter deep sleep now. SoftAP/BLE closed first. Wakes: MAIN, PAGE, or timer.
  * Returns false if SoftAP is up, already entering, or task spawn failed. */
 bool sleep_now(void);
+/* Front-panel power-off: same teardown as sleep_now, but only MAIN can wake
+ * (PAGE is ignored until the next normal sleep). Panel image is kept. */
+bool sleep_power_off(void);
 bool sleep_is_armed(void);
 
 #ifdef __cplusplus

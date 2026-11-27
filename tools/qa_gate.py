@@ -333,11 +333,12 @@ def _run_fix_verify(
     rounds: int,
     raw_url: str,
 ) -> None:
-    """tools/fix_verification.py: every 1.3.10 fix checked on the device,
-    including a local-upload OTA round trip with the image under test."""
+    """tools/fix_verification.py: every fix checked on the device, including a
+    local-upload OTA round trip with the image under test and BLE provisioning
+    being left again (the tier reboots the unit anyway)."""
     t0 = time.time()
     args = ["--host", host, "--expect-version", report.firmware_version,
-            "--firmware", str(firmware)]
+            "--firmware", str(firmware), "--ble-exit"]
     if url:
         args += ["--url", url, "--rounds", str(rounds)]
     if raw_url:

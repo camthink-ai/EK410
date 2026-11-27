@@ -212,6 +212,20 @@ static void epd_proxy_download(epd_proxy_job_t *job);
 
 static int epd_commit_display(void)
 {
+    /* Full E6 refresh is 20–40 s. Keepalive pings during that window were
+     * resetting MQTT (errno 119) and making NeoMind think the push failed
+     * even when Display Done succeeded. Pause MQTT for the refresh unless
+     * a caller already stopped it (URL TLS path holds mqtt_hold). */
+    const bool need_pause =
+        !wifi_ble_prov_is_up() &&
+        (mqtt_is_started() || mqtt_is_connected());
+    if (need_pause) {
+        mqtt_hold();
+        if (mqtt_stop_wait(3000) != 0) {
+            ESP_LOGW(TAG, "display: mqtt still busy — refresh anyway");
+        }
+    }
+
     if (s_panelDirty) {
         ESP_LOGI(TAG, "panel dirty — content full refresh (no pre-wipe)");
     }
@@ -224,6 +238,13 @@ static int epd_commit_display(void)
     } else {
         s_panelDirty = false;
         s_lastDisplayOk = true;
+    }
+
+    if (need_pause) {
+        mqtt_release();
+        if (!wifi_ble_prov_is_up() && wifi_sta_is_connected()) {
+            mqtt_restore_after_temp_stop();
+        }
     }
     return ok;
 }
@@ -368,6 +389,9 @@ static void render_task(void *arg)
             break;
         case 5:
             if (epd_url_frame(msg->url) != 0) {
+                /* The fetch dropped the preview and nothing replaces it:
+                 * telemetry would go out without one until the next display. */
+                app_epd_preview_restore();
                 const char *why = epd_url_last_error();
                 if (!why || !why[0]) {
                     why = "unknown error";
@@ -451,6 +475,7 @@ static void render_task(void *arg)
                     free(msg->proxy);
                     msg->proxy = NULL;
                     ESP_LOGW(TAG, "proxy fetch orphan cleaned");
+                    app_epd_preview_restore();
                 } else if (msg->proxy_done) {
                     xSemaphoreGive(msg->proxy_done);
                 }
@@ -510,6 +535,18 @@ bool app_epd_display_busy(void)
 {
     UBaseType_t queued = s_renderQueue ? uxQueueMessagesWaiting(s_renderQueue) : 0;
     return s_displayBusy || queued > 0;
+}
+
+void app_epd_preview_restore(void)
+{
+    /* The frame buffer the preview is rebuilt from is the one renders decode
+     * into and uploads capture into, so only under the panel lock — and
+     * never for long: the web server's task calls this after a proxyImage. */
+    if (!s_panelLock || xSemaphoreTake(s_panelLock, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        return;
+    }
+    last_frame_preview_restore();
+    epd_unlock();
 }
 
 bool app_epd_last_display_ok(void)
@@ -1127,15 +1164,16 @@ int app_epd_dma_buf_size(void)
     return CHUNK_SIZE;
 }
 
-int epd_upload_start(void)
+/* wait_ms: how long the panel may stay with another user. The panel's own
+ * replays (boot paint, restore) wait one job out; a frame pushed over HTTP
+ * must not — see display_upload_frame_handle(). */
+int epd_upload_start_wait(int wait_ms)
 {
     if (!s_acceptJobs) {
         ESP_LOGW(TAG, "upload rejected — sleep pending");
         return -1;
     }
-    /* Full refresh holds the lock 20–40s; allow waiting out one in-flight job.
-     * GC alone can take ~60s when dirty — wait long enough. */
-    if (!s_panelLock || xSemaphoreTake(s_panelLock, pdMS_TO_TICKS(180000)) != pdTRUE) {
+    if (!s_panelLock || xSemaphoreTake(s_panelLock, pdMS_TO_TICKS(wait_ms)) != pdTRUE) {
         ESP_LOGW(TAG, "panel busy, upload rejected");
         return -1;
     }
@@ -1152,6 +1190,13 @@ int epd_upload_start(void)
     /* Default source; caller may restart capture with another label. */
     last_frame_capture_begin("upload");
     return 0;
+}
+
+int epd_upload_start(void)
+{
+    /* A full refresh holds the panel 20–40 s, and a GC alone ~60 s when it is
+     * dirty: the panel's own replays wait one job out. */
+    return epd_upload_start_wait(180000);
 }
 
 int epd_upload_write(const unsigned char *dmaChunk, int len)
@@ -1904,6 +1949,17 @@ int epd_url_frame(const char *url)
         }
     }
     ESP_LOGI(TAG, "downloaded %u bytes (clen=%ld)", (unsigned)total, clen);
+    if (body && clen <= 0 && total < cap) {
+        /* No Content-Length (chunked, HTTP/1.0): the whole reservation was
+         * kept during the transfer. Hand back what the file did not need
+         * before the decode — a 98 KB JPEG inside a 1280 KB block left a
+         * 48 KB RGB budget, and the picture came out at 67x50 instead of
+         * 400x300. A shrink never moves the block; if it fails it just stays. */
+        uint8_t *fit = heap_caps_realloc(body, total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (fit) {
+            body = fit;
+        }
+    }
     url_heap_log("downloaded");
     if (total == 0) {
         url_fail("empty download");
@@ -1994,7 +2050,11 @@ int epd_url_frame(const char *url)
                                              use_proc);
         }
         if (dec_ok != 0) {
-            url_fail(fmt == IMG_FMT_JPEG ? "JPEG decode fail" : "PNG decode fail");
+            /* a format the chip cannot decode says so; anything else is a
+             * failure of this picture */
+            const char *why = img_decode_last_error();
+            url_fail(why[0] ? why : (fmt == IMG_FMT_JPEG ? "JPEG decode fail"
+                                                         : "PNG decode fail"));
         } else {
             free(body);
             body = NULL;
@@ -2020,7 +2080,8 @@ int epd_url_frame(const char *url)
             bool shown = false;
             if (!fb) {
                 ESP_LOGW(TAG, "no capture buffer — cover path");
-            } else if (img_render_native(rgb, rw, rh, use_proc, fb) == 0) {
+            } else if (img_render_native_o(rgb, rw, rh, img_decode_last_orientation(),
+                                          use_proc, fb) == 0) {
                 rgb = NULL; /* consumed */
                 url_heap_log("pre_stream");
                 ESP_LOGI(TAG, "decode OK — native frame");

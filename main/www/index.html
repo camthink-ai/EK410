@@ -182,6 +182,7 @@ body.desktop .ov-panel{border-radius:24px; padding:16px 18px 18px}
   border-radius:14px; background:#e6e8ed; overflow:hidden;
   display:flex; align-items:center; justify-content:center;
 }
+body.orient-portrait .ov-panel-frame{aspect-ratio:1200 / 1600}
 body.desktop .ov-panel-frame{
   flex:1; aspect-ratio:auto; min-height:0; height:100%;
 }
@@ -470,8 +471,20 @@ body.desktop .main.is-display .disp-head{
   border:1px solid transparent; flex:1; min-width:0; width:100%; max-width:none;
 }
 body.desktop .mode-switch{
-  max-width:none; width:auto; flex:0 0 auto; min-width:540px;
+  max-width:none; width:auto; flex:0 0 auto; min-width:420px;
 }
+.orient-seg{
+  box-sizing:border-box; display:inline-flex; align-items:center; gap:2px;
+  flex:0 0 auto; height:40px; padding:3px; border-radius:12px; background:#f3f4f6;
+}
+body.desktop .orient-seg{height:42px}
+.orient-seg button{
+  box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+  border:0; background:transparent; height:34px; min-width:40px; padding:0 12px; border-radius:9px;
+  font:inherit; font-size:13px; line-height:1; color:var(--sub); cursor:pointer; white-space:nowrap;
+}
+body.desktop .orient-seg button{height:36px}
+.orient-seg button.on{background:var(--ink); color:#fff; box-shadow:0 2px 8px rgba(9,14,23,.12)}
 .mode-switch button{
   flex:1; border:0; background:transparent; height:40px; border-radius:11px;
   font:inherit; font-size:13px; font-weight:500; color:var(--sub); cursor:pointer;
@@ -528,7 +541,9 @@ body.desktop .stage{border-radius:0; padding:20px 24px 24px; min-height:0; backg
   border-radius:8px; background:#f6f4ef; overflow:hidden;
   box-shadow:0 1px 0 rgba(9,14,23,.06), 0 18px 40px rgba(9,14,23,.08);
 }
+body.orient-portrait .epd-frame{aspect-ratio:3/4; max-width:min(100%, 520px)}
 body.desktop .epd-frame{max-height:100%; width:auto; height:100%; max-width:100%}
+body.desktop.orient-portrait .epd-frame{max-width:min(100%, 420px)}
 body.desktop #page-display:not([hidden]){display:flex; flex-direction:column; flex:1; min-height:0; height:100%}
 .epd-frame canvas, .epd-frame .frame-fill{
   display:block; width:100%; height:100%;
@@ -1182,6 +1197,10 @@ body:not(.desktop) .disp-tools-row .push{flex:1 1 100%}
             <button type="button" data-mode="editor" data-i18n="disp.editor">编辑器</button>
             <button type="button" data-mode="md">Markdown</button>
           </div>
+          <div class="seg orient-seg" id="orientSeg" role="group" aria-label="Panel orientation">
+            <button type="button" class="on" data-orient="landscape" data-i18n="disp.orient_land">横</button>
+            <button type="button" data-orient="portrait" data-i18n="disp.orient_port">竖</button>
+          </div>
         </div>
         <div class="disp-head-row disp-tools-row">
           <div class="preview-toggles">
@@ -1597,14 +1616,15 @@ zh:{
   "toast.scan":"正在扫描附近 Wi‑Fi…","toast.wifi_saved":"Wi‑Fi 已保存","toast.mqtt_saved":"MQTT 已保存",
   "toast.mqtt_test":"正在测试 MQTT…","toast.mqtt_busy_title":"正在连接 MQTT…","toast.mqtt_busy_sub":"请稍候，热点网页可能短暂无响应。","toast.mqtt_busy_hint":"此期间无法刷图 / 上传，完成后请重试。","toast.mqtt_busy_disp":"MQTT 连接中，请稍后再刷图","toast.filled_sec":"已填入 {0}（需密码）","toast.filled_open":"已填入 {0}（开放）",
   "disp.image":"图片","disp.editor":"编辑器","disp.source":"原色","disp.eink":"墨水六色",
-  "disp.color_title":"原色 vs Spectra 6 量化","disp.layout":"布局辅助","disp.push":"刷到屏幕",
+  "disp.color_title":"原色 vs Spectra 6 量化","disp.layout":"布局辅助","disp.push":"刷到屏幕","disp.pushing":"刷屏中…",
   "disp.content_preview":"内容预览","disp.layout_preview":"布局预览","disp.img_src":"图片来源",
   "disp.upload":"上传本地图片","disp.upload_hint":"点击选择或拖入 · JPG / PNG / WebP","disp.or_url":"或填 URL",
+  "disp.orient_land":"横","disp.orient_port":"竖",
   "disp.fit":"适应方式","disp.fit_cover":"铺满裁切","disp.fit_contain":"完整显示","disp.fit_fill":"拉伸",
   "disp.load_preview":"加载预览","disp.load_screen":"读取当前屏","disp.show_screen":"显示到屏幕",
   "disp.img_note":"顶部可切换「原色 / 墨水六色」对比量化结果；布局辅助显示安全区与中线。",
   "disp.hint_eink":"墨水六色","disp.hint_source":"原色",
-  "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"拖拽定位 · {0}","disp.stage_md":"Markdown → 画布 · {0}",
+  "disp.stage_img":"{0}×{1} · {2}","disp.stage_ed":"拖拽定位 · {2}","disp.stage_md":"Markdown → 画布 · {2}",
   "ed.add":"添加","ed.image":"图片","ed.width":"宽度","ed.replace_img":"更换图片","ed.text":"文字","ed.rect":"方框","ed.qr":"二维码","ed.layers":"图层","ed.props":"属性","ed.props_empty":"选中图层后在此编辑","ed.content":"内容","ed.qr_url":"链接","ed.size":"尺寸","ed.sheet_add":"添加元素","ed.sheet_layers":"图层","ed.sheet_props":"属性","ed.new_text":"新文字","ed.new_rect":"色块","ed.new_qr":"https://wiki.camthink.ai",
   "ed.hello":"你好，世界","ed.swatch":"色块","ed.swatch_sub":"品牌橙 → 红","ed.note":"墨水屏仅 6 色：黑白红黄蓝绿。原色模式下可见设计色，刷屏前请切到「墨水六色」核对。",
   "ed.canvas":"画布","ed.bg":"背景",
@@ -1663,14 +1683,15 @@ en:{
   "toast.scan":"Scanning nearby Wi‑Fi…","toast.wifi_saved":"Wi‑Fi saved","toast.mqtt_saved":"MQTT saved",
   "toast.mqtt_test":"Testing MQTT…","toast.mqtt_busy_title":"Connecting MQTT…","toast.mqtt_busy_sub":"Please wait — SoftAP page may pause briefly.","toast.mqtt_busy_hint":"Display push / upload unavailable until this finishes.","toast.mqtt_busy_disp":"MQTT busy — try display push again shortly","toast.filled_sec":"Filled {0} (password required)","toast.filled_open":"Filled {0} (open)",
   "disp.image":"Image","disp.editor":"Editor","disp.source":"Original","disp.eink":"E‑ink 6",
-  "disp.color_title":"Original vs Spectra 6 quantize","disp.layout":"Layout guides","disp.push":"Push to screen",
+  "disp.color_title":"Original vs Spectra 6 quantize","disp.layout":"Layout guides","disp.push":"Push to screen","disp.pushing":"Pushing…",
   "disp.content_preview":"Content preview","disp.layout_preview":"Layout preview","disp.img_src":"Image source",
   "disp.upload":"Upload image","disp.upload_hint":"Click or drop · JPG / PNG / WebP","disp.or_url":"Or enter URL",
+  "disp.orient_land":"Land","disp.orient_port":"Port",
   "disp.fit":"Fit","disp.fit_cover":"Cover","disp.fit_contain":"Contain","disp.fit_fill":"Stretch",
   "disp.load_preview":"Load preview","disp.load_screen":"Load from panel","disp.show_screen":"Show on screen",
   "disp.img_note":"Toggle Original / E‑ink 6 to compare quantization; layout guides show safe area and center.",
   "disp.hint_eink":"E‑ink 6","disp.hint_source":"Original",
-  "disp.stage_img":"1600×1200 · {0}","disp.stage_ed":"Drag to place · {0}","disp.stage_md":"Markdown → canvas · {0}",
+  "disp.stage_img":"{0}×{1} · {2}","disp.stage_ed":"Drag to place · {2}","disp.stage_md":"Markdown → canvas · {2}",
   "ed.add":"Add","ed.image":"Image","ed.width":"Width","ed.replace_img":"Replace image","ed.text":"Text","ed.rect":"Box","ed.qr":"QR code","ed.layers":"Layers","ed.props":"Properties","ed.props_empty":"Select a layer to edit","ed.content":"Content","ed.qr_url":"URL","ed.size":"Size","ed.sheet_add":"Add element","ed.sheet_layers":"Layers","ed.sheet_props":"Properties","ed.new_text":"New text","ed.new_rect":"Swatch","ed.new_qr":"https://wiki.camthink.ai",
   "ed.hello":"Hello, world","ed.swatch":"Swatch","ed.swatch_sub":"Brand orange → red","ed.note":"E‑ink has 6 colors only. Use Original to see design colors; switch to E‑ink 6 before pushing.",
   "ed.canvas":"Canvas","ed.bg":"Background",
@@ -2001,7 +2022,63 @@ function validateMqtt(){
 }
 
 /* —— Display preview: Spectra 6 + layout —— */
-const PANEL_W=1600, PANEL_H=1200;
+/* Logical panel size — landscape 1600×1200 (default) or portrait 1200×1600.
+ * Native uploadFrame is always 1200×1600 halves; ditherToFrame maps either way. */
+let PANEL_W=1600, PANEL_H=1200;
+let panelOrient='landscape'; /* landscape | portrait */
+function isPortrait(){ return panelOrient==='portrait'; }
+function panelSizeLabel(){ return PANEL_W+' × '+PANEL_H; }
+function nativeToLogical(nx, ny){
+  /* Landscape: 90° CCW from native (lx=ny, ly=1199−nx). Portrait: identity. */
+  if(isPortrait()) return {lx:nx, ly:ny};
+  return {lx:ny, ly:1199-nx};
+}
+function applyPanelOrient(orient, opts){
+  const next=(orient==='portrait')?'portrait':'landscape';
+  const persist=!opts || opts.persist!==false;
+  const silent=opts && opts.silent;
+  panelOrient=next;
+  PANEL_W=isPortrait()?1200:1600;
+  PANEL_H=isPortrait()?1600:1200;
+  document.body.classList.toggle('orient-portrait', isPortrait());
+  document.querySelectorAll('#orientSeg button').forEach(b=>{
+    b.classList.toggle('on', b.dataset.orient===panelOrient);
+  });
+  document.querySelectorAll('.layout-guide .badge').forEach(el=>{
+    el.textContent=panelSizeLabel();
+  });
+  const pvW=isPortrait()?600:800, pvH=isPortrait()?800:600;
+  ['imgPv','pv','mdPv'].forEach(id=>{
+    const c=$(id); if(!c) return;
+    if(c.width!==pvW || c.height!==pvH){ c.width=pvW; c.height=pvH; }
+  });
+  const ov=$('ovPanelCanvas');
+  if(ov && (ov.width!==PANEL_W || ov.height!==PANEL_H)){
+    ov.width=PANEL_W; ov.height=PANEL_H;
+  }
+  const lxEl=$('layerX'), lyEl=$('layerY');
+  if(lxEl) lxEl.max=String(PANEL_W);
+  if(lyEl) lyEl.max=String(PANEL_H);
+  document.querySelectorAll('#layerList .layer').forEach(el=>{
+    const x=Math.max(0, Math.min(PANEL_W, +el.dataset.x||0));
+    const y=Math.max(0, Math.min(PANEL_H, +el.dataset.y||0));
+    el.dataset.x=String(x); el.dataset.y=String(y);
+  });
+  /* Force Overview / last-frame remap with the new logical axes. */
+  _ovPanelKey='';
+  if(_ovPanelBmp){ try{ _ovPanelBmp.close(); }catch(_){} _ovPanelBmp=null; }
+  if(persist && lsStore){
+    try{ lsStore.setItem('ek410_panel_orient', panelOrient); }catch(_){}
+  }
+  if(typeof syncColorUI==='function') syncColorUI();
+  else if(typeof redrawAll==='function') redrawAll();
+  if(typeof scheduleOverviewPanelRefresh==='function') scheduleOverviewPanelRefresh();
+  if(!silent){
+    toast(isPortrait()
+      ?(lang==='zh'?'竖屏 1200×1600':'Portrait 1200×1600')
+      :(lang==='zh'?'横屏 1600×1200':'Landscape 1600×1200'));
+  }
+}
 /* Soft panel-like RGB (not pure primaries) — better gradient matching. */
 const E6_INK=[
   {code:0, rgb:[22,22,22]},
@@ -2625,11 +2702,17 @@ function syncColorUI(){
   document.querySelectorAll('#colorSeg button').forEach(b=>b.classList.toggle('on', b.dataset.color===colorMode));
   const label=t(colorMode==='eink'?'disp.hint_eink':'disp.hint_source');
   const img=$('imgStageHint'), ed=$('edStageHint'), md=$('mdStageHint');
-  if(img) img.textContent=t('disp.stage_img', label);
-  if(ed) ed.textContent=t('disp.stage_ed', label);
-  if(md) md.textContent=t('disp.stage_md', label);
+  if(img) img.textContent=t('disp.stage_img', String(PANEL_W), String(PANEL_H), label);
+  if(ed) ed.textContent=t('disp.stage_ed', String(PANEL_W), String(PANEL_H), label);
+  if(md) md.textContent=t('disp.stage_md', String(PANEL_W), String(PANEL_H), label);
   if(typeof redrawActive==='function') redrawActive();
 }
+document.querySelectorAll('#orientSeg button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    if(b.dataset.orient===panelOrient) return;
+    applyPanelOrient(b.dataset.orient);
+  });
+});
 $('btnLayoutGuide').onclick=()=>{ layoutGuideOn=!layoutGuideOn; syncGuideUI(); toast(layoutGuideOn?t('toast.guide_on'):t('toast.guide_off')); };
 document.querySelectorAll('#colorSeg button').forEach(b=>{
   b.addEventListener('click',()=>{ colorMode=b.dataset.color; syncColorUI(); toast(colorMode==='eink'?t('toast.color_eink'):t('toast.color_source')); });
@@ -2698,9 +2781,9 @@ function layerHitBounds(el){
   const b=layerBounds(el);
   const c=$('pv');
   const cssW=c ? Math.max(1, c.getBoundingClientRect().width) : 800;
-  const pad=Math.max(28, Math.round(28*(1600/cssW)));
-  const minW=Math.max(96, Math.round(44*(1600/cssW)));
-  const minH=Math.max(72, Math.round(44*(1600/cssW)));
+  const pad=Math.max(28, Math.round(28*(PANEL_W/cssW)));
+  const minW=Math.max(96, Math.round(44*(PANEL_W/cssW)));
+  const minH=Math.max(72, Math.round(44*(PANEL_W/cssW)));
   let {x,y,w,h}=b;
   if(w<minW){ x-=(minW-w)/2; w=minW; }
   if(h<minH){ y-=(minH-h)/2; h=minH; }
@@ -2718,7 +2801,7 @@ function selectionHandlesPanel(el){
 function handleHitRadiusPanel(){
   const c=$('pv');
   const cssW=c ? Math.max(1, c.getBoundingClientRect().width) : 800;
-  return Math.max(22, Math.round(16*(1600/cssW)));
+  return Math.max(22, Math.round(16*(PANEL_W/cssW)));
 }
 function hitTestHandleAt(lx, ly, el){
   if(!el) return null;
@@ -2787,7 +2870,7 @@ function mdFgCss(){
 }
 function drawEditorScene(ctx,w,h,eink){
   ctx.fillStyle=editorBgCss(); ctx.fillRect(0,0,w,h);
-  const sx=w/1600, sy=h/1200;
+  const sx=w/PANEL_W, sy=h/PANEL_H;
   const list=$('layerList');
   if(!list) return;
   /* List top = front: paint bottom → top */
@@ -2826,7 +2909,7 @@ function drawEditorScene(ctx,w,h,eink){
 function drawLayerSelection(ctx,w,h){
   const el=selectedLayer(); if(!el) return;
   const b=layerBounds(el);
-  const sx=w/1600, sy=h/1200;
+  const sx=w/PANEL_W, sy=h/PANEL_H;
   const pad=6;
   const rx=b.x*sx-pad, ry=b.y*sy-pad, rw=b.w*sx+pad*2, rh=b.h*sy+pad*2;
   ctx.save();
@@ -2882,7 +2965,7 @@ function applyCornerResize(el, handle, lx, ly, start){
     el.dataset.size=String(s);
   } else if(type==='image'){
     const ratio=start.ratio||(3/4);
-    let nw=Math.max(80, Math.min(1600, Math.round(w)));
+    let nw=Math.max(80, Math.min(PANEL_W, Math.round(w)));
     let nh=Math.round(nw*ratio);
     if(handle.indexOf('n')>=0) top=bottom-nh;
     else top=b.y;
@@ -2892,8 +2975,8 @@ function applyCornerResize(el, handle, lx, ly, start){
     el.dataset.y=String(Math.max(0, Math.round(top)));
     el.dataset.size=String(nw);
   } else if(type==='rect'){
-    const nw=Math.max(20, Math.min(1600, Math.round(w)));
-    const nh=Math.max(12, Math.min(1200, Math.round(h)));
+    const nw=Math.max(20, Math.min(PANEL_W, Math.round(w)));
+    const nh=Math.max(12, Math.min(PANEL_H, Math.round(h)));
     el.dataset.x=String(Math.max(0, Math.round(left)));
     el.dataset.y=String(Math.max(0, Math.round(top)));
     el.dataset.w=String(nw);
@@ -3142,7 +3225,7 @@ function bindLayerProps(el){
           sizeEl.min=40; sizeEl.max=400; sizeEl.step=1;
           setSlider('layerSize','layerSizeVal', +el.dataset.size||160);
         } else {
-          sizeEl.min=80; sizeEl.max=1600; sizeEl.step=1;
+          sizeEl.min=80; sizeEl.max=PANEL_W; sizeEl.step=1;
           setSlider('layerSize','layerSizeVal', +el.dataset.size||400);
         }
       }
@@ -3358,7 +3441,7 @@ function hitTestLayerAt(lx, ly){
   /* Near miss: snap to closest layer within ~36 CSS px. */
   const c=$('pv');
   const cssW=c ? Math.max(1, c.getBoundingClientRect().width) : 800;
-  const snap=Math.max(40, Math.round(36*(1600/cssW)));
+  const snap=Math.max(40, Math.round(36*(PANEL_W/cssW)));
   let best=null, bestD=snap*snap;
   for(const el of layers){
     const b=layerHitBounds(el);
@@ -3544,7 +3627,7 @@ async function adoptImgBitmap(bmp, urlSrc){
   drawImagePreview();
   syncImgPushGate();
 }
-/** Decode device native 960000B frame (uploadFrame layout) → ImageData 1600×1200. */
+/** Decode device native 960000B frame → ImageData at current logical size. */
 function nativeFrameToImageData(u8){
   const w=PANEL_W, h=PANEL_H;
   const img=new ImageData(w,h);
@@ -3559,10 +3642,10 @@ function nativeFrameToImageData(u8){
       for(let b=0;b<300;b++){
         const byte=u8[o++];
         const put=(nx,code)=>{
-          const lx=ny, ly=1199-nx;
-          if(lx<0||ly<0||lx>=w||ly>=h) return;
+          const p=nativeToLogical(nx, ny);
+          if(p.lx<0||p.ly<0||p.lx>=w||p.ly>=h) return;
           const rgb=rgbOf(code);
-          const i=(ly*w+lx)*4;
+          const i=(p.ly*w+p.lx)*4;
           d[i]=rgb[0]; d[i+1]=rgb[1]; d[i+2]=rgb[2]; d[i+3]=255;
         };
         const nx=cs*600+b*2;
@@ -4923,9 +5006,9 @@ function ditherToFrame(imgData){
   for(let cs=0;cs<2;cs++) for(let ny=0;ny<1600;ny++) for(let b=0;b<300;b++){
     const nx=cs*600+b*2;
     const sample=nx0=>{
-      const lx=ny, ly=1199-nx0;
-      if(lx<0||ly<0||lx>=PANEL_W||ly>=PANEL_H) return 1;
-      return codes[ly*PANEL_W+lx];
+      const p=nativeToLogical(nx0, ny);
+      if(p.lx<0||p.ly<0||p.lx>=PANEL_W||p.ly>=PANEL_H) return 1;
+      return codes[p.ly*PANEL_W+p.lx];
     };
     out[o++]=(sample(nx)<<4)|sample(nx+1);
   }
@@ -4949,7 +5032,15 @@ async function uploadPanelCanvas(panelCanvas){
   await new Promise(r=>setTimeout(r,30));
   const frame=ditherToFrame(img);
   toast(lang==='zh'?'上传刷屏…':'Uploading…');
-  const res=await fetch('/api/v1/display/uploadFrame',{method:'POST',body:frame});
+  const ctrl=new AbortController();
+  const to=setTimeout(()=>ctrl.abort(), 120000);
+  let res;
+  try{
+    res=await fetch('/api/v1/display/uploadFrame',{method:'POST',body:frame,signal:ctrl.signal});
+  }catch(e){
+    if(e&&e.name==='AbortError') throw new Error(lang==='zh'?'上传超时，请等刷屏结束后再试':'Upload timed out — wait for the refresh, then retry');
+    throw e;
+  }finally{ clearTimeout(to); }
   const j=await res.json().catch(()=>({}));
   if(!res.ok||(j.code!=null&&j.code!==0)) throw new Error(mapDeviceErr(j.msg)||('HTTP '+res.status));
   /* uploadFrame is synchronous through panel write; refresh finishes before return. */
@@ -4977,11 +5068,11 @@ async function pushEditorToDevice(){
   const layers=[...document.querySelectorAll('#layerList .layer')];
   const hasImage=layers.some(el=>(el.dataset.type||'')==='image');
   /*
-   * Firmware renderCanvas only supports text / rect / qr — not bitmaps.
-   * With image layers, rasterize the editor at full panel size and uploadFrame
-   * (same path as Image mode), instead of blocking with an error.
+   * Firmware renderCanvas only supports text / rect / qr — not bitmaps —
+   * and stays landscape 1600×1200. Portrait (or any image layer) rasterizes
+   * at full logical size and uploadFrame.
    */
-  if(hasImage){
+  if(hasImage || isPortrait()){
     const c=document.createElement('canvas');
     c.width=PANEL_W; c.height=PANEL_H;
     const ctx=c.getContext('2d',{willReadFrequently:true});
@@ -5028,6 +5119,16 @@ async function pushEditorToDevice(){
   scheduleOverviewPanelRefresh();
 }
 async function pushMdToDevice(){
+  /* Portrait: firmware renderCanvas is landscape-only — rasterize + uploadFrame. */
+  if(isPortrait()){
+    const c=document.createElement('canvas');
+    c.width=PANEL_W; c.height=PANEL_H;
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    paintMdStage(ctx, PANEL_W, PANEL_H);
+    await uploadPanelCanvas(c);
+    scheduleOverviewPanelRefresh();
+    return;
+  }
   const items=mdToCanvasItems($('mdText')?$('mdText').value:'');
   if(!items.length) throw new Error(lang==='zh'?'Markdown 为空':'Markdown is empty');
   /* Ensure each text payload respects firmware UTF-8 byte limit. */
@@ -5046,17 +5147,26 @@ async function pushMdToDevice(){
   scheduleOverviewPanelRefresh();
 }
 
+function setDispPushBusy(on){
+  const b=$('dispPush');
+  if(!b) return;
+  b.disabled=!!on;
+  b.setAttribute('aria-busy', on?'true':'false');
+  b.textContent=on?t('disp.pushing'):t('disp.push');
+}
 if($('dispPush')) $('dispPush').onclick=async()=>{
   if(mqttUiBusy){ toast(t('toast.mqtt_busy_disp'), 3500); return; }
+  const btn=$('dispPush');
+  if(btn&&btn.disabled) return;
   const m=activeDispMode();
-  busy($('dispPush'),1);
+  setDispPushBusy(true);
   try{
     if(m==='image') await pushImageToDevice();
     else if(m==='editor') await pushEditorToDevice();
     else if(m==='md') await pushMdToDevice();
     else await pushImageToDevice();
-  }catch(e){ toast(e.message||'Push failed'); }
-  finally{ busy($('dispPush'),0); }
+  }catch(e){ toast(e.message||'Push failed', 4500); }
+  finally{ setDispPushBusy(false); }
 };
 
 /* boot */
@@ -5080,6 +5190,12 @@ document.addEventListener('visibilitychange',()=>{
   if(!page || !page.hidden) loadOverviewPanel(true, false);
 });
 
+/* Restore panel orientation before first paint (default landscape). */
+(()=>{
+  let saved='landscape';
+  try{ saved=(lsStore&&lsStore.getItem('ek410_panel_orient'))||'landscape'; }catch(_){}
+  applyPanelOrient(saved, {persist:false, silent:true});
+})();
 applyI18n();
 </script>
 </body>

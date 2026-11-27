@@ -8,8 +8,11 @@
  *
  * MAIN hold ~2.5 s: open SoftAP (blue blink); closes BLE first if up.
  * PAGE hold ~2.5 s: open BLE CT-Prov (cyan blink); if already up → close BLE.
- * MAIN+PAGE hold 6 s: factory reset
- * PAGE/MAIN short press: no LED change (long-press only owns cyan/blue).
+ * MAIN click while SoftAP or BLE is up: leave it (the only way off the hotspot
+ * that does not wait for its idle timeout).
+ * MAIN+PAGE hold ~2.5 s then release: power off (deep sleep, MAIN wake only).
+ * MAIN+PAGE hold past ~6 s: factory reset (overrides power-off).
+ * PAGE/MAIN short press otherwise: no LED change (long-press only owns cyan/blue).
  * PAGE click: log only (paging later)
  */
 #include <stdint.h>
@@ -22,6 +25,7 @@
 #include "driver/gpio.h"
 
 #include "button.h"
+#include "button_gesture.h"
 #include "pindefine.h"
 #include "config.h"
 #include "wifi.h"
@@ -29,9 +33,9 @@
 #include "sleep.h"
 
 #define TAG "-->BTN"
-#define HOLD_AP_MS 2500
-#define HOLD_BLE_MS 2500
-#define HOLD_FACTORY_MS 6000
+#define HOLD_AP_MS BTN_HOLD_SHUTDOWN_MS
+#define HOLD_BLE_MS BTN_HOLD_SHUTDOWN_MS
+#define HOLD_FACTORY_MS BTN_HOLD_FACTORY_MS
 #define POLL_MS 20
 /* Static DRAM — does not fragment the heap wifi/httpd need. */
 #define PROV_WORKER_STACK 4096
@@ -40,6 +44,7 @@ enum {
     PROV_CMD_SOFTAP = 1,
     PROV_CMD_BLE_OPEN = 2,
     PROV_CMD_BLE_CLOSE = 3,
+    PROV_CMD_LEAVE = 4,
 };
 
 static QueueHandle_t s_provQ;
@@ -64,11 +69,22 @@ static void prov_worker(void *arg)
             wifi_softap_open();
             if (wifi_softap_is_up()) {
                 led_set(LEDC_NET_R, LED_BLINK);
-                ESP_LOGW(TAG, "SoftAP open (idle auto-close), http://192.168.4.1/");
+                ESP_LOGW(TAG, "SoftAP open (MAIN click to close; idle auto-close), "
+                         "http://192.168.4.1/");
             } else {
                 ESP_LOGE(TAG, "SoftAP open failed");
                 wifi_led_refresh();
                 led_pulse(LEDC_ERR_R, 800);
+            }
+        } else if (cmd == PROV_CMD_LEAVE) {
+            /* MAIN click. Both close paths restore the idle LED and the sleep
+             * window themselves. */
+            if (wifi_ble_prov_is_up()) {
+                ESP_LOGI(TAG, "MAIN click: leave BLE provisioning");
+                wifi_ble_prov_close();
+            } else if (wifi_softap_is_up()) {
+                ESP_LOGI(TAG, "MAIN click: leave SoftAP");
+                wifi_softap_close();
             }
         } else if (cmd == PROV_CMD_BLE_CLOSE) {
             ESP_LOGI(TAG, "PAGE hold: close BLE");
@@ -82,7 +98,7 @@ static void prov_worker(void *arg)
                 led_pulse(LEDC_ERR_R, 800);
             } else {
                 led_set(LEDC_BLE_R, LED_BLINK);
-                ESP_LOGW(TAG, "BLE CT-Prov open (cyan; PAGE hold again to close)");
+                ESP_LOGW(TAG, "BLE CT-Prov open (cyan; MAIN click or PAGE hold to close)");
             }
         }
         s_provBusy = false;
@@ -160,9 +176,11 @@ static void button_task(void *arg)
     int lock = LOCK_NONE;
     int mainHeldMs = 0;
     int pageHeldMs = 0;
-    int bothHeldMs = 0;
+    int bothHeldMs = 0;   /* continuous both-down (factory) */
+    int bothHoldLatch = 0; /* peak continuous hold for release → power-off */
     int secondKeyMs = 0;
     bool apFired = false, bleFired = false, factoryFired = false;
+    bool leaveFired = false;
     bool pageWasDown = false;
     bool prevMain = false, prevPage = false;
     bool mainStable = false, pageStable = false;
@@ -217,20 +235,49 @@ static void button_task(void *arg)
         }
 
         if (!main && !page) {
+            bool powerOffFired = false;
             if (pageWasDown && pageHeldMs > 0 && pageHeldMs < HOLD_BLE_MS &&
                 !bleFired && lock == LOCK_PAGE) {
                 ESP_LOGI(TAG, "PAGE click");
             }
+            if (lock == LOCK_BOTH) {
+                /* Use the latched peak: rocker release often lifts one key a
+                 * poll before the other, which zeros the continuous counter. */
+                btn_both_action_t both =
+                    btn_both_on_release(bothHoldLatch, factoryFired ? 1 : 0);
+                if (both == BTN_BOTH_SHUTDOWN) {
+                    powerOffFired = true;
+                    ESP_LOGW(TAG, "MAIN+PAGE release %.1fs: power off",
+                             bothHoldLatch / 1000.0f);
+                    led_set(0, 0, 0, LED_OFF);
+                    if (!sleep_power_off()) {
+                        ESP_LOGE(TAG, "power off refused");
+                        wifi_led_refresh();
+                        led_pulse(LEDC_ERR_R, 800);
+                        powerOffFired = false;
+                    }
+                }
+            }
+            if (lock == LOCK_MAIN && mainHeldMs > 0 && mainHeldMs < HOLD_AP_MS &&
+                !apFired && (wifi_ble_prov_is_up() || wifi_softap_is_up())) {
+                /* A tap on MAIN leaves whichever provisioning mode is up. */
+                leaveFired = true;
+                if (!post_prov(PROV_CMD_LEAVE)) {
+                    wifi_led_refresh();
+                    led_pulse(LEDC_ERR_R, 800);
+                }
+            }
             /* Only restore idle LED on short press; long-press owns cyan/blue. */
-            if (lock != LOCK_NONE && !apFired && !bleFired && !factoryFired) {
+            if (lock != LOCK_NONE && !apFired && !bleFired && !factoryFired &&
+                !leaveFired && !powerOffFired) {
                 wifi_led_refresh();
                 /* The press above cancelled the CYCLE window: a tap that fired
                  * no gesture must put it back, or the unit never sleeps again. */
                 sleep_kick();
             }
             lock = LOCK_NONE;
-            mainHeldMs = pageHeldMs = bothHeldMs = secondKeyMs = 0;
-            apFired = bleFired = factoryFired = false;
+            mainHeldMs = pageHeldMs = bothHeldMs = bothHoldLatch = secondKeyMs = 0;
+            apFired = bleFired = factoryFired = leaveFired = false;
             pageWasDown = false;
             vTaskDelay(pdMS_TO_TICKS(POLL_MS));
             continue;
@@ -266,10 +313,14 @@ static void button_task(void *arg)
              * reset that completes on MAIN alone. */
             if (main && page) {
                 bothHeldMs += POLL_MS;
+                bothHoldLatch = bothHeldMs;
             } else {
+                /* One key up: factory continuous timer resets; latch kept for
+                 * the eventual full release (power-off decision). */
                 bothHeldMs = 0;
             }
-            if (bothHeldMs >= HOLD_FACTORY_MS && !factoryFired) {
+            if (!factoryFired &&
+                btn_both_while_held(bothHeldMs) == BTN_BOTH_FACTORY) {
                 factoryFired = true;
                 ESP_LOGW(TAG, "MAIN+PAGE 6s: factory reset");
                 led_set(LEDC_ERR_R, LED_BLINK_FAST);
@@ -314,5 +365,7 @@ void button_open(void)
                  (unsigned)PROV_WORKER_STACK);
     }
     xTaskCreate(button_task, "button", 3072, NULL, 4, NULL);
-    ESP_LOGI(TAG, "button ready: MAIN 2.5s=SoftAP, PAGE 2.5s=BLE toggle, MAIN+PAGE 6s=factory");
+    ESP_LOGI(TAG, "button ready: MAIN 2.5s=SoftAP, PAGE 2.5s=BLE toggle, "
+             "MAIN click=leave SoftAP/BLE, MAIN+PAGE release 2.5s=power-off, "
+             "MAIN+PAGE 6s=factory");
 }

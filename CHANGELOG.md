@@ -8,7 +8,293 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ---
 
-## [Unreleased]
+## [1.3.11] — 2026-11-27
+
+Five firmware fixes, one feature and one button change — for what leaving
+BLE provisioning did to a unit, for a telemetry preview that went missing, for
+a frame upload that took the unit off Wi-Fi, for pictures that arrive without
+a length and came out blurred, for the memory a BLE session cost for the rest
+of the boot; for the EXIF orientation of a picture, so that a phone's portrait
+shot comes out upright; and for a hotspot that could not be switched off by
+hand. All found on hardware between the release of 1.3.10 and the next
+morning — four of them by the extended soak. Release image `dist/ek410.bin`
+from `tools/build_release.sh` and this `sdkconfig.defaults` (sha256 prefix
+`6a8e21532007`; zero compiler warnings, host tests 11/11). The hardware
+checks below were run on **one** ESP32-C61HR2 bench unit (STA + web server +
+MQTT over TCP), on intermediate 1.3.11 images — one of them sha256 prefix
+`bef2d97c6f01` — not all of them on this release binary. Portrait canvas,
+lean telemetry, MQTT paused across a full refresh, and MAIN+PAGE power-off
+are in this image and were exercised on that bench from later flashes.
+
+**BLE provisioning, on hardware.** Leaving it was reproduced without a phone
+— `POST /api/v1/network/openBleProv {"idleSec":20}`, the unit leaves by its
+idle timeout — on 1.3.10 first, then on this image. The largest free internal
+block right after leaving was 8192 on 1.3.10: exactly what MQTT needs, not a
+byte more. On this image it is 12288–14336, as after a clean boot. MQTT was
+connected 2 s after the web server came back, and the unit's telemetry was
+back on its broker at once (seen from a second client on the broker).
+`tools/fix_verification.py --ble-exit` passes on this image; the same
+procedure left 8192 on 1.3.10, which its margin rule (≥ 10240) fails. With a
+phone connected the failure was seen twice on 1.3.10 — PAGE held 2.5 s, the
+app connects, pairs and scans, the unit leaves by itself and `mqttReason`
+reads `deferred_heap` every few seconds until a reboot (six hours the second
+time, until the unit was rebooted for a test) — and could not be repeated on
+this image: the test computer has no Bluetooth central. **That path is not
+validated.**
+
+**What a BLE session cost for the rest of the boot, on hardware.** With the
+fix above in, a unit that had been in BLE provisioning once still had its
+largest free internal block cut to 8704 bytes after a picture — 512 above what
+MQTT needs — against 12288–12800 after a clean boot. The provisioning worker
+task was the cause: created at the first BLE session, never deleted, blocked
+on its queue for the rest of the boot with NimBLE long gone, its 4 KB stack in
+the middle of the heap. It now ends when provisioning is over. After leaving
+BLE provisioning, twice in a row, the largest block is 14336 — after the exit
+and after one more picture — and the second session works.
+
+**Telemetry preview, on hardware.** On the image before the fix the
+broker-side check of the soak saw the telemetry after a `proxyImage` round
+without a preview, and the serial log of that run shows the extent: 9 of 20
+telemetry builds went out with `preview_b64=0` — after an HTTP 404, after a
+`proxyImage`, after a cut transfer — each time until the next successful
+display. With the fix, a 12-round run with four failed fetches (HTTP 404, a
+cut transfer, a stall, a self-signed certificate — all sent over the broker)
+and two `proxyImage` rounds built 23 telemetries, every one with its
+161440-byte preview.
+
+**Frame upload behind a refresh, on hardware.** Reproduced five times in a
+row on the image before the fix: a raw frame pushed with `uploadFrame` while
+a picture was being displayed was neither refused nor uploaded — about 17 s
+in, the unit lost Wi-Fi (`sta disconnected reason=200`, then `NO_AP_FOUND`
+for 20 s), came back 45 s later, and MQTT reconnected. In about 430 displays
+with no upload behind them the beacon timeout never occurred. With the fix
+the same request is answered `panel busy` in 3 s, four times out of four,
+and the unit stays on Wi-Fi.
+
+**Pictures without a Content-Length, on hardware.** In the 72 h soak the same
+98 KB JPEG that the tool serves three ways came out three ways: with a
+Content-Length decoded to 400×300; chunked, or HTTP/1.0 without a length,
+decoded to 1/8 and subsampled to 67×50 or 100×75 — on the panel the label
+box of the test picture is a smear, the trees are blocks. Without a length
+the whole 1280 KB reservation stayed taken during the transfer and after it,
+so the decode had a 48 KB RGB budget. With the fix a length-less picture is
+decoded to 400×300 too, and the frame it leaves on the unit is the one the
+plain transfer leaves (the same CRC); seen six times more in a step-by-step
+replay.
+
+**EXIF orientation, on hardware and on the host.** The soak's test picture —
+a landscape with a red marker top-left, stored on its side the way a phone
+stores a portrait shot (1200×1600, tag 6) — came out with the marker in the
+bottom half of the panel until now; it comes out in the top half. The
+orientation is applied where the dither samples the picture, so it costs no
+memory at any picture size. The host test turns one picture all eight ways:
+dithered with its tag, each gives the frame of the upright picture byte for
+byte, on both dither grids; without the tag none of the seven does.
+
+**MAIN click, on hardware.** The hotspot could only be left by its two-minute
+idle timeout or from the console, BLE also by holding PAGE again. A short
+press on MAIN now leaves whichever is up. Pressed for both: the hotspot
+closed 3 s after the click, BLE provisioning was left and the unit was back
+on Wi-Fi with MQTT connected 5 s after it.
+
+**Open — the uplink went bad once, for 23 minutes.** In one boot that had, by
+button, a hotspot opened and closed, BLE provisioning opened and left, and
+then six URL pictures, the unit stopped getting its telemetry through from
+minute 12 on: every 162 KB telemetry took 39 s and ended with the broker
+resetting the connection, and while one was being sent nothing else on the
+unit ran — no HTTP answer, not even the serial log. Small publishes and LAN
+downloads still worked (downloads at a third of the night's speed), and this
+computer published 160 KB to the same broker in 0.3 s. A reboot cured it. The
+steps were replayed one at a time — four length-less pictures, the hotspot
+opened and closed, BLE opened and left, another picture — with the telemetry
+timed after each (2–4 s, every one): not reproduced, not understood. The soak
+checks that a telemetry arrives after every round and keeps the serial log,
+so a recurrence will be caught. Whatever the trigger, two things in it are
+wrong in their own right and are not changed here: a 162 KB telemetry every
+30 s is more than a slow link can carry inside the broker's keepalive, and it
+is published from the timer task, so one that stalls stops every timer.
+
+**The extended soak, on this image.** Two smokes of the tool on earlier builds
+(13 and 12 rounds) found the preview and the upload bugs; on the build before
+the last three changes a 12-round run (six pictures, a canvas, a text screen,
+the four server faults each sent over the broker and refused with its reason,
+and all four concurrency patterns) and a 4-round run of the concurrency
+patterns gave no unexpected result. Run 4 of the 72 h soak on the build before
+the length-less fix stopped after 8.4 h for a newer image: 268 rounds, no
+reboot, no outage, MQTT back after every display, 266 telemetries checked and
+all truthful, 37 commands over the broker acknowledged `queued` then `ok` or
+`error`, 10 pings answered, no fault or defect marker on serial. (It reads
+NOT OK only for seven false verdicts of the tool, since corrected.) Run 5,
+13 rounds on the build before the last three changes, gave the same. On this
+build: `tools/fix_verification.py` 10 of 10 (JSON depth, `devName` limit, MQTT
+password hidden, internal-heap headroom, failed URL OTA reported, URL display
+soak, raw frames between images, BLE provisioning left again — with the
+margin still there after one more picture); the EXIF picture upright; a
+progressive and a grayscale JPEG refused by name over the broker. Run 6 started at 11:26 on 2026-11-26 on this build with the broker's side included, but without the serial port: the bench unit's USB cable is unplugged since 11:03, so until it is back the firmware's reasons are not checked, only the results. Its result is not in.
+
+**Known on hardware, not fixed in this release** (the 1.3.10 list still
+applies; details in `docs/c61_memory_allocation_report.md` §11.7–11.12):
+
+- **The uplink episode above.** Not reproduced; watch for it.
+- **Why an unread request body deafened the radio was not found.** The upload
+  no longer waits, so the condition is gone; the mechanism is not.
+- **Grayscale JPEG is not decodable**, now refused as
+  `grayscale JPEG not supported`. The decoder in the C61's ROM takes
+  three-component images only, and ESP-IDF 5.5 ships no other software
+  decoder for this chip; supporting it means bringing one in and finding room
+  for it.
+
+**Not validated on hardware:** BLE provisioning on this image *with a phone
+connected*, SoftAP with a client attached, MQTTS, CYCLE sleep and the wake
+URL on battery, a broker or access-point outage (the soak talks to the real
+broker and cannot switch it off), more than one unit, and the 72 h soak.
+
+### Fixed
+
+- **MQTT never came back after BLE provisioning** (found on hardware on
+  1.3.10, twice the day it was released). Entering BLE provisioning tears the
+  Wi-Fi driver down for NimBLE and then starts a lean one again for scanning
+  — *while NimBLE holds its memory*. With NimBLE gone, its freed memory lies
+  in pieces between that driver's blocks: 30 KB free internally, largest
+  block 7936 (8192 when no phone had connected). The web server took what was
+  left of it, MQTT needs 8192 in one block, and reported `deferred_heap` every
+  few seconds until a reboot — while the unit had an IP and its web console
+  worked. On leaving BLE provisioning the Wi-Fi driver is now torn down once
+  more after NimBLE has stopped, and started again the way every other start
+  does: web server, Wi-Fi, join, MQTT. Measured on the way: largest block
+  8192 → 11264 → 12800 when MQTT starts.
+- **A BLE session cost 4 KB of internal RAM for the rest of the boot** (found
+  on hardware the day after; 1.3.10 has it too). The provisioning worker task
+  was created at the first BLE session and never deleted: after NimBLE was
+  torn down it went on blocking on its queue, its stack in the middle of the
+  heap, and the largest free block after a picture was 8704 instead of
+  12288. The task now ends once provisioning is over — after the command it
+  may be running — and is created again by the next session.
+- **Telemetry went out without a preview after any failed picture and after
+  every `proxyImage`** (found on hardware by the soak's broker-side check;
+  1.3.10 has it too). Before a URL fetch the 160 KB preview is dropped for
+  the download's memory, and until now only a saved frame built it again. A
+  fetch that ended without one — HTTP 404, a file over the limit, a transfer
+  cut, a decode failure, the same picture shown again, or a `proxyImage`,
+  which only fetches — left the unit reporting `frame_present=1` with no
+  preview until its next successful display. 1.3.10 fixed this for URL raw
+  frames alone. The preview is now rebuilt from the saved frame when a fetch
+  ends without a commit, and from the frame in memory when the same frame is
+  shown again — under the panel lock, never in the way of a render.
+- **A raw frame pushed while a picture was being displayed was never
+  uploaded, and took the unit off Wi-Fi** (found on hardware by the soak's
+  fourth concurrency pattern; 1.3.10 has it too). `uploadFrame` waited up to
+  180 s for the panel with its 960000-byte body unread. It is now refused at
+  once with `panel busy` when a display is running or queued or the panel is
+  held; the server discards the body, the console can push the frame again
+  once the panel is idle. The panel's own replays (boot paint, restore) still
+  wait a job out.
+- **A picture that arrived without a Content-Length came out blurred** (found
+  on hardware by the 72 h soak; 1.3.10 has it too). Chunked transfers and
+  HTTP/1.0 responses carry no length, so the unit kept its whole 1280 KB
+  reservation for the body while the file came in — and after it: a 98 KB
+  JPEG then had 48 KB of PSRAM left for its RGB buffer, was decoded to 1/8
+  and subsampled to 67×50, where the same file with a length is decoded to
+  400×300. The reservation is now cut back to the number of bytes that
+  arrived, before the decode, the way a known length is cut back at the
+  headers.
+
+### Added
+
+- **The EXIF orientation of a JPEG is applied** (until 1.3.10 a picture was
+  shown as stored: a portrait photo as a phone saves it came out sideways,
+  scaled to cover the panel and cropped). The tag is read from the APP1
+  segment, and the dither samples the picture turned — all eight
+  orientations, at no cost in memory. PNG is not turned: libpng does not
+  read its rare eXIf chunk here.
+- **SoftAP web landscape / portrait canvas** (Display 横/竖): default
+  1600×1200; portrait 1200×1600 for Image / Editor / Markdown and Overview.
+  Preference in browser `localStorage`. Portrait push uses `uploadFrame`.
+
+### Changed
+
+- **A short press on MAIN leaves SoftAP or BLE provisioning.** Until now the
+  hotspot could only be left by its idle timeout or from the console, and BLE
+  also by holding PAGE again. MAIN held 2.5 s still opens the hotspot, PAGE
+  held 2.5 s still opens and closes BLE; a short press does nothing else (it
+  keeps cancelling and re-arming the CYCLE window). A press that was meant
+  for something else now ends provisioning at once.
+- **MAIN+PAGE hold ~2.5 s then release powers off** (deep sleep, MAIN GPIO
+  wake only). Hold past ~6 s still factory-resets and overrides power-off.
+  Deep-sleep wake (MAIN / PAGE / timer) reconnects only — it no longer
+  auto-opens SoftAP or BLE.
+- **MQTT telemetry is lean by default**: heartbeat without the ~160 KB
+  preview except after a frame change (and once after boot when a last frame
+  is restored). Full panel refresh pauses MQTT for the DRF window so
+  keepalive pings do not drop the link mid-push.
+- **A JPEG the chip cannot decode is refused by name**:
+  `progressive JPEG not supported`, `grayscale JPEG not supported` — until
+  1.3.10 both said `JPEG decode fail`.
+
+### Added (tools)
+
+- **The soak sees the broker's side** (`tools/soak_long.py --broker-secret`).
+  A second client on the unit's own broker — the credentials are the unit's,
+  see the next bullet — checks that a truthful telemetry follows every round
+  (a frame means a usable preview, frame CRC as read back from the unit,
+  uptime and firmware), sends every `--mqtt-every` rounds the command over
+  the broker instead of HTTP (`queued`, then `ok` or `error` with the
+  firmware's reason), and has every `--ping-every` rounds a ping answered.
+  Three of the fixes above were caught by this check, by a concurrency
+  pattern and by the decode scale the firmware logs; none of the three was
+  visible to the soak before.
+- **`tools/broker_secret.py`** takes the broker credentials a unit already
+  holds out of its NVS partition over serial into a 0600 file outside the
+  repository: the API reports `hasPassword` only, and the broker refuses a
+  client without the password. Prints key names; resets the unit, writes
+  nothing.
+- **`tools/fix_verification.py --ble-exit`** opens BLE provisioning over
+  HTTP with a 20 s idle time and requires that the unit is an MQTT client
+  again with at least 2 KB more than MQTT needs in its largest internal
+  block — after the exit, and with `--url` after one more picture.
+  `qa_gate.py --tier candidate` passes it.
+- **The soak covers what a unit's day holds.** More picture shapes (portrait,
+  a banner, a tiny icon, a grayscale JPEG, a PNG with transparency, chunked
+  and length-less transfers, one with an EXIF tag that has to come out
+  upright); what a server can do wrong — HTTP 404, a transfer cut in half, a
+  stall, a self-signed certificate on an HTTPS server of its own — each of
+  which must fail with the reason the firmware logs; a dashboard canvas and a
+  long text screen between the pictures; other requests while a picture
+  refreshes (status polling and the console page, a `proxyImage`, a second
+  `displayUrl`, an `uploadFrame`, which has to be refused at once); the frame
+  read back after every round (uploads and raw frames byte-identical to what
+  was sent, canvas and text as the first time, every display having saved a
+  frame unless the saved one is already it); and the same firmware uploaded
+  again every `--ota-every-hours`. BLE provisioning or the hotspot opened on
+  the unit while it runs is not a failed round: the run waits — asking less
+  often than the hotspot's idle timeout, since every status request keeps it
+  up — and checks that the unit is a client again afterwards.
+- **Host tests `soak_dryrun` and `img_dither_exif`.** The first runs the
+  whole soak tool against a simulated unit and broker — every kind of round,
+  then one fault at a time, each of which has to be found; the tool had
+  crashed on the bench four times on its own bugs and given two false
+  verdicts before it existed. The second turns one picture all eight ways
+  and requires the upright frame each time.
+
+### 中文
+
+- **蓝牙配网退出后 MQTT 再也连不上**（1.3.10 发布当天真机两次发现）。进入配网时为 NimBLE 拆掉 Wi-Fi 驱动，随后为了扫描又起了一个精简配置的 Wi-Fi 驱动——而此时 **NimBLE 还占着内存**。NimBLE 退出后，它释放的内存被这个驱动的分配隔成碎片：内部空闲 30 KB，最大块 7936（没有手机连过时是 8192）。网页服务先占掉一块，MQTT 需要 8192 的整块，于是每几秒报一次 `deferred_heap`，直到重启——而设备有 IP、网页也能打开。现在退出配网时，在 NimBLE 完全停止之后再把 Wi-Fi 驱动拆一次，按其它启动路径同样的顺序重来：网页、Wi-Fi、入网、MQTT。实测 MQTT 启动时最大块 8192 → 11264 → 12800。
+  - 真机核对：不带手机、用 `openBleProv` 自动复现，1.3.10 退出后最大块 8192（零余量），本版 12288–14336（与干净开机相同），网页恢复 2 秒后 MQTT 连上，broker 侧遥测立即恢复。**带手机连接的路径在本版上没有验证**（测试电脑没有蓝牙主机），请用 App 复测一次。
+- **进过一次蓝牙配网，整次开机都少 4 KB 内部内存**（第二天真机发现；1.3.10 同样如此）。配网的工作任务第一次进蓝牙时创建，之后从不被删：协议栈拆掉以后它还在队列上无限等待，4 KB 的栈卡在堆中间，刷过一张图后内部最大块只有 8704（干净开机 12288）。现在配网结束时它自己退出（手上的命令先做完），下次进蓝牙再重建。实测连做两次进出蓝牙，退出后和再刷一张图之后最大块都是 14336，第二次配网照常可用。
+- **刷图失败之后、以及每次 `proxyImage` 之后，遥测都没有预览图**（挂测新加的 broker 侧核对在真机上发现；1.3.10 同样如此）。每次 URL 抓取前，160 KB 的预览会让给下载用的内存，而此前只有「成功保存新帧」才会重建它。抓取没有以保存新帧结束——HTTP 404、文件超限、传输中断、解码失败、重复刷同一张图、或者只是取图的 `proxyImage`——设备之后上报的遥测就一直是 `frame_present=1` 却没有预览，直到下一次成功刷屏（冒烟里 20 条遥测有 9 条如此）。1.3.10 只修了 URL 原生帧那一种。现在抓取结束而没有保存新帧时，从已保存的帧重建预览；重复刷同一帧时直接用内存里的帧重建——都在面板锁下进行，不会和渲染抢帧缓冲。修复后 12 轮（含 4 次抓取失败、2 次 `proxyImage`）23 条遥测全部带预览。
+- **刷屏期间上传原生帧：上传不会成功，还会让设备掉 Wi-Fi**（挂测的第四种并发模式第一次在真机上跑到就发现；1.3.10 同样如此）。`uploadFrame` 过去最多等面板 180 秒，期间 960 KB 的请求体一直没人读，约 17 秒后设备信标超时掉线，45 秒后才回来。现在有刷屏在进行或排队、或面板被占用时立刻回 `panel busy`（实测 3 秒内，设备不掉线），未读的正文由服务器丢弃；面板空闲后控制台再推一次即可。
+- **分块传输 / 没有 Content-Length 的图片会糊**（72 小时长测发现；1.3.10 同样如此）。没有长度时，设备在传输期间和之后一直占着整块 1280 KB 的正文预留：一张 98 KB 的 JPEG 只剩 48 KB 的 RGB 预算，被解到 1/8 再抽样到 67×50；同一张图带长度时解到 400×300。现在传输一结束就按实际收到的字节数收缩预留。真机上分块和无长度两种传输都解到 400×300，留在设备上的帧与普通传输完全相同。
+- **新功能：JPEG 的 EXIF 方向标签生效**（此前图片按存储的样子显示，手机竖拍的照片横着出来）。方向标签从 APP1 段读出，抖动在取样时把图转正——8 种方向都支持，不占额外内存。真机上测试图（左上角有红色标记、按手机竖拍的方式侧着存储）此前标记落在下半屏，现在落在上半屏。主机测试把同一张图转成 8 种方向，逐字节都与正立图的结果相同。
+- **MAIN 短按退出热点或蓝牙配网**（新功能，按需求加）。此前热点只能等 2 分钟空闲超时或在网页里关，蓝牙还可以再长按 PAGE。现在配网模式开着时短按 MAIN 即退出。实测：热点在单击后 3 秒关闭；蓝牙退出后 5 秒重新联网、MQTT 连上。长按 MAIN 开热点、长按 PAGE 开关蓝牙不变。
+- **MAIN+PAGE 按住约 2.5s 松手关机**（深睡，仅 MAIN 可唤醒）；按住超过约 6s 仍为恢复出厂。深睡唤醒（MAIN/PAGE/定时）只重新联网，不再自动开 SoftAP/BLE。
+- **MQTT 遥测默认瘦身**：平时心跳不带约 160 KB 预览，仅在帧变更后带一张（开机若有 last frame 武装一次）。全刷期间暂停 MQTT，避免刷屏中 keepalive 掉线。
+- **SoftAP 网页横/竖画布**：默认 1600×1200；竖屏 1200×1600（图片/编辑/Markdown 与 Overview 共用）；偏好存浏览器本地；竖屏推屏走 `uploadFrame`。
+- **解不了的 JPEG 按原因拒绝**：`progressive JPEG not supported`（渐进式）、`grayscale JPEG not supported`（灰度），此前都只报 `JPEG decode fail`。灰度 JPEG 本版仍不支持解码——ROM 里的解码器只认三分量图，要支持得引入别的解码器。
+- **未结问题：有一次上行变坏，持续 23 分钟**。某次开机里（按键开关过热点、进出过蓝牙、连刷了 6 张 URL 图），从第 12 分钟起设备每条 162 KB 的遥测都要发 39 秒然后被 broker 断开，发送期间整机不响应（接口不应答、串口无输出）；小消息和局域网下载正常（下载速度只有夜里的三分之一），同一时间这台电脑往同一个 broker 发 160 KB 只要 0.3 秒。重启即恢复。按同样顺序分步重放（4 张无长度图片、开关热点、进出蓝牙、再一张图），每一步之后的遥测都正常——没有复现，原因不明。挂测每轮都核对遥测是否到达并全程保存串口，再出现会被抓住。不论触发条件是什么，有两点本身就不对、本版没改：每 30 秒一条 162 KB 的遥测，慢链路在 broker 的保活时限内发不完；遥测是在定时器任务上发的，一条卡住就所有定时器都停。
+- **挂测看到了 broker 那一侧**（`soak_long.py --broker-secret`，凭据由 `tools/broker_secret.py` 从设备自己的配置里取出，存在仓库之外的 0600 文件里）：每轮之后必须到达一条内容属实的遥测（有帧就必须有可用的预览图、帧行 CRC、运行时间和固件版本）；每隔若干轮把命令改从 broker 下发（先 `queued`，刷完 `ok` 或带原因的 `error`）；定期核对 ping。上面的缺陷里，三处是这个核对、一种新的并发模式和固件日志里的解码比例抓出来的。
+- **挂测覆盖面**：更多图片形态（含必须正立显示的带 EXIF 标签的图）、服务器故障（404、传一半断开、卡住、自签名证书）、画布和长文本、刷屏期间的并发请求、每轮读回帧核对、计划内重新升级；运行期间有人在设备上开蓝牙配网或热点不再算失败，改为检查之后设备重新成为客户端。
+- **新增 `fix_verification.py --ble-exit`**（candidate 档自动带上；带 `--url` 时再查「退出后刷一张图，余量仍在」）和两个主机测试：`soak_dryrun`（用模拟的设备和 broker 把整个挂测工具跑一遍；在它出现之前，这个工具在台架上因自身缺陷崩过 4 次、给出过 2 次错误判定）和 `img_dither_exif`（8 种方向逐字节一致）。
+- **尚未上机验证**：带手机连接的蓝牙配网、带客户端连入的热点、MQTTS、CYCLE 休眠与电池下的唤醒图、broker 或路由器断线、多台设备、72 小时长测（第六轮已于 2026-11-26 11:26 在本构建上启动，含 broker 侧核对，但暂时没有串口：挂测机的 USB 线从 11:03 起不在，接回来之前只核对结果、不核对固件给出的原因；结果未出）。
 
 ## [1.3.10] — 2026-11-25
 

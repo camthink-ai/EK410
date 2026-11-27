@@ -112,8 +112,8 @@ static texel_t locate(float f, int n)
     return t;
 }
 
-int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
-                      uint8_t *frame, void *(*alloc)(size_t n), void (*kick)(void))
+int img_dither_native_o(const uint8_t *rgb, int w, int h, int orient, int grid_w, int grid_h,
+                        uint8_t *frame, void *(*alloc)(size_t n), void (*kick)(void))
 {
     if (!rgb || !frame || !alloc || w < 1 || h < 1 || w > 32767 || h > 32767 ||
         grid_w < 1 || grid_h < 1 || grid_w > IMG_DITHER_PANEL_W ||
@@ -122,6 +122,17 @@ int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
     }
     const int step_x = IMG_DITHER_PANEL_W / grid_w;    /* panel pixels a dot covers */
     const int step_y = IMG_DITHER_PANEL_H / grid_h;
+
+    /* The EXIF orientation: how the stored picture has to be turned to stand
+     * upright. 5–8 swap rows and columns; in (orient − 1) bit 0 mirrors left
+     * and right, bit 1 top and bottom. It is applied where the source is
+     * sampled — no second buffer, whatever the size of the picture. */
+    if (orient < 1 || orient > 8) {
+        orient = 1;
+    }
+    const int swap = orient >= 5;
+    const int flip_x = (orient - 1) & 1, flip_y = (orient - 1) & 2;
+    const int uw = swap ? h : w, uh = swap ? w : h;   /* as it will be shown */
 
     /* [ink table][neutral table][two error columns][source row of every dither
      * row][source column of every dither column][one output line per IC half] */
@@ -174,20 +185,20 @@ int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
     }
 
     /* Cover fit of the source onto the dither grid (in grid units). */
-    float s = (float)grid_w / (float)w;
-    const float sy = (float)grid_h / (float)h;
+    float s = (float)grid_w / (float)uw;
+    const float sy = (float)grid_h / (float)uh;
     if (sy > s) {
         s = sy;
     }
-    const float dw = (float)w * s, dh = (float)h * s;
+    const float dw = (float)uw * s, dh = (float)uh * s;
     const float ox = ((float)grid_w - dw) * 0.5f, oy = ((float)grid_h - dh) * 0.5f;
-    const float x_scale = (float)w / dw, y_scale = (float)h / dh;
+    const float x_scale = (float)uw / dw, y_scale = (float)uh / dh;
     texel_t *rows_w = (texel_t *)(work + row_off), *cols_w = (texel_t *)(work + col_off);
     for (int gy = 0; gy < grid_h; gy++) {
-        rows_w[gy] = locate(((float)gy + 0.5f - oy) * y_scale - 0.5f, h);
+        rows_w[gy] = locate(((float)gy + 0.5f - oy) * y_scale - 0.5f, uh);
     }
     for (int gx = 0; gx < grid_w; gx++) {
-        cols_w[gx] = locate(((float)gx + 0.5f - ox) * x_scale - 0.5f, w);
+        cols_w[gx] = locate(((float)gx + 0.5f - ox) * x_scale - 0.5f, uw);
     }
     memset(err_a, 0, 2 * err_bytes);        /* the first column starts clean */
 
@@ -204,8 +215,13 @@ int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
         memset(nxt, 0, err_bytes);
         const texel_t c = cols[gx];
         const int s0 = c.first, tx = c.next_weight, wx = 256 - tx;
-        const int s1 = s0 + 1 < w ? s0 + 1 : s0;
+        const int s1 = s0 + 1 < uw ? s0 + 1 : s0;
         const int in_cover = s0 >= 0;
+        /* upright column → stored column (1–4) or row (5–8) */
+        const int cb0 = flip_x ? uw - 1 - s0 : s0;
+        const int cb1 = flip_x ? uw - 1 - s1 : s1;
+        const size_t da = swap ? 3 : (size_t)w * 3;    /* a step along upright y */
+        const size_t db = swap ? (size_t)w * 3 : 3;    /* a step along upright x */
         int pend = 0;                               /* first nibble of a pair */
         int gy = ltr ? grid_h - 1 : 0;
 
@@ -216,11 +232,14 @@ int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
                         (step_y == 2 ? gy : (gy >> 1));
             if (in_cover && rows[gy].first >= 0) {
                 const int r0 = rows[gy].first, ty = rows[gy].next_weight, wy = 256 - ty;
-                const int r1 = r0 + 1 < h ? r0 + 1 : r0;
-                const uint8_t *p00 = rgb + ((size_t)r0 * w + s0) * 3;
-                const uint8_t *p01 = rgb + ((size_t)r0 * w + s1) * 3;
-                const uint8_t *p10 = rgb + ((size_t)r1 * w + s0) * 3;
-                const uint8_t *p11 = rgb + ((size_t)r1 * w + s1) * 3;
+                const int r1 = r0 + 1 < uh ? r0 + 1 : r0;
+                /* upright row → stored row (1–4) or column (5–8) */
+                const int ra0 = flip_y ? uh - 1 - r0 : r0;
+                const int ra1 = flip_y ? uh - 1 - r1 : r1;
+                const uint8_t *p00 = rgb + (size_t)ra0 * da + (size_t)cb0 * db;
+                const uint8_t *p01 = rgb + (size_t)ra0 * da + (size_t)cb1 * db;
+                const uint8_t *p10 = rgb + (size_t)ra1 * da + (size_t)cb0 * db;
+                const uint8_t *p11 = rgb + (size_t)ra1 * da + (size_t)cb1 * db;
                 const int16_t *e = cur + (size_t)gy * 3;
 #define BILINEAR(c) (((p00[c] * wx + p01[c] * tx) * wy + (p10[c] * wx + p11[c] * tx) * ty) >> 16)
                 const int sr = prep[BILINEAR(0)], sg = prep[BILINEAR(1)], sb = prep[BILINEAR(2)];
@@ -321,4 +340,10 @@ int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
     }
     free(work);
     return 0;
+}
+
+int img_dither_native(const uint8_t *rgb, int w, int h, int grid_w, int grid_h,
+                      uint8_t *frame, void *(*alloc)(size_t n), void (*kick)(void))
+{
+    return img_dither_native_o(rgb, w, h, 1, grid_w, grid_h, frame, alloc, kick);
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""On-device verification of the 1.3.10 fixes — runs against a real EK410.
+"""On-device verification of the 1.3.10 and 1.3.11 fixes — runs against a real EK410.
 
     python3 tools/fix_verification.py --host 192.168.1.50
     python3 tools/fix_verification.py --host 192.168.1.50 --url http://192.168.1.10/t.png
@@ -8,7 +8,7 @@
     python3 tools/fix_verification.py --host 192.168.1.50 --power        # bench unit only
 
 Only the device's HTTP API is used (LAN or SoftAP), nothing else. Every check
-maps to one entry of CHANGELOG 1.3.10 and FAILS on 1.3.9 firmware:
+maps to one entry of the changelog, and fails on the firmware that had the bug:
 
   identity              device answers, is an EK410, runs the expected version
   json_depth_guard      300 nested '[' on 4 route families must not reboot it
@@ -19,6 +19,10 @@ maps to one entry of CHANGELOG 1.3.10 and FAILS on 1.3.9 firmware:
   ota_roundtrip         --firmware: local upload, reboot into the other slot
   ota_url_roundtrip     --ota-url: the device fetches the image, reboots, confirms
   sleep_min_clamp       --power: sleepMin is clamped (saves power config twice)
+  ble_prov_exit         --ble-exit: after leaving BLE provisioning the unit is a
+                        client again, with room for the next client start (1.3.11);
+                        with --url also after one more picture (the worker task
+                        that used to stay behind, 1.3.11)
 
 Exit 0 only when every executed check passed; a check that lacks its option or
 device state is reported SKIPPED, never counted as a pass. Reboots are detected
@@ -152,6 +156,9 @@ def check_identity(dev: Device, rep: Report, expect: str):
 
 LARGEST_INT_MIN = 8192   # MQTT bring-up floor (mqtt_internal_need): below it MQTT never starts
 FREE_INT_MIN = 12000     # steady state with Wi-Fi + web server + MQTT on the C61
+BLE_EXIT_LARGEST_MIN = 10240   # 1.3.10 came out of BLE provisioning with exactly 8192 and no
+                                # margin; a phone session left 7936, then 4096 behind httpd
+BLE_IDLE_S = 20          # openBleProv's idleSec: the unit leaves by itself
 
 
 def check_internal_headroom(dev: Device, rep: Report):
@@ -563,6 +570,82 @@ def check_sleep_min(dev: Device, rep: Report):
         rep.add("sleep_min_clamp", "PASS", f"clamped to {clamped.get('sleepMin')}, always mode restored")
 
 
+def check_ble_prov_exit(dev: Device, rep: Report, url: str = ""):
+    """Open BLE provisioning the way the console does, let the idle timeout
+    close it, and see whether the unit is a client again. On 1.3.10 the Wi-Fi
+    driver was started while NimBLE held its memory: with NimBLE gone the
+    largest internal block was exactly what MQTT needs, and after a phone had
+    connected less than that — MQTT was never started again until a reboot."""
+    status, before = dev.json("GET", "/api/v1/system/getDevInfo")
+    if status != 200 or not isinstance(before, dict):
+        rep.add("ble_prov_exit", "FAIL", "device unreachable")
+        return
+    if "bleProvUp" not in before:
+        rep.add("ble_prov_exit", "SKIPPED", "this firmware has no openBleProv")
+        return
+    if before.get("bleProvUp") or before.get("softapUp"):
+        rep.add("ble_prov_exit", "SKIPPED", "provisioning is up on the unit")
+        return
+    if not before.get("mqttConnected"):
+        rep.add("ble_prov_exit", "FAIL", "not connected to the broker to begin with")
+        return
+    _, diag = dev.json("GET", "/api/v1/system/getDiag")
+    largest_before = int(((diag or {}).get("heap") or {}).get("largestInt", 0))
+    status, resp = dev.json("POST", "/api/v1/network/openBleProv", {"idleSec": BLE_IDLE_S})
+    if status != 200:
+        rep.add("ble_prov_exit", "FAIL", f"openBleProv: status={status} {resp}")
+        return
+    t0 = time.time()
+    dark = False
+    while time.time() - t0 < 30:           # the web server stops while BLE is up
+        if dev.json("GET", "/api/v1/system/getDevInfo")[0] is None:
+            dark = True
+            break
+        time.sleep(1)
+    if not dark:
+        rep.add("ble_prov_exit", "FAIL", "BLE provisioning did not start (web server stayed up)")
+        return
+    after = dev.wait_info(240)             # the idle timeout, then Wi-Fi and the web server
+    if after is None or after.get("bleProvUp"):
+        rep.add("ble_prov_exit", "FAIL", "still in BLE provisioning after 240 s")
+        return
+    t1 = time.time()
+    while time.time() - t1 < 90 and not after.get("mqttConnected"):
+        time.sleep(2)
+        after = dev.wait_info(10) or after
+    _, diag = dev.json("GET", "/api/v1/system/getDiag")
+    largest = int(((diag or {}).get("heap") or {}).get("largestInt", 0))
+    state = "connected" if after.get("mqttConnected") else "down (" + str(after.get("mqttReason")) + ")"
+    detail = (f"MQTT {state} {time.time() - t0:.0f} s after BLE was opened, largestInt "
+              f"{largest_before} → {largest} (want ≥ {BLE_EXIT_LARGEST_MIN})")
+    if int(after.get("uptime_s", 0)) < int(before.get("uptime_s", 0)):
+        rep.add("ble_prov_exit", "FAIL", "the unit rebooted on the way")
+    elif not after.get("mqttConnected"):
+        rep.add("ble_prov_exit", "FAIL", detail + " — not a client again until a reboot")
+    elif largest < BLE_EXIT_LARGEST_MIN:
+        rep.add("ble_prov_exit", "FAIL", detail + " — no room for the next client start")
+    else:
+        rep.add("ble_prov_exit", "PASS", detail)
+    if url and after.get("mqttConnected") and largest >= BLE_EXIT_LARGEST_MIN:
+        # What a unit that has been in BLE provisioning lives with from then
+        # on: until 1.3.11 the provisioning worker task was never deleted, and
+        # its 4 KB stack cut the largest block to 8704 after the next picture
+        # — 512 bytes above what MQTT needs.
+        info, err = _display_url_once(dev, rep, url, True)
+        _, diag = dev.json("GET", "/api/v1/system/getDiag")
+        after_pic = int(((diag or {}).get("heap") or {}).get("largestInt", 0))
+        if err:
+            rep.add("ble_prov_exit", "FAIL", f"one picture after leaving BLE provisioning: {err}")
+        elif after_pic < BLE_EXIT_LARGEST_MIN:
+            rep.add("ble_prov_exit", "FAIL",
+                    f"one picture after leaving BLE provisioning largestInt={after_pic} "
+                    f"(want ≥ {BLE_EXIT_LARGEST_MIN}) — the unit runs with no room for the "
+                    f"next client start until a reboot")
+        else:
+            rep.add("ble_prov_exit", "PASS",
+                    f"one picture after leaving BLE provisioning largestInt={after_pic}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="On-device verification of the 1.3.10 fixes")
     ap.add_argument("--host", required=True, help="device IP (LAN or 192.168.4.1)")
@@ -579,6 +662,9 @@ def main() -> int:
                          "fetches it itself, reboots into the other slot and confirms it")
     ap.add_argument("--power", action="store_true",
                     help="also exercise the sleepMin clamp (saves the power config twice)")
+    ap.add_argument("--ble-exit", action="store_true",
+                    help="also open BLE provisioning for %d s and check the unit is a client "
+                         "again afterwards (the unit is off the LAN meanwhile)" % BLE_IDLE_S)
     ap.add_argument("--json-out", type=Path, default=None)
     ap.add_argument("--only", default="",
                     help="comma list: run just these checks (identity always runs), e.g. json_depth_guard,ota_roundtrip")
@@ -649,6 +735,13 @@ def main() -> int:
                 rep.add("sleep_min_clamp", "SKIPPED", "no --power")
         else:
             off("sleep_min_clamp", "")
+        if wanted("ble_prov_exit"):
+            if a.ble_exit:
+                check_ble_prov_exit(dev, rep, a.url)
+            else:
+                rep.add("ble_prov_exit", "SKIPPED", "no --ble-exit")
+        else:
+            off("ble_prov_exit", "")
 
     if rep.stack_min:
         low = ", ".join(f"{k}={v}" for k, v in sorted(rep.stack_min.items(), key=lambda kv: kv[1])[:6])

@@ -16,6 +16,7 @@ compile_commands.json
 .zcode/
 .cursor/
 .claude/
+.superpowers/
 
 # ESP-IDF build outputs (legacy build_ble/ may still exist locally)
 build/

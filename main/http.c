@@ -961,6 +961,8 @@ static esp_err_t display_proxy_image_handle(httpd_req_t *req)
         if (!proxy_released) {
             free(job->data);
             free(job);
+            /* the fetch dropped the telemetry preview; nothing was committed */
+            app_epd_preview_restore();
         }
         s_proxy_busy = false;
         return send_err(req, errcopy);
@@ -973,6 +975,7 @@ static esp_err_t display_proxy_image_handle(httpd_req_t *req)
     free(job->data);
     free(job);
     s_proxy_busy = false;
+    app_epd_preview_restore();
     return res;
 }
 
@@ -987,7 +990,13 @@ static esp_err_t display_upload_frame_handle(httpd_req_t *req)
     if (!app_epd_jobs_accepted()) {
         return send_err(req, "sleep pending");
     }
-    if (epd_upload_start() != 0) {
+    /* Not while a display runs or is queued, and without waiting for the
+     * panel. A request that waited here (180 s) kept its 960000-byte body
+     * unread, and on hardware that took the unit off Wi-Fi every time:
+     * beacon timeout ~17 s in, 45 s offline, the upload lost with it. The
+     * console gets "panel busy"; the server discards the body that follows;
+     * the frame is pushed again once the panel is idle. */
+    if (app_epd_display_busy() || epd_upload_start_wait(0) != 0) {
         return send_err(req, "panel busy");
     }
     unsigned char *buf = app_epd_dma_buf();

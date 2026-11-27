@@ -52,8 +52,8 @@
 |------|------|------|
 | POST | `/api/v1/display/renderText` | `{text,color,bg,scale}` |
 | POST | `/api/v1/display/renderCanvas` | `{bg,items[]}` 文本 / 矩形 / 图片 / 二维码（≤ 48 项，≤ 2 个二维码） |
-| POST | `/api/v1/display/uploadFrame` | 原始 **960000** 字节原生帧（布局见下） |
-| POST | `/api/v1/display/displayUrl` | `{url}` 设备自拉、解码并刷新（JPEG / PNG / raw；http 与 https）。跟随最多 5 次跳转（https 地址只跳到 https）。超过 700 KB 的 JPEG / PNG 在读正文之前拒绝（`image >700KB limit`）；文件越大解码得越小：1600×1200 的 JPEG 在约 400 KB 以内解到 400×300，再大就只有 200×150（正文还占着 PSRAM，RGB 缓冲只能用剩下的部分）。随后平滑放大并按整屏分辨率抖动——`imageQuality: quality` 时屏上每个像素一个墨点，`speed` 时 800×600（2×2 的点）；灰色内容只取黑白。更大的图或要求满画质时请发原生帧。其余响应体缓存在 PSRAM：名义上限 1280 KB。若单块不够（例如网页轮询留下的 TCP 控制块把堆切开），则分最多 3 段读入，JPEG/PNG 按回调顺序从分段缓冲解码；960000 字节原生帧同样走分段。仍装不下的文件在读正文前拒绝，屏幕保留上一画面（`file >1280KB limit`、`need …KB, got …KB in pieces`）。只支持基线 JPEG，渐进式 JPEG 报 `JPEG decode fail` |
+| POST | `/api/v1/display/uploadFrame` | 原始 **960000** 字节原生帧（布局见下）。有刷屏正在进行或排队时返回 `panel busy`——不会等面板，空闲后再推一次 |
+| POST | `/api/v1/display/displayUrl` | `{url}` 设备自拉、解码并刷新（JPEG / PNG / raw；http 与 https）。跟随最多 5 次跳转（https 地址只跳到 https）。超过 700 KB 的 JPEG / PNG 在读正文之前拒绝（`image >700KB limit`）；文件越大解码得越小：1600×1200 的 JPEG 在约 400 KB 以内解到 400×300，再大就只有 200×150（正文还占着 PSRAM，RGB 缓冲只能用剩下的部分）。随后平滑放大并按整屏分辨率抖动——`imageQuality: quality` 时屏上每个像素一个墨点，`speed` 时 800×600（2×2 的点）；灰色内容只取黑白。更大的图或要求满画质时请发原生帧。其余响应体缓存在 PSRAM：名义上限 1280 KB。若单块不够（例如网页轮询留下的 TCP 控制块把堆切开），则分最多 3 段读入，JPEG/PNG 按回调顺序从分段缓冲解码；960000 字节原生帧同样走分段。仍装不下的文件在读正文前拒绝，屏幕保留上一画面（`file >1280KB limit`、`need …KB, got …KB in pieces`）。没有 `Content-Length` 的响应（分块传输、HTTP/1.0）同样接受到 1280 KB 上限，并按正常分辨率解码（1.3.10 及之前只解到 67×50）。只支持三分量（彩色）的基线 JPEG；渐进式 JPEG 报 `progressive JPEG not supported`，单分量的灰度 JPEG 报 `grayscale JPEG not supported`（1.3.10 及之前都只报 `JPEG decode fail`）。JPEG 的 EXIF 方向标签会生效（1.3.11 起）：手机竖拍的照片正常正立显示，与图片大小无关。非 1600×1200 的图片按铺满面板缩放后裁切；PNG 的透明像素显示为白色 |
 | POST | `/api/v1/display/proxyImage` | `{url}` → 图片字节，供**网页预览** |
 | GET | `/api/v1/display/getLastFrameMeta` | `{present,seq,source,savedUs,bytes,crc32}` |
 | GET | `/api/v1/display/lastFrame` | 原始 **960000** 字节 native 4bpp（与 `uploadFrame` 同布局） |

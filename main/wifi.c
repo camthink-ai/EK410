@@ -1484,7 +1484,8 @@ void wifi_ble_prov_enter(void)
     ble_prov_arm_idle();
     led_set(LEDC_BLE_R, LED_BLINK);
     evtlog_event("BLE", "CT-Prov up idle=%us", (unsigned)(ble_idle_ms() / 1000u));
-    ESP_LOGI(TAG, "BLE CT-Prov up (idle %us) — cyan; PAGE/idle/session.close/SoftAP to exit",
+    ESP_LOGI(TAG, "BLE CT-Prov up (idle %us) — cyan; MAIN click / PAGE hold / "
+             "idle / session.close / SoftAP to exit",
              (unsigned)(ble_idle_ms() / 1000u));
 
     /* Warm Wi-Fi STA for scan while NimBLE advertises (coex).
@@ -1551,6 +1552,16 @@ void wifi_ble_prov_close(void)
                  (unsigned)esp_get_free_heap_size(),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        /* The STA driver above came up while NimBLE held its memory, so its
+         * blocks sit between NimBLE's. With NimBLE gone, 30 KB of internal
+         * RAM is left in pieces of 4–8 KB: MQTT needs 8 KB in one, so after
+         * a phone had connected it never started again until a reboot (seen
+         * twice on hardware: largest 7936, then 4096 behind httpd). Start the
+         * driver over on the coalesced heap, in the order of every other
+         * start: httpd first, then Wi-Fi. */
+        if (s_wifiDriverUp) {
+            wifi_driver_teardown();
+        }
     }
 
     /* Prefer httpd BEFORE wifi_init — post-NimBLE largest_int is often ~8KB,

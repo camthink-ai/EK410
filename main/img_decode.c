@@ -503,21 +503,22 @@ int img_rgb_dither_codes(uint8_t *rgb, int w, int h, uint8_t **codes_out, int *c
     return 0;
 }
 
-int img_render_native(uint8_t *rgb, int w, int h, img_proc_mode_t mode, uint8_t *frame)
+int img_render_native_o(uint8_t *rgb, int w, int h, int orient, img_proc_mode_t mode,
+                        uint8_t *frame)
 {
     if (!rgb || !frame || w < 1 || h < 1) {
         return -1;
     }
     const int full = (mode == IMG_PROC_QUALITY);
-    ESP_LOGI(TAG, "render %dx%d at %dx%d (%s)", w, h,
+    ESP_LOGI(TAG, "render %dx%d at %dx%d (%s)%s", w, h,
              full ? IMG_PANEL_W : IMG_PANEL_W / 2, full ? IMG_PANEL_H : IMG_PANEL_H / 2,
-             full ? "quality" : "speed");
+             full ? "quality" : "speed", orient > 1 ? ", turned by its EXIF tag" : "");
     const int64_t t0 = esp_timer_get_time();
     /* The tables and error rows go to PSRAM in one block and are released
      * with it: a raw frame is fetched with ~90 KB of PSRAM to spare. */
-    if (img_dither_native(rgb, w, h, full ? IMG_PANEL_W : IMG_PANEL_W / 2,
-                          full ? IMG_PANEL_H : IMG_PANEL_H / 2, frame,
-                          spiram_alloc, kick_wdt) != 0) {
+    if (img_dither_native_o(rgb, w, h, orient, full ? IMG_PANEL_W : IMG_PANEL_W / 2,
+                            full ? IMG_PANEL_H : IMG_PANEL_H / 2, frame,
+                            spiram_alloc, kick_wdt) != 0) {
         ESP_LOGW(TAG, "render native: no working memory (spiram free %u largest %u)",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
@@ -527,6 +528,11 @@ int img_render_native(uint8_t *rgb, int w, int h, img_proc_mode_t mode, uint8_t 
              (long long)((esp_timer_get_time() - t0) / 1000));
     free(rgb);
     return 0;
+}
+
+int img_render_native(uint8_t *rgb, int w, int h, img_proc_mode_t mode, uint8_t *frame)
+{
+    return img_render_native_o(rgb, w, h, 1, mode, frame);
 }
 
 /* ---------- JPEG / PNG source (one block or up to IMG_DECODE_MAX_PARTS) ---------- */
@@ -610,6 +616,129 @@ typedef struct {
 #define JPEG_MAX_PIXELS (64u * 1000u * 1000u)
 #define JPEG_SUB_MAX    16
 
+/* What the last decode left for the caller to know: why it failed ("" unless
+ * it is a format this chip cannot decode) and the EXIF orientation of the
+ * picture that was decoded. */
+static char s_last_err[40];
+static int s_last_orient = 1;
+
+const char *img_decode_last_error(void)
+{
+    return s_last_err;
+}
+
+int img_decode_last_orientation(void)
+{
+    return s_last_orient;
+}
+
+static int src_has(img_src_t *s, size_t pos, uint8_t *dst, size_t n)
+{
+    return img_src_copy(s, pos, dst, n) == n;
+}
+
+static unsigned rd16(const uint8_t *p, int be)
+{
+    return be ? (unsigned)((p[0] << 8) | p[1]) : (unsigned)(p[0] | (p[1] << 8));
+}
+
+/* Offset of the first marker segment before the scan data whose number is
+ * `lo`..`hi`, with its kind and length — 0 when there is none. Walks at most
+ * 64 segments; anything malformed ends the walk. */
+static size_t jpeg_find_marker(img_src_t *s, uint8_t lo, uint8_t hi, uint8_t *kind,
+                               size_t *seg_len)
+{
+    uint8_t b[2];
+    size_t pos = 2;                                   /* after SOI */
+    for (int n = 0; n < 64; n++) {
+        if (!src_has(s, pos, b, 2) || b[0] != 0xFF || b[1] == 0x00) {
+            break;
+        }
+        const uint8_t m = b[1];
+        if (m == 0xFF) {                              /* fill bytes */
+            pos += 1;
+            continue;
+        }
+        if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7)) {
+            pos += 2;                                 /* no length follows */
+            continue;
+        }
+        if (m == 0xD9 || m == 0xDA) {
+            break;                                    /* end, or the scan data */
+        }
+        if (!src_has(s, pos + 2, b, 2)) {
+            break;
+        }
+        const size_t len = ((size_t)b[0] << 8) | b[1];
+        if (len < 2) {
+            break;
+        }
+        if (m >= lo && m <= hi) {
+            *kind = m;
+            *seg_len = len;
+            return pos;
+        }
+        pos += 2 + len;
+    }
+    return 0;
+}
+
+/* EXIF orientation of a JPEG: 1–8, 1 when there is none or it cannot be read.
+ * A phone stores a portrait shot on its side and says so here. */
+static int jpeg_exif_orientation(img_src_t *s)
+{
+    uint8_t kind = 0, h[14], t[2], e[12];
+    size_t len = 0;
+    const size_t at = jpeg_find_marker(s, 0xE1, 0xE1, &kind, &len);
+    if (!at || len < 22 || !src_has(s, at + 4, h, 14) || memcmp(h, "Exif\0\0", 6) != 0) {
+        return 1;
+    }
+    const int be = h[6] == 'M' && h[7] == 'M';
+    const int le = h[6] == 'I' && h[7] == 'I';
+    if ((!le && !be) || rd16(h + 8, be) != 42) {
+        return 1;
+    }
+    const uint32_t off = be ? ((uint32_t)h[10] << 24) | ((uint32_t)h[11] << 16) |
+                               ((uint32_t)h[12] << 8) | h[13]
+                           : h[10] | ((uint32_t)h[11] << 8) | ((uint32_t)h[12] << 16) |
+                               ((uint32_t)h[13] << 24);
+    const size_t tiff = at + 10;
+    if (off + 2 > len || !src_has(s, tiff + off, t, 2)) {
+        return 1;
+    }
+    const unsigned count = rd16(t, be);
+    for (unsigned i = 0; i < count && i < 256; i++) {
+        if (!src_has(s, tiff + off + 2 + 12 * (size_t)i, e, 12)) {
+            return 1;
+        }
+        if (rd16(e, be) == 0x0112) {
+            const unsigned v = rd16(e + 8, be);
+            return v >= 1 && v <= 8 ? (int)v : 1;
+        }
+    }
+    return 1;
+}
+
+/* Why the decoder in the ROM cannot take this JPEG, or NULL when that is not
+ * what is wrong: it takes three-component baseline images only. */
+static const char *jpeg_unsupported(img_src_t *s)
+{
+    uint8_t kind = 0, comps = 0;
+    size_t len = 0;
+    const size_t at = jpeg_find_marker(s, 0xC0, 0xCF, &kind, &len);
+    if (!at || kind == 0xC4 || kind == 0xC8 || kind == 0xCC || len < 10 ||
+        !src_has(s, at + 9, &comps, 1)) {
+        return NULL;
+    }
+    if (comps == 1) {
+        return "grayscale JPEG not supported";
+    }
+    if (kind == 0xC2) {
+        return "progressive JPEG not supported";
+    }
+    return NULL;
+}
+
 static UINT jpeg_in(JDEC *jd, BYTE *buff, UINT nbyte)
 {
     jpeg_io_t *io = (jpeg_io_t *)jd->device;
@@ -664,10 +793,17 @@ static int decode_jpeg_rgb_src(img_src_t *src, uint8_t **rgb_out, int *w_out, in
 
     JRESULT jr = jd_prepare(&jd, jpeg_in, pool, pool_sz, &io);
     if (jr != JDR_OK) {
-        ESP_LOGE(TAG, "jd_prepare failed (%d)", (int)jr);
+        const char *why = jr == JDR_FMT3 ? jpeg_unsupported(src) : NULL;
+        if (why) {
+            ESP_LOGE(TAG, "jd_prepare: %s", why);
+            strlcpy(s_last_err, why, sizeof(s_last_err));
+        } else {
+            ESP_LOGE(TAG, "jd_prepare failed (%d)", (int)jr);
+        }
         free(pool);
         return -1;
     }
+    s_last_orient = jpeg_exif_orientation(src);
     if (jd.width < 1 || jd.height < 1 || jd.width > JPEG_MAX_DIM ||
         jd.height > JPEG_MAX_DIM ||
         (uint64_t)jd.width * (uint64_t)jd.height > JPEG_MAX_PIXELS) {
@@ -931,6 +1067,8 @@ int img_decode_to_rgb_parts(const uint8_t *const *parts, const size_t *part_lens
         return -1;
     }
     *rgb_out = NULL;
+    s_last_err[0] = '\0';
+    s_last_orient = 1;
     img_src_t src;
     if (img_src_parts(&src, parts, part_lens, nparts, len) != 0) {
         return -1;

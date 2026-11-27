@@ -16,6 +16,7 @@
 
 #include "last_frame.h"
 #include "epd709.h"
+#include "mqtt.h"
 
 #define TAG "-->LF"
 #define PART_LABEL "lastfrm"
@@ -284,6 +285,21 @@ static void preview_rebuild_from_flash(void)
     preview_rebuild_from_native(s_cap);
 }
 
+void last_frame_preview_restore(void)
+{
+    /* last_frame_preview_drop() runs before every URL fetch, and a commit
+     * builds the preview again. When nothing is committed — the fetch failed,
+     * the frame is the one already saved, a proxyImage only fetched —
+     * telemetry would go out without a preview until the next display.
+     * Reads the frame buffer: the caller holds the panel lock. */
+    preview_lock();
+    bool have = s_preview_b64 != NULL;
+    preview_unlock();
+    if (!have) {
+        preview_rebuild_from_flash();
+    }
+}
+
 const char *last_frame_preview_b64(void)
 {
     /* Unsafe across drop/rebuild — prefer last_frame_preview_snapshot(). */
@@ -368,6 +384,10 @@ void last_frame_init(void)
     ESP_LOGI(TAG, "last frame present seq=%u src=%s", (unsigned)s_seq,
              s_meta.source[0] ? s_meta.source : "-");
     preview_rebuild_from_flash();
+    /* Lean telemetry only attaches preview when s_previewDue is set. Arm once
+     * after boot so the first heartbeat can show the restored frame; later
+     * uploads call mqtt_note_frame_changed() themselves. */
+    mqtt_note_frame_changed();
 }
 
 int last_frame_capture_begin(const char *source)
@@ -442,6 +462,9 @@ static int commit_frame(void)
     if (s_meta_valid && s_meta.present && s_meta.crc32 == hdr.crc32) {
         ESP_LOGI(TAG, "last frame unchanged (crc=0x%08lx) — flash write skipped",
                  (unsigned long)hdr.crc32);
+        /* The fetch dropped the preview; s_cap holds the same frame as flash. */
+        preview_rebuild_from_native(s_cap);
+        mqtt_note_frame_changed();
         last_frame_capture_abort();
         return 0;
     }
@@ -486,6 +509,7 @@ static int commit_frame(void)
     ESP_LOGI(TAG, "saved last frame seq=%u src=%s crc=0x%08lx",
              (unsigned)s_seq, s_meta.source, (unsigned long)s_meta.crc32);
     preview_rebuild_from_native(s_cap);
+    mqtt_note_frame_changed();
     last_frame_capture_abort();
     return 0;
 }

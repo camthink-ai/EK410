@@ -1,6 +1,6 @@
 /**
  * @file button.h
- * @brief MAIN (GPIO2) SoftAP / MAIN+PAGE factory reset; PAGE (GPIO3) rocker
+ * @brief MAIN SoftAP / leave-prov; PAGE BLE; MAIN+PAGE power-off / factory
  */
 #ifndef __BUTTON_H__
 #define __BUTTON_H__
